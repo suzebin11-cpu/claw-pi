@@ -1,0 +1,21 @@
+{
+  "name": "openclaw-runtime",
+  "private": true,
+  "type": "module",
+  "packageManager": "npm@11.6.2",
+  "scripts": {
+    "clean": "node ./clean-node-modules.mjs",
+    "install:cached": "node ./postinstall.mjs",
+    "install:full": "npm install --no-audit --no-fund --prefer-offline",
+    "install:pruned": "npm install --no-audit --no-fund --prefer-offline && node ./prune-runtime.mjs",
+    "refresh-lock": "npm install && node ./prune-runtime.mjs"
+  },
+  "dependencies": {
+    "@larksuiteoapi/node-sdk": "^1.59.0",
+    "@tencent-connect/openclaw-qqbot": "^1.6.6",
+    "openclaw": "2026.4.7"
+  },
+  "optionalDependencies": {
+    "@snazzah/davey-darwin-arm64": "^0.1.10"
+  }
+}

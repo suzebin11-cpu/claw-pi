@@ -1,0 +1,467 @@
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "v*"
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Release tag (for example: v0.2.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: desktop-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    strategy:
+      max-parallel: 1
+      matrix:
+        include:
+          - runner: macos-14
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x64
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Restore npm cache for runtime installs
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: desktop-npm-cache-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('openclaw-runtime/package-lock.json', 'apps/controller/static/runtime-plugins/openclaw-weixin/package-lock.json') }}
+          restore-keys: |
+            desktop-npm-cache-${{ runner.os }}-${{ matrix.arch }}-
+            desktop-npm-cache-${{ runner.os }}-
+
+      - name: Restore Electron build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            apps/desktop/.cache
+          key: desktop-electron-cache-${{ runner.os }}-${{ matrix.arch }}-${{ hashFiles('pnpm-lock.yaml', 'apps/desktop/package.json') }}
+          restore-keys: |
+            desktop-electron-cache-${{ runner.os }}-${{ matrix.arch }}-
+            desktop-electron-cache-${{ runner.os }}-
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          desktop_version=$(node -e 'const fs = require("node:fs"); const pkg = JSON.parse(fs.readFileSync("apps/desktop/package.json", "utf8")); process.stdout.write(pkg.version);')
+          expected_tag="v${desktop_version}"
+          legacy_expected_tag="desktop-v${desktop_version}"
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag_name="${{ inputs.tag_name }}"
+          else
+            tag_name="${GITHUB_REF#refs/tags/}"
+          fi
+
+          if [ "$tag_name" != "$expected_tag" ] && [ "$tag_name" != "$legacy_expected_tag" ]; then
+            echo "Expected desktop release tag $expected_tag (legacy: $legacy_expected_tag) but received $tag_name" >&2
+            exit 1
+          fi
+
+          if [[ "$desktop_version" == *-* ]]; then
+            prerelease=true
+          else
+            prerelease=false
+          fi
+
+          if [ "$prerelease" = "true" ]; then
+            channel="beta"
+          else
+            channel="stable"
+          fi
+
+          commit_sha=$(git rev-parse HEAD)
+
+          {
+            echo "desktop_version=$desktop_version"
+            echo "tag_name=$tag_name"
+            echo "release_name=v$desktop_version"
+            echo "prerelease=$prerelease"
+            echo "channel=$channel"
+            echo "commit_sha=$commit_sha"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Apple signing certificate
+        shell: bash
+        env:
+          APPLE_SIGNING_CERTIFICATE_BASE64: ${{ secrets.APPLE_SIGNING_CERTIFICATE_BASE64 }}
+          APPLE_SIGNING_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_SIGNING_CERTIFICATE_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "$APPLE_SIGNING_CERTIFICATE_BASE64" ] || [ -z "$APPLE_SIGNING_CERTIFICATE_PASSWORD" ]; then
+            echo "Missing Apple signing certificate secrets" >&2
+            exit 1
+          fi
+
+          cert_path="$RUNNER_TEMP/nexu-desktop-signing.p12"
+          if ! printf '%s' "$APPLE_SIGNING_CERTIFICATE_BASE64" | base64 --decode > "$cert_path" 2>/dev/null; then
+            printf '%s' "$APPLE_SIGNING_CERTIFICATE_BASE64" | base64 -D > "$cert_path"
+          fi
+
+          {
+            echo "CSC_LINK=$cert_path"
+            echo "CSC_KEY_PASSWORD=$APPLE_SIGNING_CERTIFICATE_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate build config
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          SENTRY_ENV: "prod"
+          BUILD_COMMIT: ${{ steps.meta.outputs.commit_sha }}
+          BUILD_ARCH: ${{ matrix.arch }}
+          SENTRY_DSN_TEST: ${{ secrets.SENTRY_DSN_NEXU_DESKTOP_TEST }}
+          SENTRY_DSN_PROD: ${{ secrets.SENTRY_DSN_NEXU_DESKTOP_PROD }}
+        run: |
+          export BUILT_AT="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          node -e '
+            const { version } = require("./apps/desktop/package.json");
+            const sentryDsnByEnvironment = {
+              test: process.env.SENTRY_DSN_TEST,
+              prod: process.env.SENTRY_DSN_PROD,
+            };
+            const sentryDsn = sentryDsnByEnvironment[process.env.SENTRY_ENV] ?? "";
+            const config = {
+              NEXU_CLOUD_URL: "https://api.clawpi.app:9443",
+              NEXU_LINK_URL: "https://api.clawpi.app:9443",
+              NEXU_SENTRY_ENV: process.env.SENTRY_ENV,
+              CLAWPI_UPDATE_FEED_URL: "",
+              NEXU_DESKTOP_APP_VERSION: version,
+              NEXU_DESKTOP_UPDATE_CHANNEL: process.env.CHANNEL,
+              NEXU_DESKTOP_BUILD_SOURCE: "release",
+              NEXU_DESKTOP_BUILD_BRANCH: "",
+              NEXU_DESKTOP_BUILD_COMMIT: process.env.BUILD_COMMIT,
+              NEXU_DESKTOP_BUILD_TIME: process.env.BUILT_AT,
+            };
+            if (sentryDsn) {
+              config.NEXU_DESKTOP_SENTRY_DSN = sentryDsn;
+            }
+            require("fs").writeFileSync(
+              "apps/desktop/build-config.json",
+              JSON.stringify(config, null, 2) + "\n"
+            );
+          '
+
+          echo "[build] Generated build-config.json for release:"
+          cat apps/desktop/build-config.json
+
+      - name: Build signed desktop release
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          NEXU_DESKTOP_TARGET_ARCH: ${{ matrix.arch }}
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          VITE_AMPLITUDE_API_KEY: ${{ secrets.AMPLITUDE_API_KEY }}
+          AMPLITUDE_API_KEY: ${{ secrets.AMPLITUDE_API_KEY }}
+        run: pnpm --filter @nexu/desktop dist:mac
+
+      - name: Set packaged app paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          runner_home="$HOME"
+          packaged_home="$RUNNER_TEMP/desktop-home"
+          packaged_user_data_dir="$packaged_home/Library/Application Support/@nexu/desktop"
+          packaged_logs_dir="$packaged_user_data_dir/logs"
+          packaged_runtime_logs_dir="$packaged_logs_dir/runtime-units"
+          default_user_data_dir="$runner_home/Library/Application Support/@nexu/desktop"
+          default_logs_dir="$default_user_data_dir/logs"
+          default_runtime_logs_dir="$default_logs_dir/runtime-units"
+          packaged_apps=(apps/desktop/release/mac*/Nexu.app)
+
+          if [ "${#packaged_apps[@]}" -eq 0 ]; then
+            echo "No packaged app bundle found under apps/desktop/release/mac*" >&2
+            exit 1
+          fi
+
+          packaged_app="${packaged_apps[0]}"
+          packaged_executable="$packaged_app/Contents/MacOS/Nexu"
+
+          mkdir -p "$RUNNER_TEMP/desktop-ci" "$packaged_home" "$RUNNER_TEMP/desktop-tmp"
+
+          {
+            echo "PACKAGED_HOME=$packaged_home"
+            echo "PACKAGED_LOGS_DIR=$packaged_logs_dir"
+            echo "PACKAGED_USER_DATA_DIR=$packaged_user_data_dir"
+            echo "PACKAGED_RUNTIME_LOGS_DIR=$packaged_runtime_logs_dir"
+            echo "DEFAULT_LOGS_DIR=$default_logs_dir"
+            echo "DEFAULT_USER_DATA_DIR=$default_user_data_dir"
+            echo "DEFAULT_RUNTIME_LOGS_DIR=$default_runtime_logs_dir"
+            echo "PACKAGED_APP=$packaged_app"
+            echo "PACKAGED_EXECUTABLE=$packaged_executable"
+          } >> "$GITHUB_ENV"
+
+      - name: Verify packaged runtime unit health
+        env:
+          NEXU_DESKTOP_CHECK_CAPTURE_DIR: ${{ runner.temp }}/desktop-ci
+          NEXU_DESKTOP_CHECK_TMPDIR: ${{ runner.temp }}/desktop-tmp
+        run: pnpm check:dist
+
+      - name: Verify extracted runner bundle integrity
+        env:
+          NEXU_DESKTOP_CHECK_TMPDIR: ${{ runner.temp }}/desktop-tmp
+          NEXU_DESKTOP_REQUIRE_SPCTL: "1"
+        run: bash scripts/desktop-verify-extracted-runner.sh
+
+      - name: Prepare release artifacts
+        id: artifacts
+        shell: bash
+        env:
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          channel="$CHANNEL"
+
+          mkdir -p apps/desktop/release-artifacts
+          rm -f apps/desktop/release-artifacts/*
+
+          dmg_files=(apps/desktop/release/*.dmg)
+          zip_files=(apps/desktop/release/*.zip)
+
+          if [ "${#dmg_files[@]}" -eq 0 ] || [ "${#zip_files[@]}" -eq 0 ]; then
+            echo "No desktop release artifacts were produced" >&2
+            exit 1
+          fi
+
+          latest_name_prefix="nexu-latest-mac-${ARCH}"
+          if [ "$channel" != "stable" ]; then
+            latest_name_prefix="nexu-latest-${channel}-mac-${ARCH}"
+          fi
+
+          versioned_dmg="nexu-${VERSION}-mac-${ARCH}.dmg"
+          versioned_zip="nexu-${VERSION}-mac-${ARCH}.zip"
+          latest_dmg="${latest_name_prefix}.dmg"
+          latest_zip="${latest_name_prefix}.zip"
+          checksum_file="desktop-${ARCH}-sha256.txt"
+
+          cp "${dmg_files[0]}" "apps/desktop/release-artifacts/${versioned_dmg}"
+          cp "${zip_files[0]}" "apps/desktop/release-artifacts/${versioned_zip}"
+          cp "${dmg_files[0]}" "apps/desktop/release-artifacts/${latest_dmg}"
+          cp "${zip_files[0]}" "apps/desktop/release-artifacts/${latest_zip}"
+
+          shasum -a 256 \
+            "apps/desktop/release-artifacts/${versioned_dmg}" \
+            "apps/desktop/release-artifacts/${versioned_zip}" \
+            > "apps/desktop/release-artifacts/${checksum_file}"
+
+          {
+            echo "channel=$channel"
+            echo "versioned_dmg=$versioned_dmg"
+            echo "versioned_zip=$versioned_zip"
+            echo "latest_dmg=$latest_dmg"
+            echo "latest_zip=$latest_zip"
+            echo "checksum_file=$checksum_file"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-${{ steps.meta.outputs.tag_name }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/release-artifacts/*.dmg
+            apps/desktop/release-artifacts/*.zip
+            apps/desktop/release-artifacts/${{ steps.artifacts.outputs.checksum_file }}
+          if-no-files-found: error
+
+      - name: Check whether GitHub release already exists
+        id: release_check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if gh release view "$TAG_NAME" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create draft GitHub release
+        if: steps.release_check.outputs.exists != 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag_name }}
+          target_commitish: ${{ steps.meta.outputs.commit_sha }}
+          name: ${{ steps.meta.outputs.release_name }}
+          draft: true
+          prerelease: ${{ steps.meta.outputs.prerelease == 'true' }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          body: |
+            Desktop release for `${{ steps.meta.outputs.desktop_version }}`.
+
+            Assets include signed macOS `.dmg` and `.zip` packages plus architecture-specific SHA-256 checksum files.
+
+            The packaged `Nexu.app` bundle is notarized and stapled during the build before the archives are published.
+          files: |
+            apps/desktop/release-artifacts/${{ steps.artifacts.outputs.versioned_dmg }}
+            apps/desktop/release-artifacts/${{ steps.artifacts.outputs.versioned_zip }}
+            apps/desktop/release-artifacts/${{ steps.artifacts.outputs.checksum_file }}
+
+      - name: Upload assets to existing GitHub release
+        if: steps.release_check.outputs.exists == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release upload "$TAG_NAME" \
+            "apps/desktop/release-artifacts/${{ steps.artifacts.outputs.versioned_dmg }}" \
+            "apps/desktop/release-artifacts/${{ steps.artifacts.outputs.versioned_zip }}" \
+            "apps/desktop/release-artifacts/${{ steps.artifacts.outputs.checksum_file }}" \
+            --clobber
+
+      - name: Patch latest-mac.yml for channel naming
+        env:
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+          CHANNEL: ${{ steps.artifacts.outputs.channel }}
+          ARCH: ${{ matrix.arch }}
+          VERSIONED_DMG: ${{ steps.artifacts.outputs.versioned_dmg }}
+          VERSIONED_ZIP: ${{ steps.artifacts.outputs.versioned_zip }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "apps/desktop/release/latest-mac.yml" ]; then
+            echo "latest-mac.yml not found, skipping patch"
+            exit 0
+          fi
+
+          # electron-builder generates filenames without the final public naming format.
+          original_dmg="nexu-${VERSION}-${ARCH}.dmg"
+          original_zip="nexu-${VERSION}-${ARCH}.zip"
+
+          echo "Patching latest-mac.yml:"
+          echo "  ${original_dmg} → ${VERSIONED_DMG}"
+          echo "  ${original_zip} → ${VERSIONED_ZIP}"
+
+          sed -i.bak \
+            -e "s|${original_dmg}|${VERSIONED_DMG}|g" \
+            -e "s|${original_zip}|${VERSIONED_ZIP}|g" \
+            apps/desktop/release/latest-mac.yml
+
+          echo "Patched latest-mac.yml:"
+          cat apps/desktop/release/latest-mac.yml
+
+      - name: Upload to Cloudflare R2
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CHANNEL: ${{ steps.artifacts.outputs.channel }}
+          ARCH: ${{ matrix.arch }}
+          VERSIONED_DMG: ${{ steps.artifacts.outputs.versioned_dmg }}
+          VERSIONED_ZIP: ${{ steps.artifacts.outputs.versioned_zip }}
+          LATEST_DMG: ${{ steps.artifacts.outputs.latest_dmg }}
+          LATEST_ZIP: ${{ steps.artifacts.outputs.latest_zip }}
+        run: |
+          set -euo pipefail
+
+          upload_prefix() {
+            local prefix="$1"
+
+            echo "[r2] uploading to prefix: ${prefix}/"
+
+            if [ -f "apps/desktop/release/latest-mac.yml" ]; then
+              echo "Uploading latest-mac.yml → ${prefix}/latest-mac.yml"
+              npx wrangler r2 object put "nexu-desktop-releases/${prefix}/latest-mac.yml" --file "apps/desktop/release/latest-mac.yml" --remote
+            fi
+
+            echo "Uploading ${VERSIONED_DMG} → ${prefix}/${VERSIONED_DMG}"
+            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${VERSIONED_DMG}" --file "apps/desktop/release-artifacts/${VERSIONED_DMG}" --remote
+
+            echo "Uploading ${VERSIONED_ZIP} → ${prefix}/${VERSIONED_ZIP}"
+            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${VERSIONED_ZIP}" --file "apps/desktop/release-artifacts/${VERSIONED_ZIP}" --remote
+
+            echo "Uploading ${LATEST_DMG} → ${prefix}/${LATEST_DMG}"
+            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${LATEST_DMG}" --file "apps/desktop/release-artifacts/${LATEST_DMG}" --remote
+
+            echo "Uploading ${LATEST_ZIP} → ${prefix}/${LATEST_ZIP}"
+            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${LATEST_ZIP}" --file "apps/desktop/release-artifacts/${LATEST_ZIP}" --remote
+
+            echo "Uploading ${{ steps.artifacts.outputs.checksum_file }} → ${prefix}/${{ steps.artifacts.outputs.checksum_file }}"
+            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${{ steps.artifacts.outputs.checksum_file }}" --file "apps/desktop/release-artifacts/${{ steps.artifacts.outputs.checksum_file }}" --remote
+          }
+
+          upload_prefix "${CHANNEL}/${ARCH}"
+
+          if [ "${ARCH}" = "arm64" ]; then
+            echo "[r2] uploading legacy arm64 compatibility feed to prefix: ${CHANNEL}/"
+            upload_prefix "${CHANNEL}"
+          fi
+
+  trigger-e2e:
+    needs: release
+    runs-on: ubuntu-latest
+    if: always() && needs.release.result == 'success'
+    steps:
+      - name: Resolve channel
+        id: channel
+        run: |
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}"
+          if [[ "$tag" == *-* ]]; then
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Trigger Desktop E2E (async)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            await github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'desktop-e2e.yml',
+              ref: context.ref || 'main',
+              inputs: { mode: 'model', channel: '${{ steps.channel.outputs.channel }}' },
+            });

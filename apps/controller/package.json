@@ -1,0 +1,31 @@
+{
+  "name": "@nexu/controller",
+  "version": "0.0.1",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc --noEmit && node scripts/build-bundle.mjs && node scripts/bundle-runtime-plugins.mjs",
+    "bundle-runtime-plugins": "node scripts/bundle-runtime-plugins.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run tests",
+    "generate-openapi": "NODE_OPTIONS=--conditions=development tsx scripts/generate-openapi.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.8",
+    "@hono/zod-openapi": "^0.18.4",
+    "@nexu/shared": "workspace:*",
+    "clawhub": "0.8.0",
+    "dotenv": "^16.6.1",
+    "hono": "^4.7.5",
+    "lowdb": "^7.0.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "esbuild": "^0.28.0",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3"
+  }
+}

@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1920, initial-scale=1" />
+  <title>Claw-Pi · 核心功能清单</title>
+  <style>
+    /* ===== 调色 / 字体 / 尺寸：在这里改全局风格 ===== */
+    :root {
+      --bg: #000000;
+      --green: #00ff88;
+      --grid: #0f1612;
+      --card-bg: rgba(10, 16, 13, 0.65);
+      --card-border: #1c2a23;
+      --text: #ffffff;
+      --text-2: #b8c0ba;
+      --text-3: #6c756f;
+      --divider: #1f2a25;
+
+      --font-cn: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      background: #0a0a0a;
+      font-family: var(--font-cn);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .stage {
+      position: relative;
+      width: 1920px;
+      height: 1080px;
+      transform-origin: center center;
+    }
+
+    /* ===== 主画布 ===== */
+    .canvas {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background:
+        radial-gradient(ellipse 70% 50% at 50% 50%, rgba(0, 255, 136, 0.05) 0%, transparent 60%),
+        radial-gradient(ellipse 80% 60% at 50% 100%, rgba(0, 255, 136, 0.08) 0%, transparent 50%),
+        var(--bg);
+      overflow: hidden;
+    }
+
+    .canvas::before {
+      content: "";
+      position: absolute; inset: 0;
+      background-image: radial-gradient(circle, var(--grid) 1px, transparent 1px);
+      background-size: 32px 32px;
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .canvas::after {
+      content: "";
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, var(--green) 50%, transparent 100%);
+      box-shadow: 0 0 20px var(--green);
+      opacity: 0.6;
+    }
+
+    /* 角落定位线 */
+    .corner {
+      position: absolute;
+      width: 28px; height: 28px;
+      border-color: var(--green);
+      opacity: 0.4;
+    }
+    .corner.tl { top: 22px; left: 22px; border-top: 1px solid; border-left: 1px solid; }
+    .corner.tr { top: 22px; right: 22px; border-top: 1px solid; border-right: 1px solid; }
+    .corner.bl { bottom: 22px; left: 22px; border-bottom: 1px solid; border-left: 1px solid; }
+    .corner.br { bottom: 22px; right: 22px; border-bottom: 1px solid; border-right: 1px solid; }
+
+    /* ===== 顶部 Hero ===== */
+    .hero {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 210px;
+      padding: 50px 80px 0;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .logo {
+      width: 110px;
+      height: 110px;
+      filter: drop-shadow(0 0 14px rgba(0, 255, 136, 0.6));
+    }
+    .logo path { fill: var(--green); }
+
+    .brand-text { display: flex; flex-direction: column; gap: 6px; }
+
+    .brand-tag {
+      font-family: var(--font-mono);
+      font-size: 15px;
+      letter-spacing: 3px;
+      color: var(--green);
+      text-transform: uppercase;
+    }
+
+    .brand-name {
+      font-size: 72px;
+      font-weight: 700;
+      letter-spacing: -1.5px;
+      color: var(--text);
+      line-height: 1;
+    }
+    .brand-name .accent { color: var(--green); }
+
+    .brand-slogan {
+      font-size: 22px;
+      color: var(--text-2);
+      letter-spacing: 1.5px;
+      margin-top: 6px;
+    }
+    .brand-slogan .em {
+      color: var(--green);
+      font-weight: 600;
+    }
+
+    /* 右上：徽标组合 */
+    .hero-right {
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 14px;
+      padding-top: 8px;
+    }
+
+    .skills-badge {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 14px;
+      padding: 16px 28px;
+      background: linear-gradient(135deg, rgba(0, 255, 136, 0.18), rgba(0, 255, 136, 0.04));
+      border: 1px solid var(--green);
+      border-radius: 4px;
+      box-shadow: 0 0 28px rgba(0, 255, 136, 0.18);
+    }
+    .skills-num {
+      font-family: var(--font-mono);
+      font-size: 44px;
+      font-weight: 700;
+      color: var(--green);
+      letter-spacing: 1px;
+    }
+    .skills-text {
+      font-size: 20px;
+      color: var(--text);
+      letter-spacing: 2px;
+    }
+
+    .platform-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 20px;
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .badge-icon {
+      width: 24px; height: 24px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 2px;
+    }
+    .badge-icon span { background: var(--green); border-radius: 1px; }
+    .badge-text {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      color: var(--text);
+    }
+    .badge-text .dim { color: var(--text-3); font-weight: 400; }
+
+    /* ===== Section Title ===== */
+    .section-title {
+      position: absolute;
+      top: 230px;
+      left: 80px;
+      right: 80px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--divider);
+      padding-top: 20px;
+    }
+    .section-title-left {
+      display: flex;
+      align-items: baseline;
+      gap: 18px;
+    }
+    .section-title-mark {
+      font-size: 24px;
+      color: var(--green);
+    }
+    .section-title-cn {
+      font-size: 30px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: 2px;
+    }
+    .section-title-en {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      color: var(--text-3);
+      letter-spacing: 3px;
+    }
+    .section-title-right {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      color: var(--text-3);
+      letter-spacing: 2px;
+    }
+
+    /* ===== 中部 4×2 网格 ===== */
+    .features {
+      position: absolute;
+      top: 305px;
+      left: 80px;
+      right: 80px;
+      bottom: 88px;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      grid-template-rows: repeat(2, 1fr);
+      gap: 18px;
+    }
+
+    .cat {
+      position: relative;
+      padding: 28px 30px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      backdrop-filter: blur(2px);
+    }
+
+    .cat::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0;
+      width: 46px; height: 1px;
+      background: var(--green);
+      opacity: 0.7;
+    }
+    .cat::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0;
+      width: 1px; height: 46px;
+      background: var(--green);
+      opacity: 0.7;
+    }
+
+    .cat-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .cat-emoji {
+      font-size: 48px;
+      line-height: 1;
+      filter: drop-shadow(0 0 8px rgba(0, 255, 136, 0.3));
+    }
+    .cat-num {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      color: var(--green);
+      letter-spacing: 2px;
+      padding-top: 14px;
+    }
+
+    .cat-title {
+      font-size: 36px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: 1.5px;
+      margin-bottom: 8px;
+      line-height: 1.1;
+    }
+    .cat-sub {
+      font-size: 18px;
+      color: var(--green);
+      letter-spacing: 1.5px;
+      margin-bottom: 20px;
+    }
+
+    .cat-divider {
+      height: 1px;
+      background: var(--divider);
+      margin-bottom: 20px;
+      position: relative;
+    }
+    .cat-divider::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0;
+      width: 32px; height: 1px;
+      background: var(--green);
+    }
+
+    .skill-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      flex: 1;
+    }
+    .skill-name {
+      font-size: 24px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      line-height: 1.2;
+    }
+    .skill-name::before {
+      content: "";
+      display: inline-block;
+      width: 8px; height: 8px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 10px var(--green);
+      flex-shrink: 0;
+    }
+
+    /* ===== CTA 卡（第 8 格）===== */
+    .cta {
+      position: relative;
+      padding: 32px 30px;
+      background: linear-gradient(135deg, rgba(0, 255, 136, 0.14), rgba(0, 255, 136, 0.02));
+      border: 1px solid var(--green);
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      box-shadow: inset 0 0 40px rgba(0, 255, 136, 0.05), 0 0 32px rgba(0, 255, 136, 0.12);
+    }
+    .cta::before {
+      content: "";
+      position: absolute;
+      top: -50%; left: -50%;
+      width: 200%; height: 200%;
+      background: radial-gradient(circle at 30% 30%, rgba(0, 255, 136, 0.18) 0%, transparent 40%);
+      pointer-events: none;
+    }
+    .cta-top {
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+    .cta-mark {
+      font-family: var(--font-mono);
+      font-size: 15px;
+      color: var(--green);
+      letter-spacing: 2px;
+    }
+    .cta-arrow {
+      font-size: 44px;
+      color: var(--green);
+      line-height: 1;
+    }
+    .cta-mid {
+      position: relative;
+    }
+    .cta-title {
+      font-size: 56px;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: 4px;
+      margin-bottom: 12px;
+      line-height: 1.05;
+    }
+    .cta-sub {
+      font-size: 20px;
+      color: var(--text-2);
+      letter-spacing: 1.5px;
+      line-height: 1.6;
+    }
+    .cta-bottom {
+      position: relative;
+    }
+    .cta-url {
+      display: flex;
+      align-items: baseline;
+      gap: 14px;
+      padding: 14px 0 12px;
+      border-top: 1px solid rgba(0, 255, 136, 0.3);
+    }
+    .cta-url-label {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      letter-spacing: 2px;
+      color: var(--green);
+      opacity: 0.85;
+    }
+    .cta-url-value {
+      font-family: var(--font-mono);
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: var(--text);
+    }
+
+    /* ===== 底部 Footer ===== */
+    .footer {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 76px;
+      padding: 0 80px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-top: 1px solid var(--divider);
+    }
+    .footer::before {
+      content: "";
+      position: absolute;
+      top: -1px; left: 0; right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent 0%, var(--green) 30%, var(--green) 70%, transparent 100%);
+      opacity: 0.4;
+    }
+
+    .footer-cn {
+      font-size: 18px;
+      color: var(--text-2);
+      letter-spacing: 2px;
+    }
+    .footer-en {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: var(--text-3);
+      letter-spacing: 3px;
+      margin-top: 4px;
+    }
+    .footer-right {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      color: var(--text-3);
+      letter-spacing: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <div class="canvas">
+
+      <div class="corner tl"></div>
+      <div class="corner tr"></div>
+      <div class="corner bl"></div>
+      <div class="corner br"></div>
+
+      <!-- ===== 顶部 Hero ===== -->
+      <header class="hero">
+        <div class="brand">
+          <svg class="logo" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+            <g fill="none" fill-rule="evenodd">
+              <path d="M126.973367,74.611399 L126.973367,87.6539402 L140.932642,95.4497682 L140.932642,113.38067 L126.973367,113.38067 L126.973367,87.6547697 L73.0266334,87.6547697 L73.0266334,74.611399 L126.973367,74.611399 Z M109.850452,91.28956 L113.962255,95.4089558 L109.726303,99.6544386 L113.962255,103.90158 L109.850452,108.019317 L105.616155,103.773834 L101.50104,99.6594157 L105.611189,95.5300657 L109.850452,91.28956 Z M91.8508816,92.3757334 L91.8508816,106.933807 L86.0374135,106.933807 L86.0374135,92.3757334 L91.8508816,92.3757334 Z M59.0673575,87.6541061 L59.0673575,105.583349 L73.0266334,113.380836 L73.0266334,87.6541061 L59.0673575,87.6541061 Z M107.10958,126.42487 L126.973367,126.42487 L126.973367,113.3815 L107.10958,113.3815 L107.10958,126.42487 Z M73.0266334,126.42487 L93.1519596,126.42487 L93.1519596,113.3815 L73.0266334,113.3815 L73.0266334,126.42487 Z"/>
+            </g>
+          </svg>
+          <div class="brand-text">
+            <div class="brand-tag">// YOUR PRIVATE AI TEAM</div>
+            <div class="brand-name">Claw<span class="accent">-</span>Pi</div>
+            <div class="brand-slogan">你的私人 AI 团队 · 主打 <span class="em">省心省力</span></div>
+          </div>
+        </div>
+
+        <div class="hero-right">
+          <div class="skills-badge">
+            <span class="skills-num">50+</span>
+            <span class="skills-text">实用技能 · 预装即用</span>
+          </div>
+          <div class="platform-badge">
+            <div class="badge-icon"><span></span><span></span><span></span><span></span></div>
+            <div class="badge-text">WINDOWS 10 · 11 <span class="dim">/ 64-BIT</span></div>
+          </div>
+        </div>
+      </header>
+
+      <!-- ===== Section 标题 ===== -->
+      <div class="section-title">
+        <div class="section-title-left">
+          <span class="section-title-mark">⚙</span>
+          <span class="section-title-cn">核心功能清单</span>
+          <span class="section-title-en">// CORE FEATURES · 7 CATEGORIES · 50+ SKILLS</span>
+        </div>
+        <div class="section-title-right">v1.0 · BUILT FOR WINDOWS</div>
+      </div>
+
+      <!-- ===== 4×2 = 7 张分类卡 + 1 张 CTA ===== -->
+      <section class="features">
+
+        <!-- 01 视觉设计与生图 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🎨</div>
+            <div class="cat-num">01 / 07</div>
+          </div>
+          <h3 class="cat-title">视觉设计与生图</h3>
+          <div class="cat-sub">// 不仅能写，更能画</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">一句话生成海报</div>
+            <div class="skill-name">AI 视觉配图</div>
+            <div class="skill-name">素材直接变现</div>
+          </div>
+        </article>
+
+        <!-- 02 数字建设与编程 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🖥️</div>
+            <div class="cat-num">02 / 07</div>
+          </div>
+          <h3 class="cat-title">数字建设与编程</h3>
+          <div class="cat-sub">// 不懂代码也能当老板</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">大白话写网站</div>
+            <div class="skill-name">傻瓜式写小程序</div>
+          </div>
+        </article>
+
+        <!-- 03 新媒体与电商运营 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">📱</div>
+            <div class="cat-num">03 / 07</div>
+          </div>
+          <h3 class="cat-title">新媒体与电商</h3>
+          <div class="cat-sub">// 爆款制造机</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">爆款文案秒出</div>
+            <div class="skill-name">全网竞品检索</div>
+          </div>
+        </article>
+
+        <!-- 04 办公写作 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">📝</div>
+            <div class="cat-num">04 / 07</div>
+          </div>
+          <h3 class="cat-title">办公写作</h3>
+          <div class="cat-sub">// 重复杂活全拿走</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">PDF 一键粉碎</div>
+            <div class="skill-name">日报 / 周报秒成</div>
+            <div class="skill-name">翻译 · 邮件 · 合同</div>
+          </div>
+        </article>
+
+        <!-- 05 数据与表格 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">📊</div>
+            <div class="cat-num">05 / 07</div>
+          </div>
+          <h3 class="cat-title">数据与表格</h3>
+          <div class="cat-sub">// 小白秒变 Excel 专家</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">大白话写公式</div>
+            <div class="skill-name">数据清洗 + 图表</div>
+          </div>
+        </article>
+
+        <!-- 06 自动化与团队协作 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🤝</div>
+            <div class="cat-num">06 / 07</div>
+          </div>
+          <h3 class="cat-title">协作与自动化</h3>
+          <div class="cat-sub">// 24 小时无缝接管</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">微信 / QQ / 飞书 / 钉钉</div>
+            <div class="skill-name">群消息自动提炼</div>
+          </div>
+        </article>
+
+        <!-- 07 家庭辅导与生活 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🎓</div>
+            <div class="cat-num">07 / 07</div>
+          </div>
+          <h3 class="cat-title">家庭与生活</h3>
+          <div class="cat-sub">// 家用 / 网课全适配</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">私人英语辅导</div>
+            <div class="skill-name">全能生活百科</div>
+          </div>
+        </article>
+
+        <!-- 08 立即体验 CTA -->
+        <article class="cta">
+          <div class="cta-top">
+            <span class="cta-mark">// GET STARTED</span>
+            <span class="cta-arrow">→</span>
+          </div>
+          <div class="cta-mid">
+            <div class="cta-title">立即体验</div>
+            <div class="cta-sub">
+              U 盘双击即装<br/>
+              50+ 技能预装<br/>
+              不止于此 · 持续扩展
+            </div>
+          </div>
+          <div class="cta-bottom">
+            <div class="cta-url">
+              <span class="cta-url-label">OFFICIAL</span>
+              <span class="cta-url-value">claw-pi.cn</span>
+            </div>
+          </div>
+        </article>
+
+      </section>
+
+      <!-- ===== 底部 Footer ===== -->
+      <footer class="footer">
+        <div>
+          <div class="footer-cn">CLAW-PI · 智能体桌面客户端 · 内置 50+ 实用技能</div>
+          <div class="footer-en">// AGENT DESKTOP CLIENT · BUILT FOR WINDOWS 10 · 11</div>
+        </div>
+        <div class="footer-right">© CLAW-PI · CLAW-PI.CN</div>
+      </footer>
+
+    </div>
+  </div>
+
+  <script>
+    /* 自适应缩放：让 1920×1080 画布始终完整显示在窗口里 */
+    (function () {
+      const stage = document.getElementById("stage");
+      function fit() {
+        const sx = window.innerWidth / 1920;
+        const sy = window.innerHeight / 1080;
+        stage.style.transform = "scale(" + Math.min(sx, sy) + ")";
+      }
+      window.addEventListener("resize", fit);
+      fit();
+    })();
+  </script>
+</body>
+</html>

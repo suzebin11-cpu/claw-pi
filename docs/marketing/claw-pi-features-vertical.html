@@ -1,0 +1,663 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=1080, initial-scale=1" />
+  <title>Claw-Pi · 核心功能清单（竖版）</title>
+  <style>
+    /* ===== 调色 / 字体：在这里改全局风格 ===== */
+    :root {
+      --bg: #000000;
+      --green: #00ff88;
+      --grid: #0f1612;
+      --card-bg: rgba(10, 16, 13, 0.7);
+      --card-border: #1c2a23;
+      --text: #ffffff;
+      --text-2: #b8c0ba;
+      --text-3: #6c756f;
+      --divider: #1f2a25;
+
+      --font-cn: "PingFang SC", "Microsoft YaHei", "Hiragino Sans GB", system-ui, -apple-system, "Helvetica Neue", sans-serif;
+      --font-mono: "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Monaco, Consolas, "Courier New", monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      background: #0a0a0a;
+      font-family: var(--font-cn);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .stage {
+      position: relative;
+      width: 1080px;
+      height: 1920px;
+      transform-origin: center center;
+    }
+
+    /* ===== 主画布 ===== */
+    .canvas {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      background:
+        radial-gradient(ellipse 80% 30% at 50% 0%, rgba(0, 255, 136, 0.10) 0%, transparent 60%),
+        radial-gradient(ellipse 80% 30% at 50% 100%, rgba(0, 255, 136, 0.10) 0%, transparent 60%),
+        var(--bg);
+      overflow: hidden;
+    }
+
+    .canvas::before {
+      content: "";
+      position: absolute; inset: 0;
+      background-image: radial-gradient(circle, var(--grid) 1px, transparent 1px);
+      background-size: 36px 36px;
+      opacity: 0.6;
+      pointer-events: none;
+    }
+
+    .canvas::after {
+      content: "";
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent 0%, var(--green) 50%, transparent 100%);
+      box-shadow: 0 0 24px var(--green);
+      opacity: 0.7;
+    }
+
+    .corner {
+      position: absolute;
+      width: 36px; height: 36px;
+      border-color: var(--green);
+      opacity: 0.45;
+    }
+    .corner.tl { top: 28px; left: 28px; border-top: 1.5px solid; border-left: 1.5px solid; }
+    .corner.tr { top: 28px; right: 28px; border-top: 1.5px solid; border-right: 1.5px solid; }
+    .corner.bl { bottom: 28px; left: 28px; border-bottom: 1.5px solid; border-left: 1.5px solid; }
+    .corner.br { bottom: 28px; right: 28px; border-bottom: 1.5px solid; border-right: 1.5px solid; }
+
+    /* ===== 顶部 Hero ===== */
+    .hero {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      height: 380px;
+      padding: 80px 60px 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 28px;
+    }
+
+    .brand-block {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .brand {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+    }
+
+    .logo {
+      position: absolute;
+      right: 100%;
+      top: 50%;
+      transform: translateY(-50%);
+      margin-right: 28px;
+      width: 130px;
+      height: 130px;
+      filter: drop-shadow(0 0 16px rgba(0, 255, 136, 0.6));
+      flex-shrink: 0;
+    }
+    .logo path { fill: var(--green); }
+
+    .brand-tag {
+      font-family: var(--font-mono);
+      font-size: 18px;
+      letter-spacing: 4px;
+      color: var(--green);
+      text-transform: uppercase;
+    }
+
+    .brand-name {
+      font-size: 100px;
+      font-weight: 700;
+      letter-spacing: -2px;
+      color: var(--text);
+      line-height: 1;
+    }
+    .brand-name .accent { color: var(--green); }
+
+    .brand-slogan {
+      font-size: 28px;
+      color: var(--text-2);
+      letter-spacing: 2px;
+      text-align: center;
+    }
+    .brand-slogan .em {
+      color: var(--green);
+      font-weight: 600;
+    }
+
+    .hero-badges {
+      display: flex;
+      gap: 18px;
+      align-items: center;
+    }
+
+    .skills-badge {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 16px;
+      padding: 18px 32px;
+      background: linear-gradient(135deg, rgba(0, 255, 136, 0.20), rgba(0, 255, 136, 0.04));
+      border: 1.5px solid var(--green);
+      border-radius: 6px;
+      box-shadow: 0 0 32px rgba(0, 255, 136, 0.22);
+    }
+    .skills-num {
+      font-family: var(--font-mono);
+      font-size: 56px;
+      font-weight: 700;
+      color: var(--green);
+      letter-spacing: 1px;
+      line-height: 1;
+    }
+    .skills-text {
+      font-size: 24px;
+      color: var(--text);
+      letter-spacing: 2px;
+    }
+
+    .platform-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px 22px;
+      border: 1.5px solid var(--card-border);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .badge-icon {
+      width: 28px; height: 28px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: 1fr 1fr;
+      gap: 3px;
+    }
+    .badge-icon span { background: var(--green); border-radius: 1.5px; }
+    .badge-text {
+      font-family: var(--font-mono);
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      color: var(--text);
+    }
+
+    /* ===== Section Title ===== */
+    .section-title {
+      position: absolute;
+      top: 410px;
+      left: 60px;
+      right: 60px;
+      height: 86px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: center;
+      justify-content: center;
+      border-top: 1px solid var(--divider);
+      border-bottom: 1px solid var(--divider);
+    }
+    .section-title-cn {
+      font-size: 42px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: 4px;
+    }
+    .section-title-cn .mark {
+      color: var(--green);
+      margin-right: 12px;
+    }
+    .section-title-en {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      color: var(--text-3);
+      letter-spacing: 4px;
+    }
+
+    /* ===== 中部 2 列 × 4 行 ===== */
+    .features {
+      position: absolute;
+      top: 524px;
+      left: 60px;
+      right: 60px;
+      bottom: 130px;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      grid-template-rows: repeat(4, 1fr);
+      gap: 18px;
+    }
+
+    .cat {
+      position: relative;
+      padding: 24px 28px;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      backdrop-filter: blur(2px);
+    }
+
+    .cat::before {
+      content: "";
+      position: absolute;
+      top: 0; left: 0;
+      width: 52px; height: 1.5px;
+      background: var(--green);
+      opacity: 0.7;
+    }
+    .cat::after {
+      content: "";
+      position: absolute;
+      top: 0; left: 0;
+      width: 1.5px; height: 52px;
+      background: var(--green);
+      opacity: 0.7;
+    }
+
+    .cat-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+    .cat-emoji {
+      font-size: 56px;
+      line-height: 1;
+      filter: drop-shadow(0 0 10px rgba(0, 255, 136, 0.35));
+    }
+    .cat-num {
+      font-family: var(--font-mono);
+      font-size: 15px;
+      color: var(--green);
+      letter-spacing: 2px;
+      padding-top: 14px;
+    }
+
+    .cat-title {
+      font-size: 40px;
+      font-weight: 700;
+      color: var(--text);
+      letter-spacing: 2px;
+      margin-bottom: 6px;
+      line-height: 1.1;
+    }
+    .cat-sub {
+      font-size: 20px;
+      color: var(--green);
+      letter-spacing: 2px;
+      margin-bottom: 16px;
+    }
+
+    .cat-divider {
+      height: 1px;
+      background: var(--divider);
+      margin-bottom: 16px;
+      position: relative;
+    }
+    .cat-divider::before {
+      content: "";
+      position: absolute;
+      left: 0; top: 0;
+      width: 36px; height: 1px;
+      background: var(--green);
+    }
+
+    .skill-list {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      flex: 1;
+    }
+    .skill-name {
+      font-size: 30px;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 1px;
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      line-height: 1.2;
+    }
+    .skill-name::before {
+      content: "";
+      display: inline-block;
+      width: 10px; height: 10px;
+      background: var(--green);
+      border-radius: 50%;
+      box-shadow: 0 0 12px var(--green);
+      flex-shrink: 0;
+    }
+
+    /* ===== CTA 卡（第 8 格）===== */
+    .cta {
+      position: relative;
+      padding: 24px 28px;
+      background: linear-gradient(135deg, rgba(0, 255, 136, 0.18), rgba(0, 255, 136, 0.03));
+      border: 1.5px solid var(--green);
+      border-radius: 10px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+      box-shadow: inset 0 0 50px rgba(0, 255, 136, 0.06), 0 0 40px rgba(0, 255, 136, 0.18);
+    }
+    .cta::before {
+      content: "";
+      position: absolute;
+      top: -50%; left: -50%;
+      width: 200%; height: 200%;
+      background: radial-gradient(circle at 30% 30%, rgba(0, 255, 136, 0.20) 0%, transparent 40%);
+      pointer-events: none;
+    }
+    .cta-top {
+      position: relative;
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+    }
+    .cta-mark {
+      font-family: var(--font-mono);
+      font-size: 16px;
+      color: var(--green);
+      letter-spacing: 2px;
+    }
+    .cta-arrow {
+      font-size: 44px;
+      color: var(--green);
+      line-height: 1;
+    }
+    .cta-mid {
+      position: relative;
+    }
+    .cta-title {
+      font-size: 56px;
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: 6px;
+      margin-bottom: 10px;
+      line-height: 1.05;
+    }
+    .cta-sub {
+      font-size: 19px;
+      color: var(--text-2);
+      letter-spacing: 2px;
+      line-height: 1.55;
+    }
+    .cta-bottom {
+      position: relative;
+      padding-top: 12px;
+      border-top: 1px solid rgba(0, 255, 136, 0.3);
+    }
+    .cta-url-label {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      letter-spacing: 2px;
+      color: var(--green);
+      opacity: 0.85;
+      display: block;
+      margin-bottom: 4px;
+    }
+    .cta-url-value {
+      font-family: var(--font-mono);
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: var(--text);
+    }
+
+    /* ===== 底部 Footer ===== */
+    .footer {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      height: 110px;
+      padding: 0 60px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      border-top: 1px solid var(--divider);
+    }
+    .footer::before {
+      content: "";
+      position: absolute;
+      top: -1.5px; left: 0; right: 0;
+      height: 1.5px;
+      background: linear-gradient(90deg, transparent 0%, var(--green) 30%, var(--green) 70%, transparent 100%);
+      opacity: 0.5;
+    }
+
+    .footer-cn {
+      font-size: 22px;
+      color: var(--text);
+      letter-spacing: 3px;
+      font-weight: 600;
+    }
+    .footer-en {
+      font-family: var(--font-mono);
+      font-size: 14px;
+      color: var(--text-3);
+      letter-spacing: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <div class="canvas">
+
+      <div class="corner tl"></div>
+      <div class="corner tr"></div>
+      <div class="corner bl"></div>
+      <div class="corner br"></div>
+
+      <!-- ===== 顶部 Hero ===== -->
+      <header class="hero">
+        <div class="brand-block">
+          <div class="brand-tag">// YOUR PRIVATE AI TEAM</div>
+          <div class="brand">
+            <svg class="logo" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+              <g fill="none" fill-rule="evenodd">
+                <path d="M126.973367,74.611399 L126.973367,87.6539402 L140.932642,95.4497682 L140.932642,113.38067 L126.973367,113.38067 L126.973367,87.6547697 L73.0266334,87.6547697 L73.0266334,74.611399 L126.973367,74.611399 Z M109.850452,91.28956 L113.962255,95.4089558 L109.726303,99.6544386 L113.962255,103.90158 L109.850452,108.019317 L105.616155,103.773834 L101.50104,99.6594157 L105.611189,95.5300657 L109.850452,91.28956 Z M91.8508816,92.3757334 L91.8508816,106.933807 L86.0374135,106.933807 L86.0374135,92.3757334 L91.8508816,92.3757334 Z M59.0673575,87.6541061 L59.0673575,105.583349 L73.0266334,113.380836 L73.0266334,87.6541061 L59.0673575,87.6541061 Z M107.10958,126.42487 L126.973367,126.42487 L126.973367,113.3815 L107.10958,113.3815 L107.10958,126.42487 Z M73.0266334,126.42487 L93.1519596,126.42487 L93.1519596,113.3815 L73.0266334,113.3815 L73.0266334,126.42487 Z"/>
+              </g>
+            </svg>
+            <div class="brand-name">Claw<span class="accent">-</span>Pi</div>
+          </div>
+        </div>
+
+        <div class="brand-slogan">你的私人 AI 团队 · 主打 <span class="em">省心省力</span></div>
+
+        <div class="hero-badges">
+          <div class="skills-badge">
+            <span class="skills-num">50+</span>
+            <span class="skills-text">实用技能 · 预装即用</span>
+          </div>
+          <div class="platform-badge">
+            <div class="badge-icon"><span></span><span></span><span></span><span></span></div>
+            <div class="badge-text">WIN 10 · 11</div>
+          </div>
+        </div>
+      </header>
+
+      <!-- ===== Section 标题 ===== -->
+      <div class="section-title">
+        <div class="section-title-cn"><span class="mark">⚙</span>核心功能清单</div>
+        <div class="section-title-en">// CORE FEATURES · 8 CATEGORIES · 50+ SKILLS</div>
+      </div>
+
+      <!-- ===== 2 列 × 4 行 = 8 张分类卡 ===== -->
+      <section class="features">
+
+        <!-- 01 视觉设计与生图 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🎨</div>
+            <div class="cat-num">01 / 08</div>
+          </div>
+          <h3 class="cat-title">视觉设计与生图</h3>
+          <div class="cat-sub">// 不仅能写，更能画</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">一句话生成海报</div>
+            <div class="skill-name">AI 视觉配图</div>
+          </div>
+        </article>
+
+        <!-- 02 数字建设与编程 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🖥️</div>
+            <div class="cat-num">02 / 08</div>
+          </div>
+          <h3 class="cat-title">数字建设与编程</h3>
+          <div class="cat-sub">// 不懂代码也能当老板</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">大白话写网站</div>
+            <div class="skill-name">一键写小程序</div>
+          </div>
+        </article>
+
+        <!-- 03 新媒体与电商 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">📱</div>
+            <div class="cat-num">03 / 08</div>
+          </div>
+          <h3 class="cat-title">新媒体与电商</h3>
+          <div class="cat-sub">// 爆款制造机</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">爆款文案秒出</div>
+            <div class="skill-name">全网竞品检索</div>
+          </div>
+        </article>
+
+        <!-- 04 办公写作 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">📝</div>
+            <div class="cat-num">04 / 08</div>
+          </div>
+          <h3 class="cat-title">办公写作</h3>
+          <div class="cat-sub">// 重复杂活全拿走</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">PDF 一键粉碎</div>
+            <div class="skill-name">日报 / 周报秒成</div>
+          </div>
+        </article>
+
+        <!-- 05 数据与表格 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">📊</div>
+            <div class="cat-num">05 / 08</div>
+          </div>
+          <h3 class="cat-title">数据与表格</h3>
+          <div class="cat-sub">// 秒变 Excel 专家</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">大白话写公式</div>
+            <div class="skill-name">数据清洗 + 图表</div>
+          </div>
+        </article>
+
+        <!-- 06 协作与自动化 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🤝</div>
+            <div class="cat-num">06 / 08</div>
+          </div>
+          <h3 class="cat-title">协作与自动化</h3>
+          <div class="cat-sub">// 24 小时无缝接管</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">微信 / 飞书 / 钉钉</div>
+            <div class="skill-name">群消息自动提炼</div>
+          </div>
+        </article>
+
+        <!-- 07 家庭与生活 -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🎓</div>
+            <div class="cat-num">07 / 08</div>
+          </div>
+          <h3 class="cat-title">家庭与生活</h3>
+          <div class="cat-sub">// 家用 / 网课全适配</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">私人英语辅导</div>
+            <div class="skill-name">全能生活百科</div>
+          </div>
+        </article>
+
+        <!-- 08 多模型 AI -->
+        <article class="cat">
+          <div class="cat-head">
+            <div class="cat-emoji">🌐</div>
+            <div class="cat-num">08 / 08</div>
+          </div>
+          <h3 class="cat-title">多模型 AI</h3>
+          <div class="cat-sub">// GPT · Claude · Gemini</div>
+          <div class="cat-divider"></div>
+          <div class="skill-list">
+            <div class="skill-name">主流模型一键切换</div>
+            <div class="skill-name">DALL-E + Midjourney</div>
+          </div>
+        </article>
+
+      </section>
+
+      <!-- ===== 底部 Footer ===== -->
+      <footer class="footer">
+        <div class="footer-cn">CLAW-PI · 智能体桌面客户端</div>
+        <div class="footer-en">// AGENT DESKTOP CLIENT FOR WINDOWS 10 · 11</div>
+      </footer>
+
+    </div>
+  </div>
+
+  <script>
+    /* 自适应缩放：让 1080×1920 画布始终完整显示在窗口里 */
+    (function () {
+      const stage = document.getElementById("stage");
+      function fit() {
+        const sx = window.innerWidth / 1080;
+        const sy = window.innerHeight / 1920;
+        stage.style.transform = "scale(" + Math.min(sx, sy) + ")";
+      }
+      window.addEventListener("resize", fit);
+      fit();
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,560 @@
+import { FeishuSetupView } from "@/components/channel-setup/feishu-setup-view";
+import { QqbotSetupView } from "@/components/channel-setup/qqbot-setup-view";
+import { WechatSetupView } from "@/components/channel-setup/wechat-setup-view";
+import { useBotQuota } from "@/hooks/use-bot-quota";
+import { useCountdown } from "@/hooks/use-countdown";
+import { track } from "@/lib/tracking";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ArrowLeft,
+  BookOpen,
+  CheckCircle2,
+  Circle,
+  Clock,
+  ExternalLink,
+  Key,
+  Loader2,
+  RotateCcw,
+  Shield,
+  Zap,
+} from "lucide-react";
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { toast } from "sonner";
+import "@/lib/api";
+import {
+  deleteApiV1ChannelsByChannelId,
+  getApiV1Channels,
+  getApiV1ChannelsLiveStatus,
+} from "../../lib/api/sdk.gen";
+
+type Platform = "feishu" | "wechat" | "qqbot";
+
+type LiveStatusData = {
+  gatewayConnected: boolean;
+  channels: {
+    channelType: string;
+    channelId: string;
+    status: string;
+    lastError: string | null;
+  }[];
+};
+
+function getPlatforms(t: (key: string) => string) {
+  return [
+    {
+      id: "wechat" as Platform,
+      emoji: "\u{1F4AC}",
+      desc: t("channels.platform.wechat.desc"),
+    },
+    {
+      id: "qqbot" as Platform,
+      emoji: "\u{1F916}",
+      desc: t("channels.platform.qqbot.desc"),
+    },
+    {
+      id: "feishu" as Platform,
+      emoji: "\u{1F426}",
+      desc: t("channels.platform.feishu.desc"),
+    },
+  ];
+}
+
+function getPlatformLabel(
+  platform: Platform,
+  t: (key: string) => string,
+): string {
+  const key = `home.channel.${platform}`;
+  const translated = t(key);
+  return translated !== key ? translated : platform;
+}
+
+// ─── Main page ───────────────────────────────────────────────
+
+export function ChannelsPage() {
+  const { t } = useTranslation();
+  const queryClient = useQueryClient();
+  const [platform, setPlatform] = useState<Platform>("wechat");
+  const [forceGuide, setForceGuide] = useState(false);
+
+  const { data: channelsData } = useQuery({
+    queryKey: ["channels"],
+    queryFn: async () => {
+      const { data } = await getApiV1Channels();
+      return data;
+    },
+  });
+
+  const { data: liveStatusData } = useQuery({
+    queryKey: ["channels-live-status"],
+    queryFn: async () => {
+      const { data } = await getApiV1ChannelsLiveStatus();
+      return data as LiveStatusData | undefined;
+    },
+    refetchInterval: 3000,
+    enabled: (channelsData?.channels?.length ?? 0) > 0,
+  });
+
+  const { available: quotaAvailable, resetsAt } = useBotQuota();
+
+  const channels = channelsData?.channels ?? [];
+  const currentChannel = channels.find((ch) => ch.channelType === platform);
+  const isConfigured = !!currentChannel;
+  const quotaLimited = !quotaAvailable;
+  const showGuide = !isConfigured || forceGuide;
+
+  const handlePlatformChange = (p: Platform) => {
+    if (!channels.some((ch) => ch.channelType === p)) {
+      track("workspace_channel_connect_click", { channel: p });
+    }
+    setPlatform(p);
+    setForceGuide(false);
+  };
+
+  const handleConnected = () => {
+    queryClient.invalidateQueries({ queryKey: ["channels"] });
+  };
+
+  return (
+    <div className="px-4 py-4 sm:px-6 sm:py-6 md:p-8 mx-auto max-w-5xl">
+      {/* Page header */}
+      <div className="mb-6">
+        <h1 className="text-lg font-bold text-text-primary">
+          {t("channels.pageTitle")}
+        </h1>
+        <p className="text-[13px] text-text-muted mt-1">
+          {t("channels.pageSubtitle")}
+        </p>
+      </div>
+
+      {/* Platform selector */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 mb-6">
+        {getPlatforms(t).map((p) => {
+          const isActive = platform === p.id;
+          const configuredChannel = channels.find(
+            (ch) => ch.channelType === p.id,
+          );
+          const connected = !!configuredChannel;
+          const channelLive = liveStatusData?.channels?.find(
+            (e) => e.channelId === configuredChannel?.id,
+          );
+          const channelLiveStatus = liveStatusData
+            ? (channelLive?.status ?? "connecting")
+            : undefined;
+          return (
+            <button
+              type="button"
+              key={p.id}
+              onClick={() => handlePlatformChange(p.id)}
+              className={`relative flex items-center gap-3 px-4 py-3.5 rounded-xl text-left transition-all cursor-pointer ${
+                isActive
+                  ? "bg-accent/5 border-2 border-accent/40 shadow-sm"
+                  : "bg-surface-1 border border-border hover:border-border-hover hover:bg-surface-2"
+              }`}
+            >
+              <div
+                className={`flex justify-center items-center w-9 h-9 rounded-lg shrink-0 ${
+                  isActive ? "bg-accent/10" : "bg-surface-3"
+                }`}
+              >
+                <span className="text-sm">{p.emoji}</span>
+              </div>
+              <div className="flex-1 min-w-0">
+                <div
+                  className={`text-[13px] font-semibold ${isActive ? "text-accent" : "text-text-primary"}`}
+                >
+                  {getPlatformLabel(p.id, t)}
+                </div>
+                <div className="text-[10px] text-text-muted mt-0.5">
+                  {p.desc}
+                </div>
+              </div>
+              {connected ? (
+                channelLiveStatus === "error" ||
+                channelLiveStatus === "disconnected" ? (
+                  <Shield size={14} className="text-red-500 shrink-0" />
+                ) : channelLiveStatus === "connecting" ||
+                  channelLiveStatus === "restarting" ? (
+                  <Loader2
+                    size={14}
+                    className="text-amber-500 shrink-0 animate-spin"
+                  />
+                ) : (
+                  <CheckCircle2
+                    size={14}
+                    className="text-[var(--color-success)] shrink-0"
+                  />
+                )
+              ) : (
+                <Circle size={14} className="text-text-muted/30 shrink-0" />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Coming soon */}
+      <div className="flex gap-1.5 items-center mb-4 text-[11px] text-text-muted flex-wrap">
+        <Zap size={10} className="text-accent" />
+        {t("channels.comingSoon")}
+      </div>
+
+      {quotaLimited && !isConfigured && <QuotaBanner resetsAt={resetsAt} />}
+
+      {/* Back button when force-viewing guide for configured platform */}
+      {isConfigured && forceGuide && (
+        <button
+          type="button"
+          onClick={() => setForceGuide(false)}
+          className="flex gap-1.5 items-center mb-5 text-[12px] text-accent font-medium hover:underline underline-offset-2"
+        >
+          <ArrowLeft size={13} /> {t("channels.backToConfig")}
+        </button>
+      )}
+
+      {/* Content */}
+      {showGuide ? (
+        platform === "wechat" ? (
+          <WechatSetupView
+            onConnected={handleConnected}
+            disabled={quotaLimited}
+          />
+        ) : platform === "qqbot" ? (
+          <QqbotSetupView
+            onConnected={handleConnected}
+            disabled={quotaLimited}
+          />
+        ) : (
+          <FeishuSetupView
+            onConnected={handleConnected}
+            disabled={quotaLimited}
+          />
+        )
+      ) : currentChannel ? (
+        <ConfiguredView
+          platform={platform}
+          channel={currentChannel}
+          queryClient={queryClient}
+          onShowGuide={() => setForceGuide(true)}
+          liveStatusData={liveStatusData}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// ─── Configured View ─────────────────────────────────────────
+
+function ConfiguredView({
+  platform,
+  channel,
+  queryClient,
+  onShowGuide,
+  liveStatusData,
+}: {
+  platform: Platform;
+  channel: {
+    id: string;
+    accountId: string;
+    teamName: string | null;
+    appId?: string | null;
+    botUserId?: string | null;
+    status: string;
+    createdAt?: string | null;
+  };
+  queryClient: ReturnType<typeof useQueryClient>;
+  onShowGuide: () => void;
+  liveStatusData: LiveStatusData | undefined;
+}) {
+  const { t } = useTranslation();
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
+  const liveEntry = liveStatusData?.channels?.find(
+    (e) => e.channelId === channel.id,
+  );
+  // Before live-status data arrives, show a neutral loading state
+  // instead of defaulting to green "connected".
+  const liveStatus = liveStatusData
+    ? (liveEntry?.status ?? "connecting")
+    : "connecting";
+  const liveError = liveEntry?.lastError ?? null;
+
+  const disconnectMutation = useMutation({
+    mutationFn: async () => {
+      const { error } = await deleteApiV1ChannelsByChannelId({
+        path: { channelId: channel.id },
+      });
+      if (error) {
+        const errorMessage =
+          typeof error === "object" && error !== null && "message" in error
+            ? String(error.message)
+            : "Disconnect failed";
+        throw new Error(errorMessage);
+      }
+    },
+    onSuccess: () => {
+      setShowResetConfirm(false);
+      queryClient.invalidateQueries({ queryKey: ["channels"] });
+      toast.success(
+        t("channels.disconnectedToast", {
+          platform: getPlatformLabel(platform, t),
+        }),
+      );
+    },
+    onError: (err: Error) => toast.error(err.message),
+  });
+
+  return (
+    <>
+      <div className="space-y-4 sm:space-y-5">
+        {/* Status banner */}
+        <div
+          className={`flex flex-col items-start gap-3 p-4 rounded-xl border sm:flex-row sm:items-center ${
+            liveStatus === "error" || liveStatus === "disconnected"
+              ? "bg-red-500/5 border-red-500/20"
+              : liveStatus === "connecting" || liveStatus === "restarting"
+                ? "bg-amber-500/5 border-amber-500/20"
+                : "bg-[var(--color-success-subtle)] border-[var(--color-success-border)]"
+          }`}
+        >
+          <div
+            className={`flex justify-center items-center w-9 h-9 rounded-lg shrink-0 ${
+              liveStatus === "error" || liveStatus === "disconnected"
+                ? "bg-red-500/10"
+                : liveStatus === "connecting" || liveStatus === "restarting"
+                  ? "bg-amber-500/10"
+                  : "bg-[var(--color-success-muted)]"
+            }`}
+          >
+            {liveStatus === "error" || liveStatus === "disconnected" ? (
+              <Shield size={18} className="text-red-500" />
+            ) : liveStatus === "connecting" || liveStatus === "restarting" ? (
+              <Loader2 size={18} className="text-amber-500 animate-spin" />
+            ) : (
+              <CheckCircle2 size={18} className="text-[var(--color-success)]" />
+            )}
+          </div>
+          <div className="flex-1">
+            <div className="text-[13px] font-semibold text-text-primary">
+              {liveStatus === "error" || liveStatus === "disconnected"
+                ? `${getPlatformLabel(platform, t)} ${t("channels.statusError")}`
+                : liveStatus === "connecting" || liveStatus === "restarting"
+                  ? `${getPlatformLabel(platform, t)} ${t("channels.statusConnecting")}`
+                  : t("channels.statusConnected", {
+                      platform: getPlatformLabel(platform, t),
+                    })}
+            </div>
+            <div className="text-[11px] text-text-muted mt-0.5">
+              {liveError ? (
+                <span className="text-red-400">{liveError}</span>
+              ) : (
+                <>
+                  {channel.teamName ?? channel.accountId}
+                  {channel.createdAt &&
+                    ` \u00B7 ${t("channels.configuredDate", { date: new Date(channel.createdAt).toLocaleDateString() })}`}
+                  {liveStatus === "connected" && (
+                    <>
+                      {" \u00B7 "}
+                      {t("channels.connectionActive")}
+                    </>
+                  )}
+                </>
+              )}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              track("workspace_change_config_click");
+              onShowGuide();
+            }}
+            className="flex gap-1.5 items-center px-3 py-1.5 text-[11px] text-text-muted rounded-lg border border-border hover:border-border-hover hover:text-text-secondary transition-all shrink-0"
+          >
+            <BookOpen size={11} /> {t("channels.setupGuide")}
+          </button>
+        </div>
+
+        {/* Feishu: Open in Feishu */}
+        {platform === "feishu" && channel.appId && (
+          <div className="p-5 rounded-xl border bg-surface-1 border-border">
+            <div className="flex gap-2 items-center mb-4">
+              <div className="flex justify-center items-center w-7 h-7 rounded-lg bg-[#3370FF]/10 shrink-0">
+                <ExternalLink size={13} className="text-[#3370FF]" />
+              </div>
+              <h3 className="text-[13px] font-semibold text-text-primary">
+                {t("channels.openInFeishu")}
+              </h3>
+            </div>
+            <p className="text-[12px] text-text-muted mb-3 leading-relaxed">
+              {t("channels.openFeishuDM")}
+            </p>
+            <a
+              href={`https://applink.feishu.cn/client/bot/open?appId=${channel.appId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex gap-1.5 items-center px-4 py-2 text-[12px] font-medium text-white rounded-lg bg-[#3370FF] hover:bg-[#2860E6] transition-all"
+            >
+              <ExternalLink size={13} /> {t("channels.messageBotFeishu")}
+            </a>
+          </div>
+        )}
+
+        {/* Credentials */}
+        <div className="p-5 rounded-xl border bg-surface-1 border-border">
+          <div className="flex gap-2 items-center mb-4">
+            <div className="flex justify-center items-center w-7 h-7 rounded-lg bg-amber-500/10 shrink-0">
+              <Key size={13} className="text-amber-500" />
+            </div>
+            <h3 className="text-[13px] font-semibold text-text-primary">
+              {t("channels.credentials")}
+            </h3>
+          </div>
+          <div className="space-y-3">
+            <div>
+              <span className="text-[11px] text-text-muted font-medium mb-1.5 block">
+                {t("channels.accountId")}
+              </span>
+              <div className="px-3 py-2.5 w-full text-[13px] rounded-lg border border-border bg-surface-0 text-text-secondary">
+                {channel.accountId}
+              </div>
+            </div>
+            {channel.teamName && (
+              <div>
+                <span className="text-[11px] text-text-muted font-medium mb-1.5 block">
+                  {t("channels.teamName")}
+                </span>
+                <div className="px-3 py-2.5 w-full text-[13px] rounded-lg border border-border bg-surface-0 text-text-secondary">
+                  {channel.teamName}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Danger zone */}
+        <div className="p-5 rounded-xl border border-border bg-surface-1">
+          <div className="flex gap-2 items-center mb-3">
+            <div className="flex justify-center items-center w-7 h-7 rounded-lg bg-red-500/10 shrink-0">
+              <Shield size={13} className="text-red-400" />
+            </div>
+            <h3 className="text-[13px] font-semibold text-text-primary">
+              {t("channels.resetConfig")}
+            </h3>
+          </div>
+          <p className="text-[12px] text-text-muted mb-3.5 leading-relaxed">
+            {t("channels.resetConfigDesc", {
+              platform: getPlatformLabel(platform, t),
+            })}
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowResetConfirm(true)}
+            disabled={disconnectMutation.isPending}
+            className="flex gap-1.5 items-center px-3.5 py-2 text-[12px] font-medium text-red-500 rounded-lg border border-red-500/20 hover:bg-red-500/5 hover:border-red-500/30 transition-all disabled:opacity-60"
+          >
+            {disconnectMutation.isPending ? (
+              <Loader2 className="h-3 w-3 animate-spin" />
+            ) : (
+              <RotateCcw size={12} />
+            )}
+            {t("channels.resetReconfigure")}
+          </button>
+        </div>
+      </div>
+
+      {showResetConfirm && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 backdrop-blur-sm px-4"
+          onClick={() =>
+            !disconnectMutation.isPending && setShowResetConfirm(false)
+          }
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && !disconnectMutation.isPending) {
+              setShowResetConfirm(false);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-[420px] rounded-2xl border border-border bg-surface-1 shadow-xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => e.stopPropagation()}
+          >
+            <div className="px-5 py-4 border-b border-border">
+              <div className="flex items-center gap-2.5">
+                <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-red-500/10 shrink-0">
+                  <Shield size={14} className="text-red-500" />
+                </div>
+                <div>
+                  <h3 className="text-[14px] font-semibold text-text-primary">
+                    {t("channels.confirmReset")}
+                  </h3>
+                  <p className="text-[11px] text-text-muted mt-0.5">
+                    {t("channels.confirmResetDesc", {
+                      platform: getPlatformLabel(platform, t),
+                    })}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="px-5 py-4">
+              <p className="text-[12px] text-text-secondary leading-relaxed">
+                {t("channels.confirmResetBody", {
+                  platform: getPlatformLabel(platform, t),
+                })}
+              </p>
+              <div className="mt-4 flex items-center justify-end gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => setShowResetConfirm(false)}
+                  disabled={disconnectMutation.isPending}
+                  className="px-3.5 py-2 text-[12px] font-medium text-text-secondary rounded-lg border border-border hover:border-border-hover hover:bg-surface-3 transition-all disabled:opacity-60"
+                >
+                  {t("channels.cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    track("workspace_channel_disconnect_click", {
+                      channel: platform,
+                    });
+                    disconnectMutation.mutate();
+                  }}
+                  disabled={disconnectMutation.isPending}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-[12px] font-medium text-white rounded-lg bg-red-500 hover:bg-red-600 transition-all disabled:opacity-60"
+                >
+                  {disconnectMutation.isPending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <RotateCcw size={12} />
+                  )}
+                  {t("channels.confirmReset")}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Quota Banner ─────────────────────────────────────────
+
+function QuotaBanner({ resetsAt }: { resetsAt: string }) {
+  const { t } = useTranslation();
+  const countdown = useCountdown(resetsAt);
+  return (
+    <div className="flex gap-3 items-start p-4 rounded-xl border bg-red-500/5 border-red-500/15 mb-6">
+      <Clock size={16} className="mt-0.5 shrink-0 text-red-500" />
+      <div>
+        <div className="text-[13px] font-medium text-text-primary">
+          {t("channels.quotaTitle")}
+        </div>
+        <p className="text-[12px] text-text-primary mt-0.5 leading-relaxed">
+          {t("channels.quotaBody", { countdown })}
+        </p>
+      </div>
+    </div>
+  );
+}

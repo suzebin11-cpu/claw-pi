@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Claw-Pi 快速入门指南</title>
+<style>
+  @page {
+    size: A4;
+    margin: 20mm 18mm 20mm 18mm;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: "Microsoft YaHei", "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.85;
+    color: #1a1a1a;
+    background: #fff;
+    max-width: 700px;
+    margin: 0 auto;
+    padding: 40px 32px;
+  }
+
+  /* --- Cover --- */
+  .cover {
+    text-align: center;
+    padding: 60px 0 40px;
+    page-break-after: always;
+  }
+  .cover .logo-icon { display: block; margin: 0 auto 8px; }
+  .cover .logo-wordmark { display: block; margin: 0 auto 4px; }
+  .cover .subtitle { font-size: 18px; color: #555; margin-top: 16px; font-weight: 400; }
+  .cover .tagline { margin-top: 32px; font-size: 14px; color: #888; line-height: 2; }
+  .cover .version { margin-top: 48px; font-size: 12px; color: #aaa; }
+
+  /* --- Headings --- */
+  h1 {
+    font-size: 22px; font-weight: 700; color: #18181b;
+    border-bottom: 2px solid #18181b;
+    padding-bottom: 6px; margin: 36px 0 16px;
+    page-break-after: avoid;
+  }
+  h2 {
+    font-size: 16px; font-weight: 700; color: #18181b;
+    margin: 28px 0 10px; page-break-after: avoid;
+  }
+  h3 {
+    font-size: 14px; font-weight: 600; color: #333;
+    margin: 20px 0 8px; page-break-after: avoid;
+  }
+
+  p { margin: 8px 0; }
+  ul, ol { margin: 8px 0 8px 22px; }
+  li { margin: 4px 0; }
+  strong { font-weight: 700; }
+
+  code {
+    background: #f4f4f5; border: 1px solid #e4e4e7; border-radius: 4px;
+    padding: 1px 5px;
+    font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+    font-size: 12px; color: #c2410c;
+  }
+
+  .dir-tree {
+    background: #fafafa; border: 1px solid #e4e4e7; border-radius: 8px;
+    padding: 16px 20px; margin: 14px 0;
+    font-family: "Cascadia Code", "Fira Code", Consolas, monospace;
+    font-size: 12.5px; line-height: 1.9; color: #333;
+    page-break-inside: avoid;
+  }
+  .dir-tree .file { color: #1a1a1a; }
+  .dir-tree .desc { color: #888; font-family: "Microsoft YaHei", "PingFang SC", sans-serif; font-size: 11.5px; }
+  .dir-tree .highlight { color: #c2410c; font-weight: 600; }
+
+  .tip {
+    background: #f0f9ff; border-left: 4px solid #0284c7;
+    padding: 10px 14px; margin: 12px 0; border-radius: 0 6px 6px 0;
+    font-size: 12.5px; color: #0c4a6e; page-break-inside: avoid;
+  }
+  .tip strong { color: #0369a1; }
+
+  .warn {
+    background: #fffbeb; border-left: 4px solid #f59e0b;
+    padding: 10px 14px; margin: 12px 0; border-radius: 0 6px 6px 0;
+    font-size: 12.5px; color: #78350f; page-break-inside: avoid;
+  }
+  .warn strong { color: #b45309; }
+
+  .critical {
+    background: #fef2f2; border-left: 4px solid #dc2626;
+    padding: 10px 14px; margin: 12px 0; border-radius: 0 6px 6px 0;
+    font-size: 12.5px; color: #7f1d1d; page-break-inside: avoid;
+  }
+  .critical strong { color: #dc2626; }
+
+  .step-highlight {
+    background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px;
+    padding: 14px 18px; margin: 12px 0; page-break-inside: avoid;
+  }
+  .step-highlight p { margin: 4px 0; font-size: 13.5px; }
+  .step-highlight .arrow { color: #16a34a; font-weight: 700; }
+
+  .wait-tag {
+    display: inline-block;
+    background: #dbeafe; color: #1e40af;
+    font-size: 11px; font-weight: 700;
+    padding: 1px 8px; border-radius: 10px;
+    margin-left: 4px; vertical-align: middle;
+  }
+
+  .steps-box {
+    background: #fafafa; border: 1px solid #e4e4e7; border-radius: 8px;
+    padding: 16px 20px; margin: 14px 0; page-break-inside: avoid;
+  }
+  .steps-box ol { margin-left: 20px; }
+  .steps-box li { margin: 8px 0; line-height: 1.85; }
+
+  table {
+    width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 12.5px;
+  }
+  th, td { border: 1px solid #e4e4e7; padding: 8px 12px; text-align: left; }
+  th { background: #f4f4f5; font-weight: 600; color: #333; }
+
+  .faq { page-break-inside: avoid; margin: 14px 0; }
+  .faq-q { font-weight: 700; color: #18181b; margin-bottom: 4px; font-size: 13px; }
+  .faq-a { color: #444; margin-bottom: 12px; padding-left: 4px; }
+
+  hr { border: none; border-top: 1px solid #e4e4e7; margin: 24px 0; }
+
+  @media print {
+    body { padding: 0; max-width: none; }
+    .no-print { display: none; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ====== COVER ====== -->
+<div class="cover">
+  <svg class="logo-icon" width="80" height="80" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+    <path d="M126.973367,74.611399 L126.973367,87.6539402 L140.932642,95.4497682 L140.932642,113.38067 L126.973367,113.38067 L126.973367,87.6547697 L73.0266334,87.6547697 L73.0266334,74.611399 L126.973367,74.611399 Z M109.850452,91.28956 L113.962255,95.4089558 L109.726303,99.6544386 L113.962255,103.90158 L109.850452,108.019317 L105.616155,103.773834 L101.50104,99.6594157 L105.611189,95.5300657 L109.850452,91.28956 Z M91.8508816,92.3757334 L91.8508816,106.933807 L86.0374135,106.933807 L86.0374135,92.3757334 L91.8508816,92.3757334 Z M59.0673575,87.6541061 L59.0673575,105.583349 L73.0266334,113.380836 L73.0266334,87.6541061 L59.0673575,87.6541061 Z M107.10958,126.42487 L126.973367,126.42487 L126.973367,113.3815 L107.10958,113.3815 L107.10958,126.42487 Z M73.0266334,126.42487 L93.1519596,126.42487 L93.1519596,113.3815 L73.0266334,113.3815 L73.0266334,126.42487 Z" fill="#0A0B0C"/>
+  </svg>
+  <svg class="logo-wordmark" width="240" height="45" viewBox="60 75 180 50" xmlns="http://www.w3.org/2000/svg">
+    <g transform="translate(63, 79)">
+      <path d="M38.3929579,41.4247187 L46.4004783,41.4247187 L46.4004783,0.00355343139 L38.3929579,0.00355343139 L38.3929579,41.4247187 Z M63.9697463,14.1325889 C66.3217708,14.1325889 68.254213,14.4287082 69.7670729,15.0209467 C71.2799329,15.6131853 72.4914028,16.4719312 73.4014826,17.620874 C74.3056528,18.7520497 74.937981,20.1556551 75.2925575,21.8198455 C75.6471341,23.4781135 75.8244223,25.3969664 75.8244223,27.5704819 L75.8244223,41.4347868 L68.4610493,41.4347868 L68.4610493,37.5260122 L68.3487667,37.5260122 C67.4623254,38.9177729 66.2744939,39.918656 64.7970916,40.5227394 C63.3196893,41.1268227 61.7654621,41.4347868 60.1285004,41.4347868 C58.9170305,41.4347868 57.7528375,41.2630376 56.6300118,40.9254616 C55.507186,40.5819632 54.5202813,40.0726381 53.663388,39.3974861 C52.8124042,38.7223341 52.1327992,37.8813554 51.636392,36.8863946 C51.1340752,35.8855114 50.8858716,34.7247238 50.8858716,33.4040318 C50.8858716,31.9056682 51.1636233,30.6442001 51.7132169,29.6018602 C52.2628106,28.5713651 53.0133309,27.7126192 53.9588684,27.0374672 C54.9044059,26.3563929 55.9740451,25.8293006 57.185515,25.4561903 C58.3969849,25.0771576 59.6557316,24.8047278 60.9558457,24.6270563 C62.2559597,24.4493847 63.5560737,24.3427818 64.8561877,24.3013251 C66.1563017,24.2657907 67.3559524,24.253946 68.4610493,24.253946 C68.4610493,22.826651 67.9528229,21.689553 66.9363701,20.8485742 C65.9199174,20.0135178 64.7202667,19.5930285 63.3315085,19.5930285 C62.0136657,19.5930285 60.814015,19.877303 59.726647,20.4221625 C58.6392789,20.9729443 57.670103,21.7369321 56.8191192,22.7022809 L52.5405622,18.3137932 C54.0356933,16.9161101 55.779028,15.8737703 57.7764759,15.1808512 C59.7680142,14.4820096 61.8363774,14.1325889 63.9697463,14.1325889 Z M68.4610493,29.3886543 L66.4813302,29.3886543 C65.8785501,29.3886543 65.1162105,29.4182663 64.2120403,29.4715677 C63.3019605,29.5189468 62.433248,29.6788512 61.5940835,29.9275914 C60.7608286,30.1763316 60.0457659,30.5494419 59.4607145,31.0469223 C58.8697536,31.5503251 58.5742732,32.2432442 58.5742732,33.1375245 C58.5742732,34.0969509 58.9879458,34.8135596 59.8034719,35.2755057 C60.6249076,35.7433741 61.4758913,35.9684248 62.3682423,35.9684248 C63.1542203,35.9684248 63.9047406,35.8677442 64.6375322,35.6545384 C65.3703237,35.4413325 66.0203807,35.1392908 66.5877032,34.7365686 C67.1609353,34.3456911 67.6100656,33.8541331 67.9528229,33.238205 C68.2896706,32.6341217 68.4610493,31.9293578 68.4610493,31.1002238 L68.4610493,29.3886543 Z M77.7474091,14.1349578 L86.292704,14.1349578 L91.5818042,31.2624972 L91.6881772,31.2624972 L96.120384,14.1349578 L104.878425,14.1349578 L109.682937,31.2624972 L109.78931,31.2624972 L114.652918,14.1349578 L122.766812,14.1349578 L113.530093,41.4312333 L105.628945,41.4312333 L100.233472,23.2909661 L100.127099,23.2909661 L95.3225868,41.4312333 L87.2559703,41.4312333 L77.7474091,14.1349578 Z M20.488615,33.3720509 C13.5684626,33.3720509 7.96024355,27.7043279 7.96024355,20.7099904 C7.96024355,13.7215753 13.5684626,8.04792987 20.488615,8.04792987 C23.6443463,8.04792987 26.4927779,9.26794131 28.6970621,11.2164062 L33.915247,5.18149521 C30.3103854,1.99525173 25.6536134,0.00533014709 20.488615,0.00533014709 C9.17171343,0.00533014709 0,9.2738637 0,20.7099904 C0,32.1461171 9.17171343,41.420573 20.488615,41.420573 C25.6536134,41.420573 30.3103854,39.4247291 33.915247,36.244408 L28.6970621,30.209497 C26.4927779,32.1520395 23.6443463,33.3720509 20.488615,33.3720509" fill="#0A0B0C"/>
+      <path d="M139.03833,18.2705597 L147.80228,18.2705597 C148.889648,18.2705597 149.959287,18.1402673 151.017107,17.8915271 C152.063108,17.6309421 152.996827,17.2282199 153.818262,16.6655932 C154.633788,16.0970442 155.295664,15.3389788 155.797981,14.4032419 C156.306208,13.467505 156.56623,12.3185622 156.56623,10.9504911 C156.56623,9.62387669 156.300298,8.49270103 155.774343,7.5569641 C155.242478,6.62122716 154.568783,5.84539464 153.729618,5.24131131 C152.890454,4.63722797 151.927187,4.19897143 150.839819,3.92654169 C149.740632,3.65411195 148.653264,3.51197469 147.565896,3.51197469 L139.03833,3.51197469 L139.03833,18.2705597 Z M135.179355,0 L147.099037,0 C148.540981,0 150.047932,0.171749184 151.625797,0.503402781 C153.209572,0.835056377 154.639698,1.40952779 155.951631,2.23273939 C157.251745,3.04410623 158.321384,4.1693595 159.160549,5.59665444 C159.999713,7.018027 160.413386,8.81250986 160.413386,10.9504911 C160.413386,12.8278873 160.076538,14.4446986 159.391024,15.8068473 C158.717328,17.1808408 157.795429,18.3001717 156.654875,19.1766848 C155.502501,20.0531978 154.172839,20.7105826 152.677708,21.1369944 C151.176667,21.5693286 149.61653,21.7825344 147.979568,21.7825344 L139.03833,21.7825344 L139.03833,41.4566996 L135.179355,41.4566996 L135.179355,0 Z M168.150246,41.4543306 L171.660554,41.4543306 L171.660554,14.4067953 L168.150246,14.4067953 L168.150246,41.4543306 Z" fill="#0A0B0C"/>
+      <path d="M166.749669,3.16610737 C166.749669,2.27182714 167.051059,1.52560654 167.659749,0.915600822 C168.268439,0.3055951 169.013049,0.00355343139 169.9054,0.00355343139 C170.791842,0.00355343139 171.536452,0.3055951 172.151052,0.915600822 C172.759741,1.52560654 173.055222,2.27182714 173.055222,3.16610737 C173.055222,4.05446522 172.759741,4.80068581 172.151052,5.41069153 C171.536452,6.02069726 170.791842,6.32273893 169.9054,6.32273893 C169.013049,6.32273893 168.268439,6.02069726 167.659749,5.41069153 C167.051059,4.80068581 166.749669,4.05446522 166.749669,3.16610737 L166.749669,3.16610737 Z" fill="#8FEF26"/>
+    </g>
+  </svg>
+  <div class="subtitle">快速入门指南</div>
+  <div class="tagline">
+    插上 U 盘 · 双击安装 · 你的 AI Agent 即刻上线<br>
+    微信 · 飞书 · QQ — 开箱即用
+  </div>
+  <div class="version">U 盘版 · 适用于 Windows 10 / 11</div>
+</div>
+
+<!-- ====== U 盘内容一览 ====== -->
+<h1>U 盘里有什么？</h1>
+
+<p>你拿到了一个 U 盘。U 盘里<strong>只有两个文件</strong>：</p>
+
+<div class="dir-tree">
+  📄 <span class="file">Claw-Pi-快速入门指南.pdf</span> <span class="desc">← 就是你正在看的这份指南</span><br>
+  ⚡ <span class="file highlight">Claw-Pi-Setup.exe</span> <span class="desc">← 安装程序，待会儿要双击它</span>
+</div>
+
+<div class="warn">
+  <strong>别忘了找激活卡：</strong>你的包装盒里有一张<strong>小卡片</strong>，叫「Claw Pi 产品激活卡」。把它翻到<strong>背面</strong>，上面印着一个 <strong>5 位激活码</strong>（字母或数字）。注册的时候要用，<strong>先找出来放在手边</strong>。
+</div>
+
+<!-- ====== 一、你需要什么 ====== -->
+<h1>一、你需要什么</h1>
+
+<table>
+  <tr><th>需要的东西</th><th>说明</th></tr>
+  <tr><td>一台电脑</td><td>Windows 10 或 Windows 11，64 位。<strong>不支持</strong> Windows 7/8、Mac、手机或平板。</td></tr>
+  <tr><td>网络</td><td>需要连着 WiFi 或插着网线，<strong>整个使用过程都需要联网</strong>。</td></tr>
+  <tr><td>激活卡</td><td>包装盒里那张小卡片，背面有 5 位激活码。</td></tr>
+  <tr><td>磁盘空间</td><td>电脑至少剩余 <strong>500 MB</strong> 硬盘空间。</td></tr>
+</table>
+
+<!-- ====== 二、安装 ====== -->
+<h1>二、安装 Claw-Pi（约 5～8 分钟）</h1>
+
+<h2>2.1 插入 U 盘，打开 U 盘</h2>
+
+<div class="steps-box">
+  <ol>
+    <li>把 U 盘插到电脑的 USB 接口上 <span class="wait-tag">等 3～5 秒</span></li>
+    <li>电脑屏幕<strong>右下角</strong>会弹出一条提示，类似「可移动磁盘」或「USB 设备已连接」。<strong>如果弹出了窗口，直接点击它</strong>来打开 U 盘</li>
+    <li>如果<strong>没有弹出</strong>任何提示，按以下方法手动打开 U 盘：
+      <ul>
+        <li>双击桌面上的 <strong>「此电脑」</strong>（有的电脑叫「我的电脑」或「计算机」）</li>
+        <li>在窗口里找到一个新出现的磁盘图标（通常叫「可移动磁盘」或带 U 盘品牌名）</li>
+        <li><strong>双击它</strong>，打开 U 盘</li>
+      </ul>
+    </li>
+    <li>打开后你应该能看到两个文件：一个 PDF 和一个 <strong>Claw-Pi-Setup.exe</strong></li>
+  </ol>
+</div>
+
+<h2>2.2 运行安装程序</h2>
+
+<div class="steps-box">
+  <ol>
+    <li>找到 <strong>Claw-Pi-Setup.exe</strong> 这个文件（图标上可能有一个蓝紫色的盾牌标志）</li>
+    <li>用鼠标<strong>双击</strong>它（快速按两下鼠标左键）</li>
+    <li><strong>只双击一次就够了！</strong>双击之后可能 3～10 秒内屏幕上什么都不会发生，这是<strong>正常的</strong>，不要着急，不要再双击第二次 <span class="wait-tag">等 3～10 秒</span></li>
+  </ol>
+</div>
+
+<div class="critical">
+  <strong>千万不要连续点好几次！</strong>不管等多久，<strong>只双击一次</strong>。多次双击会导致多个安装程序同时运行，可能出错。如果超过 30 秒还是什么都没有，才考虑再点一次。
+</div>
+
+<h2>2.3 处理安全弹窗（几乎一定会遇到）</h2>
+
+<p>双击之后，你<strong>大概率</strong>会遇到下面这些弹窗。这是因为我们的安装程序<strong>没有购买微软的数字签名证书</strong>（一种身份认证），所以 Windows 把它当作「来源不明」的软件。<strong>软件本身没有任何安全问题</strong>，按下面的步骤操作就行。</p>
+
+<h3>弹窗 A：蓝色「Windows 已保护你的电脑」</h3>
+<p>这是最常见的弹窗，蓝底白字。</p>
+<div class="steps-box">
+  <ol>
+    <li>你看到的弹窗上只有一个 <strong>「不运行」</strong> 按钮，<strong>先别点它</strong></li>
+    <li>在弹窗文字的下方，找到一行小字 <strong>「更多信息」</strong>（英文系统是 More info），<strong>用鼠标点这行小字</strong></li>
+    <li>点完之后，弹窗下方会多出来一个按钮 <strong>「仍要运行」</strong>（Run anyway）</li>
+    <li><strong>点击「仍要运行」</strong></li>
+  </ol>
+</div>
+<p><span class="wait-tag">点完后等 3～5 秒</span> 安装向导窗口就会出现。</p>
+
+<h3>弹窗 B：杀毒软件拦截（360、火绒、Windows Defender 等）</h3>
+<p>如果电脑装了 360、火绒、或者 Windows 自带的 Defender，可能会弹出另一种警告。</p>
+<div class="steps-box">
+  <ol>
+    <li>360 安全卫士：点 <strong>「允许程序运行」</strong> 或 <strong>「信任此程序」</strong></li>
+    <li>火绒：点 <strong>「允许」</strong> 或 <strong>「放行」</strong></li>
+    <li>Windows Defender：点 <strong>「允许在设备上」</strong> 或 <strong>「仍要保留」</strong></li>
+    <li>如果文件已经被自动删除/隔离了：打开杀毒软件 → 找到「隔离区」或「查杀记录」→ 找到 Claw-Pi 相关文件 → 点 <strong>「恢复」</strong> 和 <strong>「添加信任」</strong>，然后重新双击安装</li>
+  </ol>
+</div>
+
+<div class="tip">
+  <strong>为什么会被拦截？</strong>Claw-Pi 使用一种叫 Electron 的技术开发，这类应用在没有购买数字签名证书的情况下，经常被杀毒软件误判为可疑文件。这是误报，不是真的有病毒。
+</div>
+
+<h3>弹窗 C：「用户账户控制」（UAC）</h3>
+<p>可能会弹出一个深色弹窗，问「是否允许此应用对设备进行更改」：</p>
+<div class="steps-box">
+  <ol>
+    <li>点 <strong>「是」</strong></li>
+  </ol>
+</div>
+
+<h2>2.4 安装向导</h2>
+
+<p>处理完上面所有弹窗后，你会看到一个安装窗口，标题写着「Claw-Pi Setup」或类似字样。</p>
+
+<div class="steps-box">
+  <ol>
+    <li>安装窗口会问你要安装到哪里（安装路径）。<strong>不用改，直接用默认的就行</strong></li>
+    <li>点击 <strong>「安装」</strong>（Install）按钮</li>
+    <li><strong>然后等待。</strong>安装进度条会开始走动 <span class="wait-tag">需要等 3～5 分钟</span></li>
+  </ol>
+</div>
+
+<div class="critical">
+  <strong>这一步最容易让人着急！</strong>安装需要解压大量文件，<strong>进度条可能长时间停在某个位置不动</strong>，看起来像是「卡死了」。<br><br>
+  <strong>请放心，它没有卡死。</strong>不要点关闭、不要点取消、不要强制结束。去泡杯茶，等它走完就好。<br><br>
+  整个安装过程通常需要 <strong>3～5 分钟</strong>，电脑性能差的可能需要 <strong>8～10 分钟</strong>。
+</div>
+
+<div class="steps-box">
+  <ol start="4">
+    <li>进度条走完后，安装窗口会显示「安装完成」 <span class="wait-tag">已等完</span></li>
+    <li>确保 <strong>「运行 Claw-Pi」</strong> 前面打了勾 ✓（通常默认就是勾选的）</li>
+    <li>点击 <strong>「完成」</strong>（Finish）按钮</li>
+  </ol>
+</div>
+
+<div class="tip">
+  <strong>安装完了，桌面会多一个图标：</strong>以后每次要用 Claw-Pi，<strong>直接双击桌面上的 Claw-Pi 图标</strong>就行了，不用再插 U 盘，也不用再运行安装程序。
+</div>
+
+<!-- ====== 三、首次启动 ====== -->
+<h1>三、首次启动（约 1～2 分钟）</h1>
+
+<p>点了「完成」之后，Claw-Pi 会自动打开。（如果没有自动打开，就去桌面上双击 Claw-Pi 图标。）</p>
+
+<h2>3.1 等待软件加载</h2>
+
+<div class="steps-box">
+  <ol>
+    <li>你会看到一个窗口出现，可能一开始是白屏或者显示一个 logo <span class="wait-tag">等 30 秒～1 分钟</span></li>
+    <li>如果超过 1 分钟还是白屏，<strong>不要关闭窗口</strong>，再多等 1 分钟。首次启动要加载很多东西</li>
+    <li>加载完成后，你会看到一个<strong>登录/注册页面</strong></li>
+  </ol>
+</div>
+
+<h2>3.2 处理防火墙弹窗</h2>
+
+<p>首次启动时，Windows 防火墙<strong>很可能</strong>弹出一个窗口，问你是否允许 Claw-Pi 联网通信：</p>
+
+<div class="steps-box">
+  <ol>
+    <li>如果有「专用网络」和「公用网络」两个勾选框，<strong>两个都勾上</strong></li>
+    <li>点击 <strong>「允许访问」</strong></li>
+  </ol>
+</div>
+
+<div class="critical">
+  <strong>这一步必须点「允许」！</strong>如果你不小心点了「取消」或「拒绝」，Claw-Pi 就<strong>无法联网</strong>，后面所有功能都用不了（AI 不能回复，聊天渠道连不上）。<br><br>
+  <strong>补救方法：</strong>点电脑左下角 <strong>「开始」</strong> → 输入 <strong>「防火墙」</strong> → 打开 <strong>「允许应用通过 Windows 防火墙」</strong> → 在列表中找到 Claw-Pi → 把后面的勾全部<strong>打上</strong> → 点「确定」。
+</div>
+
+<!-- ====== 四、注册账号 ====== -->
+<h1>四、注册账号（约 2 分钟）</h1>
+
+<p>现在你应该看到了 Claw-Pi 的登录/注册页面。第一次使用需要注册一个新账号。</p>
+
+<h2>4.1 进入注册页面</h2>
+
+<div class="steps-box">
+  <ol>
+    <li>在页面上找到 <strong>「激活码注册」</strong> 的标签页 / 按钮，<strong>点一下</strong></li>
+    <li>页面会切换到注册表单，显示几个输入框</li>
+  </ol>
+</div>
+
+<h2>4.2 填写注册信息</h2>
+
+<div class="steps-box">
+  <ol>
+    <li><strong>激活码：</strong>拿出你之前找到的那张<strong>激活卡</strong>，看<strong>背面</strong>的 5 位激活码。用键盘把这 5 个字符<strong>一个一个敲进去</strong>。注意区分：
+      <ul>
+        <li>数字 <strong>0</strong>（圆的）和 字母 <strong>O</strong>（也是圆的）——仔细看卡片上哪个是哪个</li>
+        <li>数字 <strong>1</strong>（一竖）和 字母 <strong>l</strong>（小写 L，也是一竖）——同上</li>
+      </ul>
+    </li>
+    <li><strong>邮箱：</strong>输入你的邮箱地址。比如 <code>zhangsan@qq.com</code> 或 <code>lisi@163.com</code>。<strong>一定要填一个你能收到邮件的真实邮箱</strong>，后面忘了密码要用它找回</li>
+    <li><strong>密码：</strong>自己设一个密码，至少 6 位。建议字母加数字，比如 <code>abc123</code></li>
+    <li><strong>确认密码：</strong>（如果有这个输入框的话）把刚才设的密码<strong>再输一遍</strong>，要跟上面完全一样</li>
+  </ol>
+</div>
+
+<h2>4.3 提交注册</h2>
+
+<div class="steps-box">
+  <ol>
+    <li>检查一遍你填的内容，确保没有打错</li>
+    <li>点击 <strong>「注册并激活」</strong> 按钮 <span class="wait-tag">等 3～10 秒</span></li>
+    <li>如果注册成功，页面会自动跳转到 Claw-Pi 的<strong>主界面</strong>（首页）</li>
+    <li>如果提示「激活码无效」，重新核对激活卡上的 5 位码，再试一次</li>
+    <li>如果提示「邮箱已注册」，说明你之前用这个邮箱注册过了。切换到「登录」标签页，输入邮箱和密码即可</li>
+  </ol>
+</div>
+
+<div class="warn">
+  <strong>把邮箱和密码记下来！</strong>建议现在就打开手机备忘录或者找张纸，把刚才注册用的<strong>邮箱</strong>和<strong>密码</strong>记一下。以后在别的电脑上登录、或者忘了密码找回，都需要用到。
+</div>
+
+<!-- ====== 五、配置 AI 模型 ====== -->
+<h1>五、配置 AI 模型（约 1 分钟）</h1>
+
+<p>注册成功后你进入了主界面。在让 AI 工作之前，需要先选一个 AI 模型。</p>
+
+<div class="steps-box">
+  <ol>
+    <li>看窗口<strong>左边</strong>，有一列图标/菜单。找到 <strong>「Settings」</strong>（设置），点一下</li>
+    <li>进入设置页面后，你会看到「模型供应商」或类似的选项</li>
+    <li><strong>选一个供应商</strong>（推荐使用默认提供的那个，已经帮你对接好了 Claude、Gemini 等顶级 AI 模型）</li>
+    <li>选好后，可以在模型列表里看到多个可用模型。<strong>不知道选哪个就用默认的</strong>，不用改 <span class="wait-tag">立即完成</span></li>
+  </ol>
+</div>
+
+<div class="tip">
+  <strong>关于额度/费用：</strong>调用 AI 模型需要消耗额度。你的激活卡已经附赠了初始额度，可以<strong>直接开始用</strong>。如果额度用完了，可以在设置页面里充值。
+</div>
+
+<!-- ====== 六、连接聊天渠道 ====== -->
+<h1>六、连接聊天渠道（约 2 分钟）</h1>
+
+<p>现在你要把 AI Agent 接到某个聊天平台上。连上之后，<strong>你自己</strong>就能在手机上随时随地和你的 AI Agent 对话了（这个 Bot 只供你自己用，不会接管你和别人的聊天）。</p>
+
+<h2>6.1 微信 —— 扫码连接</h2>
+
+<div class="steps-box">
+  <ol>
+    <li>点窗口<strong>左边</strong>的菜单，回到<strong>首页</strong>（Home）</li>
+    <li>在首页找到 <strong>「WeChat」</strong>（微信）那张卡片，<strong>点它</strong></li>
+    <li>点 <strong>「扫码连接」</strong> 按钮 <span class="wait-tag">等 3～5 秒</span></li>
+    <li>屏幕上会出现一个<strong>二维码</strong>（一个黑白方块图案）</li>
+    <li>拿出<strong>你的手机</strong>，打开<strong>微信 App</strong></li>
+    <li>点微信右上角的 <strong>「+」</strong> 号 → 点 <strong>「扫一扫」</strong></li>
+    <li>把手机<strong>对准电脑屏幕上的二维码</strong>，让手机扫描它 <span class="wait-tag">等 1～3 秒</span></li>
+    <li>手机上会出现一个确认页面，点 <strong>「确认登录」</strong> 或 <strong>「同意」</strong></li>
+    <li>电脑上的状态会变成 <strong>「已连接」</strong> <span class="wait-tag">等 3～5 秒</span></li>
+  </ol>
+</div>
+
+<p>连接成功！打开手机微信，你会发现多了一个对话叫 <strong>「微信 ClawBot」</strong> ——这就是你的 AI Agent。<strong>直接给它发消息</strong>，AI 就会回复你。</p>
+
+<div class="warn">
+  <strong>注意：这个 Bot 只供你自己用。</strong>ClawBot 是你微信里的一个专属对话窗口，只有<strong>你和它</strong>之间的消息会被 AI 处理。<strong>别人发给你的消息，AI 不会自动回复</strong>，也不会接管你和朋友的任何聊天。如果你想让 AI 帮你写回复，可以先在 ClawBot 里问 AI，再把答案复制粘贴到对应聊天里。
+</div>
+
+<h2>6.2 飞书 —— 扫码连接</h2>
+
+<div class="steps-box">
+  <ol>
+    <li>回到首页，找到 <strong>「Feishu」</strong>（飞书）那张卡片，<strong>点它</strong></li>
+    <li>屏幕上会出现一个二维码 <span class="wait-tag">等 3～5 秒</span></li>
+    <li>拿出手机，打开<strong>飞书 App</strong></li>
+    <li>用飞书的<strong>扫一扫</strong>功能扫描电脑屏幕上的二维码</li>
+    <li>在手机上确认连接 <span class="wait-tag">等 3～5 秒</span></li>
+  </ol>
+</div>
+
+<p>详细步骤请参考：<strong>http://docs.claw-pi.cn/zh/guide/channels/feishu</strong></p>
+
+<h2>6.3 其他渠道（QQ、Discord、Telegram 等）</h2>
+
+<p>首页还有其他渠道卡片，点进去按屏幕上的提示操作即可。每个渠道的连接方式大同小异。</p>
+
+<!-- ====== 七、开始使用 ====== -->
+<h1>七、大功告成！开始使用</h1>
+
+<p>连接成功后，你的 AI Agent 就正式上线了。</p>
+
+<div class="step-highlight">
+  <p><span class="arrow">▶</span> 打开手机微信 → 找到 <strong>「微信 ClawBot」</strong> 对话 → <strong>自己</strong>给它发一条消息 → AI 会在几秒内回复</p>
+  <p style="font-size: 12px; color: #15803d; margin-top: 6px;">（飞书同理：在飞书里找到你的 ClawBot，自己给它发消息测试。）</p>
+</div>
+
+<p>你也可以在 Claw-Pi 窗口里点 <strong>「Chat」</strong> 按钮，直接在电脑上和 AI 对话。</p>
+
+<h2>让 Agent 持续在线</h2>
+
+<p>AI Agent 依赖你电脑上运行的 Claw-Pi 软件。<strong>电脑关了或者软件退了，Agent 就下线了。</strong></p>
+
+<div class="steps-box">
+  <ol>
+    <li><strong>不要关闭 Claw-Pi 窗口</strong>。你可以把它<strong>最小化</strong>（点窗口右上角的「—」按钮），它会缩到任务栏里继续运行</li>
+    <li>建议把电脑设为不自动休眠：
+      <ul>
+        <li>点电脑左下角 <strong>「开始」</strong> 按钮</li>
+        <li>点 <strong>「设置」</strong>（齿轮图标）</li>
+        <li>点 <strong>「系统」</strong></li>
+        <li>点左边菜单的 <strong>「电源和睡眠」</strong>（或「电源和电池」）</li>
+        <li>找到 <strong>「睡眠」</strong>，把下拉框改成 <strong>「从不」</strong></li>
+      </ul>
+    </li>
+  </ol>
+</div>
+
+<hr>
+
+<!-- ====== 全流程耗时总结 ====== -->
+<h1>全流程耗时一览</h1>
+
+<table>
+  <tr><th>步骤</th><th>预计耗时</th><th>你需要做什么</th></tr>
+  <tr><td>插入 U 盘 + 打开</td><td>30 秒</td><td>插 U 盘 → 双击打开</td></tr>
+  <tr><td>双击安装程序</td><td>3～10 秒</td><td>双击一次 → 等它出现</td></tr>
+  <tr><td>处理安全弹窗</td><td>30 秒～1 分钟</td><td>点「更多信息」→「仍要运行」等</td></tr>
+  <tr><td>安装过程</td><td><strong>3～5 分钟</strong></td><td><strong>什么都不用做，等着就行</strong></td></tr>
+  <tr><td>首次启动加载</td><td>30 秒～1 分钟</td><td>什么都不用做，等白屏变成登录页</td></tr>
+  <tr><td>处理防火墙弹窗</td><td>10 秒</td><td>点「允许访问」</td></tr>
+  <tr><td>注册账号</td><td>1～2 分钟</td><td>填激活码 + 邮箱 + 密码</td></tr>
+  <tr><td>配置模型</td><td>30 秒</td><td>点 Settings → 选个供应商</td></tr>
+  <tr><td>连接微信</td><td>1 分钟</td><td>手机微信扫一扫</td></tr>
+  <tr><th>合计</th><th colspan="2"><strong>约 8～12 分钟</strong>（大部分时间在等安装）</th></tr>
+</table>
+
+<hr>
+
+<!-- ====== 常见问题 ====== -->
+<h1>常见问题</h1>
+
+<h2>安装阶段</h2>
+
+<div class="faq">
+  <div class="faq-q">Q: 双击安装程序之后，什么都没发生？</div>
+  <div class="faq-a">A: 90% 的情况是被安全软件<strong>静默拦截</strong>了。请检查屏幕右下角是否有 360/火绒/Defender 的弹出通知。如果有，点「允许」后重新双击。如果没有任何通知，稍等 30 秒。如果等了 30 秒还是什么都没有，重新双击一次。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 蓝色弹窗上找不到「更多信息」？</div>
+  <div class="faq-a">A:「更多信息」是一行<strong>带下划线的小字</strong>，在弹窗的中间偏下位置。可能不太显眼，仔细看一下。英文系统上写的是「More info」。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 安装进度条卡了 5 分钟不动，到底要不要关？</div>
+  <div class="faq-a">A: <strong>不要关。</strong>等到 10 分钟。如果 10 分钟了进度条还是完全一点没动（一丝一毫都没变化），那可以关掉重新双击安装程序再试一次。但通常 5 分钟之内一定会动的。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 安装程序被杀毒软件直接删了怎么办？</div>
+  <div class="faq-a">A: 打开杀毒软件 → 找到「隔离区」或「查杀日志」→ 找到 Claw-Pi 文件 → 点「恢复」和「信任」。恢复后再双击安装。如果不会操作，可以先把杀毒软件临时退出，安装完再打开。</div>
+</div>
+
+<h2>启动阶段</h2>
+
+<div class="faq">
+  <div class="faq-q">Q: 软件启动后一直白屏怎么办？</div>
+  <div class="faq-a">A: 首次启动白屏 30 秒～1 分钟是正常的。如果白屏超过 <strong>3 分钟</strong>，先关闭窗口，再双击桌面图标重新打开。如果依然白屏，检查网络连接是否正常。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 防火墙弹窗不小心点了「取消」怎么办？</div>
+  <div class="faq-a">A: 点「开始」→ 搜索「防火墙」→ 打开「允许应用通过 Windows 防火墙」→ 点「更改设置」→ 找到 Claw-Pi → 全部打勾 → 确定。</div>
+</div>
+
+<h2>注册阶段</h2>
+
+<div class="faq">
+  <div class="faq-q">Q: 激活码到底在哪？</div>
+  <div class="faq-a">A: 在包装盒里的那张<strong>小卡片</strong>的<strong>背面</strong>。5 位字母或数字。如果找不到卡片，翻翻包装盒里所有的纸片和说明书。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 激活码输进去提示「无效」？</div>
+  <div class="faq-a">A: 仔细核对每一位。最常搞混的是：数字 <strong>0</strong> 和字母 <strong>O</strong>，数字 <strong>1</strong> 和字母 <strong>l</strong>（小写 L）。可以都试一遍。如果都不行，联系客服。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 邮箱填什么？</div>
+  <div class="faq-a">A: 你常用的邮箱。QQ 邮箱（你的QQ号@qq.com）、163 邮箱、Gmail 都可以。如果你不确定自己有没有邮箱：你的 QQ 号加上 @qq.com 就是你的 QQ 邮箱，比如 QQ 号是 123456，那邮箱就是 123456@qq.com。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 忘了密码怎么办？</div>
+  <div class="faq-a">A: 登录页面有「忘记密码」链接，点了之后会往你的邮箱发重置邮件。去邮箱收邮件，按邮件里的链接重设密码。</div>
+</div>
+
+<h2>使用阶段</h2>
+
+<div class="faq">
+  <div class="faq-q">Q: 电脑关了 / Claw-Pi 退了，AI 还能回复吗？</div>
+  <div class="faq-a">A: <strong>不能。</strong>AI Agent 运行在你的电脑上，电脑关了它就下线了。想让它 24 小时在线，就要保持电脑开着、Claw-Pi 不关。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 换一台电脑可以用吗？</div>
+  <div class="faq-a">A: 可以。把 U 盘插到新电脑上，重新安装一遍，然后用你之前注册的邮箱和密码登录就行。</div>
+</div>
+
+<div class="faq">
+  <div class="faq-q">Q: 怎么更新到新版本？</div>
+  <div class="faq-a">A: Claw-Pi 有自动更新功能，有新版本会弹窗提示你。按提示点「更新」就行，不用重新下载安装。</div>
+</div>
+
+<hr>
+
+<!-- ====== 联系支持 ====== -->
+<h1>联系支持</h1>
+
+<table>
+  <tr><th>渠道</th><th>地址</th></tr>
+  <tr><td>官网</td><td>https://claw-pi.cn</td></tr>
+  <tr><td>文档</td><td>http://docs.claw-pi.cn</td></tr>
+</table>
+
+</body>
+</html>
