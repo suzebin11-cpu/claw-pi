@@ -89,6 +89,8 @@ async function main() {
     });
     env.NEXU_DESKTOP_SIDECAR_OUT_DIR = releaseRuntimeRoot;
     env.NEXU_DESKTOP_COPY_RUNTIME_DEPS = "true";
+  } else {
+    env.NEXU_DESKTOP_USE_EXISTING_OPENCLAW_SIDECAR ??= "true";
   }
 
   const scripts = [

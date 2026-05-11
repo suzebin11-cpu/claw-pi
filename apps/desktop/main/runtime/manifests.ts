@@ -628,7 +628,10 @@ export function createRuntimeUnitManifests(
   const webModulePath = path.resolve(webSidecarRoot, "index.js");
   const openclawBinPath =
     process.env.NEXU_OPENCLAW_BIN ??
-    path.resolve(openclawSidecarRoot, "bin/openclaw");
+    path.resolve(
+      openclawSidecarRoot,
+      process.platform === "win32" ? "bin/openclaw.cmd" : "bin/openclaw",
+    );
   const controllerPort = runtimeConfig.ports.controller;
   const webPort = runtimeConfig.ports.web;
   const webUrl = runtimeConfig.urls.web;
@@ -714,7 +717,7 @@ export function createRuntimeUnitManifests(
           ? path.resolve(electronRoot, "static/platform-templates")
           : path.resolve(repoRoot, "apps/controller/static/platform-templates"),
         OPENCLAW_BIN: openclawBinPath,
-        OPENCLAW_ELECTRON_EXECUTABLE: process.execPath,
+        ...(isPackaged ? { OPENCLAW_ELECTRON_EXECUTABLE: process.execPath } : {}),
         OPENCLAW_EXTENSIONS_DIR: path.resolve(
           openclawPackageRoot,
           "dist/extensions",
@@ -724,6 +727,13 @@ export function createRuntimeUnitManifests(
         ),
         OPENCLAW_GATEWAY_TOKEN: runtimeConfig.tokens.gateway,
         NODE_PATH: skillNodePath,
+        NODE_OPTIONS: [
+          "--disable-warning=ExperimentalWarning",
+          process.env.NODE_OPTIONS,
+        ]
+          .filter(Boolean)
+          .join(" "),
+        OPENCLAW_NODE_OPTIONS_READY: "1",
         OPENCLAW_DISABLE_BONJOUR: "1",
         TMPDIR: openclawTempDir,
         RUNTIME_MANAGE_OPENCLAW_PROCESS: "true",

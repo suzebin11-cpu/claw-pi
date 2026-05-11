@@ -496,6 +496,23 @@ async function hasReusableOpenclawSidecarCache(expectedFingerprint) {
   }
 }
 
+async function hasReusableOpenclawSidecarRoot(expectedFingerprint) {
+  const metadataPath = resolve(sidecarRoot, "metadata.json");
+  if (
+    !(await pathExists(metadataPath)) ||
+    !(await pathExists(packagedOpenclawEntry))
+  ) {
+    return false;
+  }
+
+  try {
+    const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
+    return metadata?.fingerprint === expectedFingerprint;
+  } catch {
+    return false;
+  }
+}
+
 async function restoreCachedOpenclawSidecar(fingerprint) {
   await removePathIfExists(sidecarRoot);
   await cp(openclawSidecarCacheRoot, sidecarRoot, {
@@ -1461,10 +1478,26 @@ async function prepareOpenclawSidecar() {
   const canReuseExistingOpenclawSidecar =
     shouldCopyRuntimeDependencies() && !shouldArchiveOpenclawSidecar;
 
-  if (!canReuseExistingOpenclawSidecar && shouldReuseExistingOpenclawSidecar) {
+  if (
+    shouldCopyRuntimeDependencies() &&
+    !canReuseExistingOpenclawSidecar &&
+    shouldReuseExistingOpenclawSidecar
+  ) {
     console.warn(
       "[openclaw-sidecar] reuse requested but disabled for archived or linked sidecar mode; rebuilding sidecar",
     );
+  }
+
+  if (
+    !shouldCopyRuntimeDependencies() &&
+    shouldReuseExistingOpenclawSidecar &&
+    (await hasReusableOpenclawSidecarRoot(fingerprint))
+  ) {
+    console.log(
+      "[openclaw-sidecar] reusing existing linked openclaw sidecar; fingerprint unchanged",
+    );
+    await writeSidecarMetadataAndLaunchers(sidecarRoot, fingerprint);
+    return;
   }
 
   await timedStep("reset sidecar root", async () => {
