@@ -9818,7 +9818,7 @@
                         },
                         "defaultModelId": {
                           "type": "string",
-                          "default": "link/gpt-5.4"
+                          "default": "link/gpt-5.4-mini"
                         }
                       }
                     }
@@ -9877,7 +9877,7 @@
                   },
                   "defaultModelId": {
                     "type": "string",
-                    "default": "link/gpt-5.4"
+                    "default": "link/gpt-5.4-mini"
                   }
                 }
               }
@@ -9930,7 +9930,7 @@
                         },
                         "defaultModelId": {
                           "type": "string",
-                          "default": "link/gpt-5.4"
+                          "default": "link/gpt-5.4-mini"
                         }
                       }
                     }

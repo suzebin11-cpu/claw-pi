@@ -15,7 +15,7 @@ export const controllerRuntimeConfigSchema = z
         authMode: z.enum(["none", "token"]).default("none"),
       })
       .default({ port: 18789, bind: "loopback", authMode: "none" }),
-    defaultModelId: z.string().default("link/gpt-5.4"),
+    defaultModelId: z.string().default("link/gpt-5.4-mini"),
   })
   .passthrough();
 

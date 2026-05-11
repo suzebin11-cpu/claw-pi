@@ -90,6 +90,7 @@ const defaultCloudProfile: CloudProfileEntry = {
 };
 
 const CLOUD_BOOTSTRAP_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const FAST_DEFAULT_MIGRATION_KEY = "fastDefaultModelMigrationV1";
 
 function buildDesktopCloudCacheKey(profile: CloudProfileEntry): string {
   return [profile.name.trim(), profile.cloudUrl.trim(), profile.linkUrl.trim()]
@@ -1570,6 +1571,16 @@ export class NexuConfigStore {
         modelId,
         updatedAt: now(),
       })),
+    }));
+  }
+
+  async markFastDefaultModelMigrationComplete(): Promise<void> {
+    await this.store.update((config) => ({
+      ...config,
+      desktop: {
+        ...config.desktop,
+        [FAST_DEFAULT_MIGRATION_KEY]: true,
+      },
     }));
   }
 

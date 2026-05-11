@@ -154,7 +154,7 @@ describe("ModelProviderService", () => {
     expect(after).toBe(before);
   });
 
-  it("keeps a valid Link default model without auto-switching to mini", async () => {
+  it("migrates the legacy slow Link default to the preferred faster model once", async () => {
     const env = createEnv(tempDir);
     writeFileSync(
       env.nexuConfigPath,
@@ -173,6 +173,71 @@ describe("ModelProviderService", () => {
           channels: [],
           templates: {},
           desktop: {
+            cloud: {
+              connected: true,
+              polling: false,
+              userName: null,
+              userEmail: null,
+              connectedAt: null,
+              linkUrl: "https://nexu-link.powerformer.net",
+              apiKey: "test-key",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "gpt-5.4",
+                },
+                {
+                  id: "gpt-5.4-mini",
+                  name: "gpt-5.4-mini",
+                },
+              ],
+            },
+          },
+          secrets: {},
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    const store = new NexuConfigStore(env);
+    const service = createService(store, env);
+
+    const result = await service.ensureValidDefaultModel();
+    const config = await store.getConfig();
+
+    expect(result).toMatchObject({
+      changed: true,
+      previousModelId: "link/gpt-5.4",
+      newModelId: "link/gpt-5.4-mini",
+    });
+    expect(config.runtime.defaultModelId).toBe("link/gpt-5.4-mini");
+    expect(
+      (config.desktop as Record<string, unknown>)
+        .fastDefaultModelMigrationV1,
+    ).toBe(true);
+  });
+
+  it("does not override a user-selected legacy slow Link model after migration", async () => {
+    const env = createEnv(tempDir);
+    writeFileSync(
+      env.nexuConfigPath,
+      `${JSON.stringify(
+        {
+          $schema: "https://api.clawpi.app:9443/config.json",
+          schemaVersion: 1,
+          app: {},
+          bots: [],
+          runtime: {
+            gateway: { port: 18789, bind: "loopback", authMode: "none" },
+            defaultModelId: "link/gpt-5.4",
+          },
+          providers: [],
+          integrations: [],
+          channels: [],
+          templates: {},
+          desktop: {
+            fastDefaultModelMigrationV1: true,
             cloud: {
               connected: true,
               polling: false,

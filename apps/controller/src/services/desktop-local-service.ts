@@ -101,6 +101,7 @@ export class DesktopLocalService {
 
   async setDefaultModel(modelId: string) {
     await this.configStore.setDefaultModel(modelId);
+    await this.configStore.markFastDefaultModelMigrationComplete();
     void this.syncModelGroupToCloud(modelId);
     return { ok: true, modelId };
   }

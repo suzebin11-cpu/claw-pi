@@ -336,12 +336,15 @@ export async function processOneMessage(
     preview: string;
     ts: number;
   }> = [];
+  let firstDeliveryAt: number | null = null;
+  let lastDeliveryDoneAt: number | null = null;
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     deps.channelRuntime.reply.createReplyDispatcherWithTyping({
       humanDelay,
       typingCallbacks,
       deliver: async (payload) => {
+        firstDeliveryAt ??= Date.now();
         const text = markdownToPlainText(payload.text ?? "");
         const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.[0];
         logger.debug(
@@ -405,6 +408,7 @@ export async function processOneMessage(
                   contextToken,
                 },
               });
+              lastDeliveryDoneAt = Date.now();
               logger.info(`outbound: text sent to=${ctx.To}`);
               return;
             }
@@ -429,6 +433,7 @@ export async function processOneMessage(
             });
             logger.info(`outbound: text sent OK to=${ctx.To}`);
           }
+          lastDeliveryDoneAt = Date.now();
         } catch (err) {
           logger.error(
             `outbound: FAILED to=${ctx.To} mediaUrl=${mediaUrl ?? "none"} err=${String(err)} stack=${(err as Error).stack ?? ""}`,
@@ -474,6 +479,7 @@ export async function processOneMessage(
   logger.debug(
     `dispatchReplyFromConfig: starting agentId=${route.agentId ?? "(none)"}`,
   );
+  const dispatchStartAt = Date.now();
   try {
     await deps.channelRuntime.reply.withReplyDispatcher({
       dispatcher,
@@ -495,14 +501,29 @@ export async function processOneMessage(
     throw err;
   } finally {
     markDispatchIdle();
+    const dispatchDoneAt = Date.now();
+    const eventTs = full.create_time_ms ?? 0;
+    const platformDelayMs = eventTs > 0 ? receivedAt - eventTs : null;
+    const inboundProcessMs = dispatchStartAt - receivedAt;
+    const aiAndDeliveryMs = dispatchDoneAt - dispatchStartAt;
+    const firstDeliveryDelayMs =
+      firstDeliveryAt !== null ? firstDeliveryAt - dispatchStartAt : null;
+    const deliveryMs =
+      firstDeliveryAt !== null && lastDeliveryDoneAt !== null
+        ? lastDeliveryDoneAt - firstDeliveryAt
+        : null;
+    const totalMs =
+      eventTs > 0 ? dispatchDoneAt - eventTs : dispatchDoneAt - receivedAt;
+
+    logger.info(
+      `reply-timing: accountId=${deps.accountId} from=${senderId} totalMs=${totalMs} platformDelayMs=${platformDelayMs ?? "n/a"} inboundProcessMs=${inboundProcessMs} aiAndDeliveryMs=${aiAndDeliveryMs} firstDeliveryDelayMs=${firstDeliveryDelayMs ?? "n/a"} deliveryMs=${deliveryMs ?? "n/a"} mediaDownloadMs=${mediaDownloadMs}`,
+    );
 
     logger.info(
       `debug-check: accountId=${deps.accountId} debug=${String(debug)} hasContextToken=${Boolean(contextToken)} stateDir=${process.env.OPENCLAW_STATE_DIR ?? "(unset)"}`,
     );
 
     if (debug && contextToken) {
-      const dispatchDoneAt = Date.now();
-      const eventTs = full.create_time_ms ?? 0;
       const platformDelay = eventTs > 0 ? `${receivedAt - eventTs}ms` : "N/A";
       const inboundProcessMs = (debugTs.preDispatch ?? receivedAt) - receivedAt;
       const aiMs = dispatchDoneAt - (debugTs.preDispatch ?? receivedAt);

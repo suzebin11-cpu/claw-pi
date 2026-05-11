@@ -15,6 +15,7 @@ import { logger } from "../lib/logger.js";
 import { proxyFetch } from "../lib/proxy-fetch.js";
 import type { OpenClawProcessManager } from "../runtime/openclaw-process.js";
 import type { NexuConfigStore } from "../store/nexu-config-store.js";
+import type { NexuConfig } from "../store/schemas.js";
 import type { OpenClawAuthService } from "./openclaw-auth-service.js";
 import type { OpenClawSyncService } from "./openclaw-sync-service.js";
 
@@ -90,6 +91,8 @@ const OPENCLAW_COMMAND_TIMEOUT_MS = 30000;
 const NEXU_OFFICIAL_PROVIDER_ID = "nexu";
 const OLLAMA_DEFAULT_BASE_URL = "http://127.0.0.1:11434";
 const OLLAMA_DUMMY_API_KEY = "ollama-local";
+const LEGACY_SLOW_DEFAULT_MODEL_IDS = new Set(["gpt-5.4", "link/gpt-5.4"]);
+const FAST_DEFAULT_MIGRATION_KEY = "fastDefaultModelMigrationV1";
 
 function normalizeLinkModelId(modelId: string): string {
   return modelId.startsWith("link/") ? modelId : `link/${modelId}`;
@@ -107,6 +110,17 @@ function isEquivalentKnownModelId(currentId: string, knownId: string): boolean {
   }
 
   return false;
+}
+
+function isLegacySlowDefaultModelId(modelId: string): boolean {
+  return LEGACY_SLOW_DEFAULT_MODEL_IDS.has(modelId);
+}
+
+function hasFastDefaultMigrationRun(config: NexuConfig): boolean {
+  return (
+    (config.desktop as Record<string, unknown>)[FAST_DEFAULT_MIGRATION_KEY] ===
+    true
+  );
 }
 
 function durationSecondsToMs(valueInSeconds: number): number {
@@ -532,7 +546,7 @@ export class ModelProviderService {
     const config = await this.configStore.getConfig();
     const currentId = config.runtime.defaultModelId;
 
-    if (validity !== "invalid") {
+    if (validity === "unknown") {
       return {
         changed: false,
         previousModelId: currentId,
@@ -561,10 +575,29 @@ export class ModelProviderService {
       };
     }
 
+    if (
+      validity === "valid" &&
+      (!isLegacySlowDefaultModelId(currentId) ||
+        hasFastDefaultMigrationRun(config) ||
+        isEquivalentKnownModelId(currentId, selected.id))
+    ) {
+      return {
+        changed: false,
+        previousModelId: currentId,
+        newModelId: null,
+        newModelName: null,
+      };
+    }
+
     await this.configStore.setDefaultModel(selected.id);
+    if (validity === "valid" && isLegacySlowDefaultModelId(currentId)) {
+      await this.configStore.markFastDefaultModelMigrationComplete();
+    }
     logger.info(
-      { previous: currentId, selected: selected.id },
-      "default_model_auto_switched",
+      { previous: currentId, selected: selected.id, reason: validity },
+      validity === "valid"
+        ? "default_model_legacy_auto_switched"
+        : "default_model_auto_switched",
     );
 
     return {
