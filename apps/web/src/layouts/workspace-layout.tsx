@@ -518,7 +518,7 @@ function WorkspaceLayoutInner() {
     track("workspace_sidebar_click", { target: "runtime" });
     if (isRuntimeFullyOnline) {
       const url =
-        runtimeStatus?.openclawDashboardUrl ?? "http://127.0.0.1:18789";
+        runtimeStatus?.openclawChatUrl ?? "http://127.0.0.1:18789/chat";
       window.open(url, "_blank", "noopener,noreferrer");
     } else {
       toast.info(t("layout.runtimeNotReady"));

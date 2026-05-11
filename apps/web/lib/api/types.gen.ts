@@ -628,6 +628,7 @@ export type GetApiInternalDesktopReadyResponses = {
         status: 'active' | 'starting' | 'degraded' | 'unhealthy';
         gatewayConnected: boolean;
         openclawDashboardUrl?: string;
+        openclawChatUrl?: string;
         bootTimestamp: number;
     };
 };

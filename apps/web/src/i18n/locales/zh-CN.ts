@@ -422,6 +422,7 @@ const zhCN = {
   "channels.statusError": "连接异常",
   "channels.configuredDate": "配置于 {{date}}",
   "channels.connectionActive": "连接正常",
+  "channels.connectionSyncing": "连接正常，正在同步状态",
   "channels.setupGuide": "配置指南",
   "channels.addToServer": "添加到服务器",
   "channels.addToServerDesc": "使用以下链接将 Bot 邀请到你的 Discord 服务器。",
@@ -995,7 +996,7 @@ const zhCN = {
   "tour.step2.desc": "在这里充值 Token、查看余额和消耗明细。",
   "tour.step3.title": "龙虾大脑",
   "tour.step3.desc":
-    "连接好聊天平台后，这里会亮起来，点击可以打开龙虾大脑面板。",
+    "连接好聊天平台后，这里会亮起来，点击可以直接进入问答界面。",
   "tour.done": "知道了",
   "tour.next": "下一步",
   "tour.prev": "上一步",

@@ -63,7 +63,7 @@ export function useDesktopRuntimeConfig() {
     }
 
     return new URL(
-      `/#token=${runtimeConfig.tokens.gateway}`,
+      `/chat#token=${encodeURIComponent(runtimeConfig.tokens.gateway)}`,
       runtimeConfig.urls.openclawBase,
     ).toString();
   }, [runtimeConfig]);

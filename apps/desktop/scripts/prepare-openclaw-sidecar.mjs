@@ -11,6 +11,7 @@ import {
   readdir,
   rename,
   rm,
+  symlink,
   writeFile,
 } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -1467,6 +1468,99 @@ async function flattenNestedNodeModules(parentNodeModules) {
   }
 }
 
+async function liftBundledExtensionDeps(parentNodeModules) {
+  const openclawPackageRoot = resolve(parentNodeModules, "openclaw");
+  const extensionsRoot = resolve(openclawPackageRoot, "dist/extensions");
+  const targetNodeModules = resolve(openclawPackageRoot, "node_modules");
+
+  if (!(await pathExists(extensionsRoot))) {
+    return;
+  }
+
+  const seen = new Set();
+  let linkedCount = 0;
+  let skippedCount = 0;
+
+  const extensionEntries = await readdir(extensionsRoot, {
+    withFileTypes: true,
+  });
+  for (const extensionEntry of extensionEntries) {
+    if (!extensionEntry.isDirectory()) {
+      continue;
+    }
+
+    const extensionNodeModules = resolve(
+      extensionsRoot,
+      extensionEntry.name,
+      "node_modules",
+    );
+    if (!(await pathExists(extensionNodeModules))) {
+      continue;
+    }
+
+    const packageEntries = await readdir(extensionNodeModules, {
+      withFileTypes: true,
+    });
+    for (const packageEntry of packageEntries) {
+      if (
+        !packageEntry.isDirectory() ||
+        packageEntry.name === ".bin" ||
+        packageEntry.name === ".cache"
+      ) {
+        continue;
+      }
+
+      const packagesToLift = [];
+      if (packageEntry.name.startsWith("@")) {
+        const scopeDir = resolve(extensionNodeModules, packageEntry.name);
+        const scopeEntries = await readdir(scopeDir, { withFileTypes: true });
+        for (const scopeEntry of scopeEntries) {
+          if (!scopeEntry.isDirectory() || scopeEntry.name.startsWith(".")) {
+            continue;
+          }
+          packagesToLift.push({
+            name: `${packageEntry.name}/${scopeEntry.name}`,
+            sourcePath: resolve(scopeDir, scopeEntry.name),
+          });
+        }
+      } else {
+        packagesToLift.push({
+          name: packageEntry.name,
+          sourcePath: resolve(extensionNodeModules, packageEntry.name),
+        });
+      }
+
+      for (const { name, sourcePath } of packagesToLift) {
+        if (seen.has(name)) {
+          skippedCount += 1;
+          continue;
+        }
+        seen.add(name);
+
+        const destPath = resolve(targetNodeModules, ...name.split("/"));
+        if (await pathExists(destPath)) {
+          skippedCount += 1;
+          continue;
+        }
+
+        await mkdir(dirname(destPath), { recursive: true });
+        await symlink(
+          sourcePath,
+          destPath,
+          process.platform === "win32" ? "junction" : "dir",
+        );
+        linkedCount += 1;
+      }
+    }
+  }
+
+  if (linkedCount > 0 || skippedCount > 0) {
+    console.log(
+      `[openclaw-sidecar] lifted extension deps linked=${linkedCount} skipped=${skippedCount}`,
+    );
+  }
+}
+
 async function prepareOpenclawSidecar() {
   if (!(await pathExists(openclawRoot))) {
     throw new Error(
@@ -1477,6 +1571,8 @@ async function prepareOpenclawSidecar() {
   const fingerprint = await computeOpenclawSidecarFingerprint();
   const canReuseExistingOpenclawSidecar =
     shouldCopyRuntimeDependencies() && !shouldArchiveOpenclawSidecar;
+  const willArchiveOpenclawSidecar =
+    shouldCopyRuntimeDependencies() && shouldArchiveOpenclawSidecar;
 
   if (
     shouldCopyRuntimeDependencies() &&
@@ -1496,6 +1592,7 @@ async function prepareOpenclawSidecar() {
     console.log(
       "[openclaw-sidecar] reusing existing linked openclaw sidecar; fingerprint unchanged",
     );
+    await liftBundledExtensionDeps(sidecarNodeModules);
     await writeSidecarMetadataAndLaunchers(sidecarRoot, fingerprint);
     return;
   }
@@ -1544,12 +1641,18 @@ async function prepareOpenclawSidecar() {
     );
   }
 
+  if (!willArchiveOpenclawSidecar) {
+    await timedStep("lift bundled extension deps", async () =>
+      liftBundledExtensionDeps(sidecarNodeModules),
+    );
+  }
+
   await writeSidecarMetadataAndLaunchers(sidecarRoot, fingerprint);
   await timedStep("sign native binaries", async () =>
     signOpenclawNativeBinaries(),
   );
 
-  if (shouldCopyRuntimeDependencies() && shouldArchiveOpenclawSidecar) {
+  if (willArchiveOpenclawSidecar) {
     // Windows: LZMA2-compressed .7z for fastest extraction on cold install.
     // macOS/Linux: tar.gz stays (tar is ubiquitous; gz is good enough).
     const archiveFormat = process.platform === "win32" ? "7z" : "tar.gz";

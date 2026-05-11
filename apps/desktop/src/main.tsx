@@ -1122,7 +1122,7 @@ function DesktopShell() {
   const desktopOpenClawUrl = runtimeConfig
     && openClawReady
     ? new URL(
-        `/#token=${runtimeConfig.tokens.gateway}`,
+        `/chat#token=${encodeURIComponent(runtimeConfig.tokens.gateway)}`,
         runtimeConfig.urls.openclawBase,
       ).toString()
     : null;
@@ -1169,7 +1169,7 @@ function DesktopShell() {
             active={activeSurface === "openclaw"}
             disabled={!openClawReady}
             label="OpenClaw"
-            meta="Gateway control UI with local token routing"
+            meta="Chat with the local OpenClaw assistant"
             onClick={() => setActiveSurface("openclaw")}
           />
           <SurfaceButton
@@ -1239,9 +1239,9 @@ function DesktopShell() {
           }}
         >
           <SurfaceFrame
-            description="Local OpenClaw gateway UI for inspecting runtime auth, models, and sessions."
+            description="Local OpenClaw chat surface for asking questions directly."
             src={desktopOpenClawUrl}
-            title="OpenClaw Gateway"
+            title="OpenClaw Chat"
             version={0}
           />
         </div>

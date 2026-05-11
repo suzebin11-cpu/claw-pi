@@ -14,6 +14,7 @@ const desktopReadyResponseSchema = z.object({
   status: z.enum(["active", "starting", "degraded", "unhealthy"]),
   gatewayConnected: z.boolean(),
   openclawDashboardUrl: z.string().optional(),
+  openclawChatUrl: z.string().optional(),
   bootTimestamp: z.number(),
 });
 
@@ -164,6 +165,9 @@ export function registerDesktopRoutes(
       const openclawDashboardUrl = gatewayToken
         ? `http://127.0.0.1:${gatewayPort}/#token=${encodeURIComponent(gatewayToken)}`
         : `http://127.0.0.1:${gatewayPort}/`;
+      const openclawChatUrl = gatewayToken
+        ? `http://127.0.0.1:${gatewayPort}/chat#token=${encodeURIComponent(gatewayToken)}`
+        : `http://127.0.0.1:${gatewayPort}/chat`;
 
       return c.json(
         {
@@ -179,6 +183,7 @@ export function registerDesktopRoutes(
           status: container.runtimeState.status,
           gatewayConnected: container.gatewayService.isConnected(),
           openclawDashboardUrl,
+          openclawChatUrl,
           bootTimestamp: container.bootTimestamp,
         },
         200,

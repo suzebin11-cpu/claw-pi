@@ -37,6 +37,7 @@ type LiveStatusData = {
     channelId: string;
     status: string;
     lastError: string | null;
+    stale?: boolean;
   }[];
 };
 
@@ -278,6 +279,8 @@ function ConfiguredView({
     ? (liveEntry?.status ?? "connecting")
     : "connecting";
   const liveError = liveEntry?.lastError ?? null;
+  const showSyncingHint =
+    liveEntry?.stale === true && liveStatus === "connected";
 
   const disconnectMutation = useMutation({
     mutationFn: async () => {
@@ -355,7 +358,9 @@ function ConfiguredView({
                   {liveStatus === "connected" && (
                     <>
                       {" \u00B7 "}
-                      {t("channels.connectionActive")}
+                      {showSyncingHint
+                        ? t("channels.connectionSyncing")
+                        : t("channels.connectionActive")}
                     </>
                   )}
                 </>

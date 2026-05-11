@@ -441,6 +441,7 @@ const en = {
   "channels.statusError": "Connection Error",
   "channels.configuredDate": "configured {{date}}",
   "channels.connectionActive": "connection active",
+  "channels.connectionSyncing": "connection active, syncing status",
   "channels.setupGuide": "Setup Guide",
   "channels.addToServer": "Add to Server",
   "channels.addToServerDesc":
@@ -1050,9 +1051,9 @@ const en = {
   "tour.step2.title": "Recharge & Usage",
   "tour.step2.desc":
     "Top up tokens, check your balance, and review usage details here.",
-  "tour.step3.title": "Runtime Dashboard",
+  "tour.step3.title": "Lobster Brain",
   "tour.step3.desc":
-    "Once a chat platform is connected, this button lights up. Click it to open the runtime dashboard.",
+    "Once a chat platform is connected, this button lights up. Click it to open the Q&A chat.",
   "tour.done": "Got it",
   "tour.next": "Next",
   "tour.prev": "Back",
