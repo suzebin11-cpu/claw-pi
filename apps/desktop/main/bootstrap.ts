@@ -13,11 +13,6 @@ import {
   getPortableDataRoot,
   isPortableMode,
 } from "../shared/desktop-paths";
-import {
-  type DesktopPathCheckInput,
-  findFirstNonAsciiPath,
-  formatNonAsciiPathMessage,
-} from "../shared/non-ascii-path-guard";
 
 function safeWrite(stream: NodeJS.WriteStream, message: string): void {
   if (stream.destroyed || !stream.writable) {
@@ -34,23 +29,6 @@ function safeWrite(stream: NodeJS.WriteStream, message: string): void {
     }
     throw error;
   }
-}
-
-function abortForNonAsciiPath(paths: readonly DesktopPathCheckInput[]): void {
-  if (process.platform !== "win32" || !app.isPackaged) {
-    return;
-  }
-
-  const issue = findFirstNonAsciiPath(paths);
-  if (!issue) {
-    return;
-  }
-
-  const message = formatNonAsciiPathMessage(issue);
-  safeWrite(process.stderr, `[desktop:path-guard] ${message}\n`);
-  dialog.showErrorBox("Unsupported Claw-Pi path", message);
-  app.quit();
-  process.exit(1);
 }
 
 function loadDesktopDevEnv(): void {
@@ -115,17 +93,6 @@ function configurePackagedPaths(): void {
   }
 
   const exeDir = dirname(app.getPath("exe"));
-  abortForNonAsciiPath([
-    { label: "executable", path: app.getPath("exe") },
-    { label: "install directory", path: exeDir },
-    { label: "resources", path: process.resourcesPath },
-    { label: "app data root", path: app.getPath("appData") },
-    { label: "default user data", path: app.getPath("userData") },
-    {
-      label: "user data override",
-      path: process.env.NEXU_DESKTOP_USER_DATA_ROOT,
-    },
-  ]);
 
   const portable = isPortableMode(exeDir);
 
@@ -164,13 +131,6 @@ function configurePackagedPaths(): void {
   const logsPath = join(userDataPath, "logs");
   const nexuHomePath = getDesktopNexuHomeDir(userDataPath);
 
-  abortForNonAsciiPath([
-    { label: "user data", path: userDataPath },
-    { label: "session data", path: sessionDataPath },
-    { label: "logs", path: logsPath },
-    { label: "NEXU_HOME", path: nexuHomePath },
-  ]);
-
   mkdirSync(userDataPath, { recursive: true });
   mkdirSync(sessionDataPath, { recursive: true });
   mkdirSync(logsPath, { recursive: true });
@@ -193,14 +153,6 @@ function configurePortablePaths(exeDir: string): void {
   const sessionDataPath = join(dataRoot, "session-data");
   const logsPath = join(dataRoot, "logs");
   const nexuHomePath = join(dataRoot, "nexu-home");
-
-  abortForNonAsciiPath([
-    { label: "portable data root", path: dataRoot },
-    { label: "user data", path: userDataPath },
-    { label: "session data", path: sessionDataPath },
-    { label: "logs", path: logsPath },
-    { label: "NEXU_HOME", path: nexuHomePath },
-  ]);
 
   mkdirSync(userDataPath, { recursive: true });
   mkdirSync(sessionDataPath, { recursive: true });

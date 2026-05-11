@@ -59,6 +59,7 @@ export class OpenClawRuntimePluginWriter {
       const targetDir = path.join(this.env.openclawExtensionsDir, entry.name);
       if (builtinPluginDir && (await this.exists(builtinPluginDir))) {
         await this.safeRm(targetDir);
+        handledPluginIds.add(entry.name);
         continue;
       }
 

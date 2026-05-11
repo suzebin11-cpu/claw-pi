@@ -37,7 +37,40 @@ function getBooleanEnv(name: string, fallback: boolean): boolean {
   return value === "1" || value.toLowerCase() === "true";
 }
 
-function resolveElectronNodeRunner(): string {
+function resolveElectronNodeRunner(isPackaged: boolean): string {
+  if (isPackaged) {
+    return process.execPath;
+  }
+
+  const candidates = [
+    normalizeNodeCandidate(process.env.npm_node_execpath),
+    normalizeNodeCandidate(process.env.NODE),
+    normalizeNodeCandidate(process.env.NODE_EXE),
+  ];
+
+  for (const candidate of candidates) {
+    if (candidate) {
+      return candidate;
+    }
+  }
+
+  try {
+    const lookupCommand = process.platform === "win32" ? "where" : "which";
+    const lookupTarget = process.platform === "win32" ? "node.exe" : "node";
+    const resolved = execFileSync(lookupCommand, [lookupTarget], {
+      encoding: "utf8",
+    })
+      .split(/\r?\n/)
+      .map((entry) => normalizeNodeCandidate(entry))
+      .find((entry) => entry !== undefined);
+
+    if (resolved) {
+      return resolved;
+    }
+  } catch {
+    // Fall through to the Electron binary if no standalone Node is discoverable.
+  }
+
   return process.execPath;
 }
 
@@ -599,7 +632,7 @@ export function createRuntimeUnitManifests(
   const controllerPort = runtimeConfig.ports.controller;
   const webPort = runtimeConfig.ports.web;
   const webUrl = runtimeConfig.urls.web;
-  const electronNodeRunner = resolveElectronNodeRunner();
+  const electronNodeRunner = resolveElectronNodeRunner(isPackaged);
   const openclawNodePath = buildOpenclawNodePath(openclawSidecarRoot);
   const skillNodePath = buildSkillNodePath(electronRoot, isPackaged);
   const childProcessProxyEnv = buildChildProcessProxyEnv(runtimeConfig.proxy);
@@ -684,7 +717,7 @@ export function createRuntimeUnitManifests(
         OPENCLAW_ELECTRON_EXECUTABLE: process.execPath,
         OPENCLAW_EXTENSIONS_DIR: path.resolve(
           openclawPackageRoot,
-          "extensions",
+          "dist/extensions",
         ),
         OPENCLAW_GATEWAY_PORT: String(
           new URL(runtimeConfig.urls.openclawBase).port || 18789,

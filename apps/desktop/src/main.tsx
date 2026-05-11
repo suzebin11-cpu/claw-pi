@@ -986,6 +986,28 @@ function DiagnosticsPage({
   );
 }
 
+type DesktopReadyPayload = {
+  ready?: boolean;
+  runtime?: {
+    ok?: boolean;
+    status?: number | null;
+  };
+  status?: "active" | "starting" | "degraded" | "unhealthy";
+  gatewayConnected?: boolean;
+};
+
+function isDesktopApiReady(payload: DesktopReadyPayload): boolean {
+  return Boolean(payload.ready);
+}
+
+function isOpenClawReady(payload: DesktopReadyPayload): boolean {
+  return (
+    payload.runtime?.ok === true &&
+    payload.gatewayConnected === true &&
+    payload.status === "active"
+  );
+}
+
 function DesktopShell() {
   const isPackaged = window.clawpiHost.bootstrap.isPackaged;
   const [activeSurface, setActiveSurface] = useState<DesktopSurface>("web");
@@ -1047,10 +1069,11 @@ function DesktopShell() {
   // Note: getRuntimeConfig() IPC handler waits for cold-start to complete, so
   // runtimeConfig always has the final ports (including any fallback).
   const [controllerReady, setControllerReady] = useState(false);
+  const [openClawReady, setOpenClawReady] = useState(false);
 
   useEffect(() => {
     if (!runtimeConfig) return;
-    if (controllerReady) return;
+    if (controllerReady && openClawReady) return;
 
     let cancelled = false;
     const readyUrl = new URL(
@@ -1065,9 +1088,17 @@ function DesktopShell() {
             signal: AbortSignal.timeout(3000),
           });
           if (res.ok) {
-            const data = await res.json();
-            if (data.ready) {
-              if (!cancelled) setControllerReady(true);
+            const data = (await res.json()) as DesktopReadyPayload;
+
+            if (!cancelled && isDesktopApiReady(data)) {
+              setControllerReady(true);
+            }
+
+            if (!cancelled && isOpenClawReady(data)) {
+              setOpenClawReady(true);
+            }
+
+            if (isDesktopApiReady(data) && isOpenClawReady(data)) {
               return;
             }
           }
@@ -1082,13 +1113,14 @@ function DesktopShell() {
     return () => {
       cancelled = true;
     };
-  }, [runtimeConfig, controllerReady]);
+  }, [runtimeConfig, controllerReady, openClawReady]);
 
   const desktopWebUrl =
     runtimeConfig && controllerReady
       ? new URL("/workspace", runtimeConfig.urls.web).toString()
       : null;
   const desktopOpenClawUrl = runtimeConfig
+    && openClawReady
     ? new URL(
         `/#token=${runtimeConfig.tokens.gateway}`,
         runtimeConfig.urls.openclawBase,
@@ -1135,6 +1167,7 @@ function DesktopShell() {
           />
           <SurfaceButton
             active={activeSurface === "openclaw"}
+            disabled={!openClawReady}
             label="OpenClaw"
             meta="Gateway control UI with local token routing"
             onClick={() => setActiveSurface("openclaw")}
