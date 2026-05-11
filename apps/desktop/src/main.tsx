@@ -1000,14 +1000,6 @@ function isDesktopApiReady(payload: DesktopReadyPayload): boolean {
   return Boolean(payload.ready);
 }
 
-function isOpenClawReady(payload: DesktopReadyPayload): boolean {
-  return (
-    payload.runtime?.ok === true &&
-    payload.gatewayConnected === true &&
-    payload.status === "active"
-  );
-}
-
 function DesktopShell() {
   const isPackaged = window.clawpiHost.bootstrap.isPackaged;
   const [activeSurface, setActiveSurface] = useState<DesktopSurface>("web");
@@ -1069,11 +1061,10 @@ function DesktopShell() {
   // Note: getRuntimeConfig() IPC handler waits for cold-start to complete, so
   // runtimeConfig always has the final ports (including any fallback).
   const [controllerReady, setControllerReady] = useState(false);
-  const [openClawReady, setOpenClawReady] = useState(false);
 
   useEffect(() => {
     if (!runtimeConfig) return;
-    if (controllerReady && openClawReady) return;
+    if (controllerReady) return;
 
     let cancelled = false;
     const readyUrl = new URL(
@@ -1094,11 +1085,7 @@ function DesktopShell() {
               setControllerReady(true);
             }
 
-            if (!cancelled && isOpenClawReady(data)) {
-              setOpenClawReady(true);
-            }
-
-            if (isDesktopApiReady(data) && isOpenClawReady(data)) {
+            if (isDesktopApiReady(data)) {
               return;
             }
           }
@@ -1113,14 +1100,13 @@ function DesktopShell() {
     return () => {
       cancelled = true;
     };
-  }, [runtimeConfig, controllerReady, openClawReady]);
+  }, [runtimeConfig, controllerReady]);
 
   const desktopWebUrl =
     runtimeConfig && controllerReady
       ? new URL("/workspace", runtimeConfig.urls.web).toString()
       : null;
   const desktopOpenClawUrl = runtimeConfig
-    && openClawReady
     ? new URL(
         `/chat#token=${encodeURIComponent(runtimeConfig.tokens.gateway)}`,
         runtimeConfig.urls.openclawBase,
@@ -1167,7 +1153,7 @@ function DesktopShell() {
           />
           <SurfaceButton
             active={activeSurface === "openclaw"}
-            disabled={!openClawReady}
+            disabled={!desktopOpenClawUrl}
             label="OpenClaw"
             meta="Chat with the local OpenClaw assistant"
             onClick={() => setActiveSurface("openclaw")}
@@ -1213,19 +1199,32 @@ function DesktopShell() {
 
       <main className="desktop-shell-stage">
         <div
-          style={{ display: activeSurface === "control" ? "contents" : "none" }}
+          className={
+            activeSurface === "control"
+              ? "desktop-surface-slot is-active"
+              : "desktop-surface-slot"
+          }
         >
           <EmbeddedControlPlane />
         </div>
         <div
-          style={{
-            display: activeSurface === "cloud-profile" ? "contents" : "none",
-          }}
+          className={
+            activeSurface === "cloud-profile"
+              ? "desktop-surface-slot is-active"
+              : "desktop-surface-slot"
+          }
         >
           <CloudProfilePage />
         </div>
-        <div style={{ display: activeSurface === "web" ? "contents" : "none" }}>
+        <div
+          className={
+            activeSurface === "web"
+              ? "desktop-surface-slot is-active"
+              : "desktop-surface-slot"
+          }
+        >
           <SurfaceFrame
+            active={activeSurface === "web"}
             description="Authenticated workspace surface served by the repo-local web sidecar."
             src={desktopWebUrl}
             title="nexu Web"
@@ -1234,11 +1233,14 @@ function DesktopShell() {
           />
         </div>
         <div
-          style={{
-            display: activeSurface === "openclaw" ? "contents" : "none",
-          }}
+          className={
+            activeSurface === "openclaw"
+              ? "desktop-surface-slot is-active"
+              : "desktop-surface-slot"
+          }
         >
           <SurfaceFrame
+            active={activeSurface === "openclaw"}
             description="Local OpenClaw chat surface for asking questions directly."
             src={desktopOpenClawUrl}
             title="OpenClaw Chat"
@@ -1246,9 +1248,11 @@ function DesktopShell() {
           />
         </div>
         <div
-          style={{
-            display: activeSurface === "diagnostics" ? "contents" : "none",
-          }}
+          className={
+            activeSurface === "diagnostics"
+              ? "desktop-surface-slot is-active"
+              : "desktop-surface-slot"
+          }
         >
           <DiagnosticsPage runtimeConfig={runtimeConfig} />
         </div>

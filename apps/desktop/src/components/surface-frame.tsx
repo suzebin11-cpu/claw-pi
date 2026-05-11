@@ -1,4 +1,7 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+const WEBVIEW_RETRY_DELAY_MS = 1000;
+const WEBVIEW_MAX_RETRIES = 120;
 
 function ClawPiLoader({ size = 48 }: { size?: number }) {
   return (
@@ -40,12 +43,14 @@ function ClawPiLoader({ size = 48 }: { size?: number }) {
 export function SurfaceFrame({
   title: _title,
   description: _description,
+  active = true,
   src,
   version,
   preload,
 }: {
   title: string;
   description: string;
+  active?: boolean;
   src: string | null;
   version: number;
   preload?: string;
@@ -54,34 +59,105 @@ export function SurfaceFrame({
   void _description;
   const [webviewReady, setWebviewReady] = useState(false);
   const prevSrcRef = useRef<string | null>(null);
+  const cleanupListenersRef = useRef<(() => void) | null>(null);
+  const webviewReadyRef = useRef(false);
+  const retryCountRef = useRef(0);
+  const retryTimerRef = useRef<number | null>(null);
 
   // Reset when src changes
   if (src !== prevSrcRef.current) {
     prevSrcRef.current = src;
+    retryCountRef.current = 0;
+    webviewReadyRef.current = false;
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
     if (webviewReady) setWebviewReady(false);
   }
 
   const webviewRefCallback = useCallback(
     (el: HTMLElement | null) => {
+      if (cleanupListenersRef.current) {
+        cleanupListenersRef.current();
+        cleanupListenersRef.current = null;
+      }
       if (!el || !src) return;
       if (preload) {
         el.setAttribute("preload", preload);
       }
-      // Listen for did-finish-load right on the element before setting src.
-      // This avoids the race where dom-ready fires before useEffect can bind.
-      el.addEventListener("did-finish-load", () => setWebviewReady(true), {
-        once: true,
-      });
+      const markReady = () => {
+        if (retryTimerRef.current !== null) {
+          return;
+        }
+        webviewReadyRef.current = true;
+        retryCountRef.current = 0;
+        setWebviewReady(true);
+        if (cleanupListenersRef.current) {
+          cleanupListenersRef.current();
+          cleanupListenersRef.current = null;
+        }
+      };
+      const retryLoad = (event: Event) => {
+        const loadEvent = event as Event & {
+          errorCode?: number;
+          isMainFrame?: boolean;
+          validatedURL?: string;
+        };
+        if (webviewReadyRef.current) return;
+        if (loadEvent.isMainFrame === false) return;
+        if (loadEvent.errorCode === -3) return;
+        if (retryTimerRef.current !== null) return;
+        if (retryCountRef.current >= WEBVIEW_MAX_RETRIES) return;
+        retryCountRef.current += 1;
+        retryTimerRef.current = window.setTimeout(() => {
+          retryTimerRef.current = null;
+          if (el.getAttribute("src") === src) {
+            const reloadable = el as HTMLElement & { reload?: () => void };
+            if (typeof reloadable.reload === "function") {
+              reloadable.reload();
+            } else {
+              el.setAttribute("src", src);
+            }
+          }
+        }, WEBVIEW_RETRY_DELAY_MS);
+      };
+      el.addEventListener("dom-ready", markReady);
+      el.addEventListener("did-finish-load", markReady);
+      el.addEventListener("did-fail-load", retryLoad);
+      cleanupListenersRef.current = () => {
+        el.removeEventListener("dom-ready", markReady);
+        el.removeEventListener("did-finish-load", markReady);
+        el.removeEventListener("did-fail-load", retryLoad);
+      };
       el.setAttribute("src", src);
     },
     [preload, src],
   );
 
+  useEffect(() => {
+    return () => {
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      if (cleanupListenersRef.current) {
+        cleanupListenersRef.current();
+        cleanupListenersRef.current = null;
+      }
+    };
+  }, []);
+
   const showLoader = !src || !webviewReady;
 
   return (
-    <section className="surface-frame" style={{ position: "relative" }}>
-      {/* Webview always rendered (hidden behind loader until ready) */}
+    <section
+      aria-hidden={!active}
+      className={
+        active ? "surface-frame is-active" : "surface-frame is-inactive"
+      }
+      style={{ position: "relative" }}
+    >
       {src && (
         <webview
           ref={webviewRefCallback as React.Ref<HTMLWebViewElement>}
@@ -93,7 +169,6 @@ export function SurfaceFrame({
         />
       )}
 
-      {/* Loader overlay — covers webview until content is ready */}
       {showLoader && (
         <div
           style={{

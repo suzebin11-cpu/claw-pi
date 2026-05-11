@@ -166,6 +166,7 @@ body,
 }
 
 .desktop-shell-stage {
+  position: relative;
   flex: 1;
   min-height: 0;
   padding: 18px;
@@ -175,6 +176,23 @@ body,
       rgba(139, 167, 255, 0.16),
       transparent 28%
     ), linear-gradient(180deg, #141b24 0%, #10161d 100%);
+}
+
+.desktop-surface-slot {
+  position: absolute;
+  inset: 18px;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.desktop-surface-slot.is-active {
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 1;
 }
 
 .desktop-shell.is-immersive .desktop-sidebar {
@@ -188,6 +206,10 @@ body,
 .desktop-shell.is-immersive .desktop-shell-stage {
   padding: 0;
   background: #11161d;
+}
+
+.desktop-shell.is-immersive .desktop-surface-slot {
+  inset: 0;
 }
 
 .desktop-shell--mac.is-immersive .desktop-shell-stage {
@@ -1572,6 +1594,10 @@ body,
   .desktop-shell-stage,
   .runtime-page {
     padding: 18px;
+  }
+
+  .desktop-surface-slot {
+    inset: 18px;
   }
 
   .surface-frame {
