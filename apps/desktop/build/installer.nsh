@@ -103,28 +103,6 @@
     Pop $0
   FunctionEnd
 
-  Function ClawPiEnsureAsciiInstallDir
-    ; Field repro: Electron-as-Node controller crashes before /health when
-    ; installed under a non-ASCII path such as D:\ChineseName\Claw-Pi.
-    ; Block these paths before files are written; startup has a second guard
-    ; for userData/AppData paths that NSIS cannot fully control.
-    System::Call 'kernel32::SetEnvironmentVariable(t "CLAWPI_INSTALL_DIR", t "$INSTDIR")'
-    nsExec::ExecToLog `powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$$p=$$env:CLAWPI_INSTALL_DIR; if ($$p -cmatch '[^\x00-\x7F]') { exit 2 }; exit 0"`
-    Pop $0
-
-    StrCmp $0 2 _claw_ascii_install_dir_blocked
-    StrCmp $0 0 _claw_ascii_install_dir_ok
-
-    MessageBox MB_ICONSTOP|MB_OK "Claw-Pi could not verify the install path. Please install to a short English path, for example C:\ClawPi or D:\ClawPi."
-    Abort
-
-    _claw_ascii_install_dir_blocked:
-      MessageBox MB_ICONSTOP|MB_OK "Claw-Pi cannot be installed to a path containing non-ASCII characters. Please choose a short English path, for example C:\ClawPi or D:\ClawPi."
-      Abort
-
-    _claw_ascii_install_dir_ok:
-  FunctionEnd
-
   !macro preInit
     ; ----------------------------------------------------------------
     ; Single-instance gate, runs BEFORE cleanup.ps1.
@@ -190,10 +168,6 @@
   ; work than the default macro could - so we deliberately no-op it.
   !macro customCheckAppRunning
     DetailPrint "Skipping default CHECK_APP_RUNNING - preInit cleanup handled it."
-  !macroend
-
-  !macro customInstall
-    Call ClawPiEnsureAsciiInstallDir
   !macroend
 !endif
 
