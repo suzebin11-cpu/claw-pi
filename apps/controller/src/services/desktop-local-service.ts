@@ -106,6 +106,11 @@ export class DesktopLocalService {
     return { ok: true, modelId };
   }
 
+  async setDefaultImageGenerationModel(modelId: string) {
+    await this.configStore.setDefaultImageGenerationModel(modelId);
+    return { ok: true, modelId };
+  }
+
   private async syncModelGroupToCloud(modelId: string): Promise<void> {
     try {
       const jwt = await this.configStore.getActivationJwt();

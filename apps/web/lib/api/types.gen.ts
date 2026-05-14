@@ -1225,10 +1225,52 @@ export type PutApiInternalDesktopDefaultModelResponses = {
         ok: boolean;
         modelId: string;
         configPushed: boolean;
+        error?: string;
     };
 };
 
 export type PutApiInternalDesktopDefaultModelResponse = PutApiInternalDesktopDefaultModelResponses[keyof PutApiInternalDesktopDefaultModelResponses];
+
+export type GetApiInternalDesktopDefaultImageModelData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/internal/desktop/default-image-model';
+};
+
+export type GetApiInternalDesktopDefaultImageModelResponses = {
+    /**
+     * Default image generation model
+     */
+    200: {
+        modelId: string;
+    };
+};
+
+export type GetApiInternalDesktopDefaultImageModelResponse = GetApiInternalDesktopDefaultImageModelResponses[keyof GetApiInternalDesktopDefaultImageModelResponses];
+
+export type PutApiInternalDesktopDefaultImageModelData = {
+    body?: {
+        modelId: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/api/internal/desktop/default-image-model';
+};
+
+export type PutApiInternalDesktopDefaultImageModelResponses = {
+    /**
+     * Set default image generation model
+     */
+    200: {
+        ok: boolean;
+        modelId: string;
+        configPushed: boolean;
+        error?: string;
+    };
+};
+
+export type PutApiInternalDesktopDefaultImageModelResponse = PutApiInternalDesktopDefaultImageModelResponses[keyof PutApiInternalDesktopDefaultImageModelResponses];
 
 export type GetApiV1ChannelsData = {
     body?: never;
@@ -2067,6 +2109,7 @@ export type GetApiV1ChannelsLiveStatusResponses = {
             running: boolean;
             configured: boolean;
             lastError: string;
+            stale?: boolean;
         }>;
         agent: {
             modelId: string;
@@ -3602,6 +3645,7 @@ export type GetApiV1RuntimeConfigResponses = {
                 authMode?: 'none' | 'token';
             };
             defaultModelId?: string;
+            defaultImageGenerationModelId?: string;
         };
     };
 };
@@ -3616,6 +3660,7 @@ export type PutApiV1RuntimeConfigData = {
             authMode?: 'none' | 'token';
         };
         defaultModelId?: string;
+        defaultImageGenerationModelId?: string;
     };
     path?: never;
     query?: never;
@@ -3634,6 +3679,7 @@ export type PutApiV1RuntimeConfigResponses = {
                 authMode?: 'none' | 'token';
             };
             defaultModelId?: string;
+            defaultImageGenerationModelId?: string;
         };
     };
 };

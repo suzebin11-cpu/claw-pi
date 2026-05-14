@@ -11,8 +11,8 @@ import { HomePage } from "./pages/home";
 import { IntegrationsPage } from "./pages/integrations";
 import { ModelsPage } from "./pages/models";
 import { OAuthCallbackPage } from "./pages/oauth-callback";
-import { SessionsPage } from "./pages/sessions";
 import { RechargePage } from "./pages/recharge";
+import { SessionsPage } from "./pages/sessions";
 import { SkillsPage } from "./pages/skills";
 import { SlackClaimPage } from "./pages/slack-claim";
 import { SlackOAuthCallbackPage } from "./pages/slack-oauth-callback";
@@ -30,7 +30,7 @@ function DocumentTitleSync() {
       "/workspace/integrations": t("title.integrations"),
       "/workspace/skills": t("title.skills"),
       "/workspace/settings": t("title.settings"),
-      "/workspace/models": t("title.settings"),
+      "/workspace/models": t("title.models"),
       "/workspace/recharge": t("title.recharge"),
       "/feishu/bind": t("title.linkFeishu"),
     };

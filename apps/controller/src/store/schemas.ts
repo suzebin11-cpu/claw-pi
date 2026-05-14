@@ -16,6 +16,7 @@ export const controllerRuntimeConfigSchema = z
       })
       .default({ port: 18789, bind: "loopback", authMode: "none" }),
     defaultModelId: z.string().default("link/gpt-5.4-mini"),
+    defaultImageGenerationModelId: z.string().default(""),
   })
   .passthrough();
 

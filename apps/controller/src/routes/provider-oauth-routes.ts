@@ -10,7 +10,7 @@ import type { ControllerBindings } from "../types.js";
 // Known models for OpenAI Codex subscription (ChatGPT Plus/Pro OAuth).
 // Source: https://docs.openclaw.ai/providers/openai
 // Codex tokens lack api.model.read scope, so models can't be fetched dynamically.
-const OPENAI_CODEX_KNOWN_MODELS = ["gpt-5.4"];
+const OPENAI_CODEX_KNOWN_MODELS = ["gpt-5.5", "gpt-5.4"];
 
 const providerIdParamSchema = z.object({ providerId: z.string() });
 

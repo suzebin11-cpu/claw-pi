@@ -90,6 +90,71 @@ type WechatQrStatusResponse = {
   ilink_user_id?: string;
 };
 
+function redactIdentifier(value: string | null | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  if (trimmed.length <= 8) return "***";
+  return `${trimmed.slice(0, 8)}...${trimmed.slice(-4)}`;
+}
+
+function normalizeWechatRouteTag(value: unknown): string | undefined {
+  if (typeof value === "number") return String(value);
+  if (typeof value === "string" && value.trim()) return value.trim();
+  return undefined;
+}
+
+function readWechatRouteTag(
+  env: ControllerEnv,
+  accountId?: string,
+): string | undefined {
+  try {
+    if (!existsSync(env.openclawConfigPath)) return undefined;
+    const raw = readFileSync(env.openclawConfigPath, "utf-8");
+    const config = JSON.parse(raw) as {
+      channels?: Record<string, unknown>;
+    };
+    const section = config.channels?.["openclaw-weixin"] as
+      | Record<string, unknown>
+      | undefined;
+    if (!section) return undefined;
+
+    if (accountId) {
+      const accounts = section.accounts as
+        | Record<string, Record<string, unknown>>
+        | undefined;
+      const accountRouteTag = normalizeWechatRouteTag(
+        accounts?.[accountId]?.routeTag,
+      );
+      if (accountRouteTag) return accountRouteTag;
+    }
+
+    return normalizeWechatRouteTag(section.routeTag);
+  } catch (error) {
+    logger.debug(
+      { error: error instanceof Error ? error.message : String(error) },
+      "wechat_route_tag_read_failed",
+    );
+    return undefined;
+  }
+}
+
+function buildWechatQrHeaders(
+  env: ControllerEnv,
+  options: { includeClientVersion?: boolean } = {},
+): Record<string, string> {
+  const headers: Record<string, string> = {};
+  if (options.includeClientVersion) {
+    headers["iLink-App-ClientVersion"] = "1";
+  }
+
+  const routeTag = readWechatRouteTag(env);
+  if (routeTag) {
+    headers.SKRouteTag = routeTag;
+  }
+
+  return headers;
+}
+
 type WechatStoredAccount = {
   token?: string;
   savedAt?: string;
@@ -631,6 +696,7 @@ async function loadWhatsappRuntimeModules(
 async function fetchWechatQrCode(
   apiBaseUrl: string,
   botType: string,
+  headers: Record<string, string>,
 ): Promise<WechatQrCodeResponse> {
   const base = apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`;
   const url = new URL(
@@ -639,14 +705,19 @@ async function fetchWechatQrCode(
   );
   try {
     const response = await proxyFetch(url.toString(), {
+      headers,
       timeoutMs: WECHAT_QR_FETCH_TIMEOUT_MS,
     });
+    const rawText = await response.text();
     if (!response.ok) {
       throw new Error(
-        `Failed to fetch QR code: ${response.status} ${response.statusText}`,
+        `Failed to fetch QR code: ${response.status} ${response.statusText} body=${rawText.slice(
+          0,
+          200,
+        )}`,
       );
     }
-    return (await response.json()) as WechatQrCodeResponse;
+    return JSON.parse(rawText) as WechatQrCodeResponse;
   } catch (error) {
     if (error instanceof Error && error.name === "TimeoutError") {
       throw new Error("Timed out fetching WeChat QR code");
@@ -661,6 +732,7 @@ async function fetchWechatQrCode(
 async function pollWechatQrStatus(
   apiBaseUrl: string,
   qrcode: string,
+  headers: Record<string, string>,
 ): Promise<WechatQrStatusResponse> {
   const base = apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`;
   const url = new URL(
@@ -671,13 +743,16 @@ async function pollWechatQrStatus(
   const timer = setTimeout(() => controller.abort(), WECHAT_QR_POLL_TIMEOUT_MS);
   try {
     const response = await proxyFetch(url.toString(), {
-      headers: { "iLink-App-ClientVersion": "1" },
+      headers,
       signal: controller.signal,
     });
     const rawText = await response.text();
     if (!response.ok) {
       throw new Error(
-        `Failed to poll QR status: ${response.status} ${response.statusText}`,
+        `Failed to poll QR status: ${response.status} ${response.statusText} body=${rawText.slice(
+          0,
+          200,
+        )}`,
       );
     }
     return JSON.parse(rawText) as WechatQrStatusResponse;
@@ -825,9 +900,21 @@ export class ChannelService {
     const sessionKey = randomUUID();
     purgeExpiredWechatLogins();
 
+    const headers = buildWechatQrHeaders(this.env);
+    const startedAt = Date.now();
+    logger.info(
+      {
+        sessionKey: redactIdentifier(sessionKey),
+        botType: DEFAULT_WECHAT_BOT_TYPE,
+        hasRouteTag: Boolean(headers.SKRouteTag),
+      },
+      "wechat_qr_start_begin",
+    );
+
     const qrResponse = await fetchWechatQrCode(
       DEFAULT_WECHAT_BASE_URL,
       DEFAULT_WECHAT_BOT_TYPE,
+      headers,
     );
 
     activeWechatLogins.set(sessionKey, {
@@ -836,6 +923,16 @@ export class ChannelService {
       qrcodeUrl: qrResponse.qrcode_img_content,
       startedAt: Date.now(),
     });
+
+    logger.info(
+      {
+        sessionKey: redactIdentifier(sessionKey),
+        qrcode: redactIdentifier(qrResponse.qrcode),
+        hasQrDataUrl: Boolean(qrResponse.qrcode_img_content),
+        elapsedMs: Date.now() - startedAt,
+      },
+      "wechat_qr_start_complete",
+    );
 
     return {
       qrDataUrl: qrResponse.qrcode_img_content,
@@ -862,11 +959,53 @@ export class ChannelService {
     }
 
     const deadline = Date.now() + 500_000;
+    const headers = buildWechatQrHeaders(this.env, {
+      includeClientVersion: true,
+    });
+    let lastLoggedStatus: WechatQrStatusResponse["status"] | null = null;
+    logger.info(
+      {
+        sessionKey: redactIdentifier(sessionKey),
+        qrcode: redactIdentifier(activeLogin.qrcode),
+        hasRouteTag: Boolean(headers.SKRouteTag),
+      },
+      "wechat_qr_wait_begin",
+    );
+
     while (Date.now() < deadline) {
-      const status = await pollWechatQrStatus(
-        DEFAULT_WECHAT_BASE_URL,
-        activeLogin.qrcode,
-      );
+      let status: WechatQrStatusResponse;
+      try {
+        status = await pollWechatQrStatus(
+          DEFAULT_WECHAT_BASE_URL,
+          activeLogin.qrcode,
+          headers,
+        );
+      } catch (error) {
+        logger.warn(
+          {
+            sessionKey: redactIdentifier(sessionKey),
+            qrcode: redactIdentifier(activeLogin.qrcode),
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "wechat_qr_wait_poll_failed",
+        );
+        throw error;
+      }
+
+      if (status.status !== lastLoggedStatus || status.status === "confirmed") {
+        lastLoggedStatus = status.status;
+        logger.info(
+          {
+            sessionKey: redactIdentifier(sessionKey),
+            qrcode: redactIdentifier(activeLogin.qrcode),
+            status: status.status,
+            hasBotToken: Boolean(status.bot_token),
+            hasIlinkBotId: Boolean(status.ilink_bot_id),
+            elapsedMs: Date.now() - activeLogin.startedAt,
+          },
+          "wechat_qr_wait_status",
+        );
+      }
 
       if (status.status === "wait" || status.status === "scaned") {
         await sleep(WECHAT_QR_POLL_BACKOFF_MS);
@@ -875,6 +1014,13 @@ export class ChannelService {
 
       if (status.status === "expired") {
         activeWechatLogins.delete(sessionKey);
+        logger.info(
+          {
+            sessionKey: redactIdentifier(sessionKey),
+            qrcode: redactIdentifier(activeLogin.qrcode),
+          },
+          "wechat_qr_wait_expired",
+        );
         return {
           connected: false,
           message: "二维码已过期，请重新生成。",
@@ -895,6 +1041,14 @@ export class ChannelService {
         });
         registerWeChatAccount(this.env, normalizedAccountId);
         activeWechatLogins.delete(sessionKey);
+        logger.info(
+          {
+            sessionKey: redactIdentifier(sessionKey),
+            accountId: redactIdentifier(normalizedAccountId),
+            userId: redactIdentifier(status.ilink_user_id),
+          },
+          "wechat_qr_wait_confirmed",
+        );
         return {
           connected: true,
           message: "微信连接成功。",
@@ -904,6 +1058,13 @@ export class ChannelService {
     }
 
     activeWechatLogins.delete(sessionKey);
+    logger.warn(
+      {
+        sessionKey: redactIdentifier(sessionKey),
+        qrcode: redactIdentifier(activeLogin.qrcode),
+      },
+      "wechat_qr_wait_timeout",
+    );
     return {
       connected: false,
       message: "等待扫码超时，请重新生成二维码。",

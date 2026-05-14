@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import {
+  getApiV1ChannelsLiveStatus,
   postApiV1ChannelsWechatConnect,
   postApiV1ChannelsWechatQrStart,
   postApiV1ChannelsWechatQrWait,
@@ -19,6 +20,9 @@ type Phase =
   | "error";
 
 const RETRY_DELAY_MS = 2000;
+const QR_START_MAX_WAIT_MS = 45_000;
+const CONNECT_READY_MAX_WAIT_MS = 90_000;
+const LIVE_STATUS_POLL_MS = 1500;
 
 // Fake progress: gateway usually ready in 15-30s.
 // We simulate 0→95% over ~40s with easing (fast→slow), then hold at 95%.
@@ -34,6 +38,10 @@ function calcFakeProgress(elapsedMs: number): number {
   const ratio = Math.min(elapsedMs / PROGRESS_DURATION_MS, 1);
   // Ease-out: fast start, slow finish, caps at 95%
   return Math.round(95 * (1 - (1 - ratio) ** 2.5));
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export interface WechatSetupViewProps {
@@ -87,6 +95,29 @@ export function WechatSetupView({
     }
   }, []);
 
+  const waitForWechatReady = useCallback(async (signal: AbortSignal) => {
+    const deadline = Date.now() + CONNECT_READY_MAX_WAIT_MS;
+
+    while (!signal.aborted && Date.now() < deadline) {
+      const { data } = await getApiV1ChannelsLiveStatus().catch(() => ({
+        data: undefined,
+      }));
+      const wechat = data?.channels?.find(
+        (channel) =>
+          channel.channelType === "wechat" ||
+          channel.channelType === "wechat_personal",
+      );
+
+      if (wechat?.ready && wechat.status === "connected") {
+        return true;
+      }
+
+      await delay(LIVE_STATUS_POLL_MS);
+    }
+
+    return false;
+  }, []);
+
   const startQrFlow = useCallback(async () => {
     cleanup();
     const controller = new AbortController();
@@ -95,6 +126,7 @@ export function WechatSetupView({
     setQrUrl(null);
     setErrorMessage(null);
     startProgress();
+    const startedAt = Date.now();
 
     try {
       let startData: {
@@ -103,7 +135,7 @@ export function WechatSetupView({
         sessionKey?: string;
       } | null = null;
 
-      // Keep retrying until QR is obtained. Gateway/timeout errors are
+      // Retry for a bounded window until QR is obtained. Gateway/timeout errors are
       // transient (gateway still booting or plugin not loaded yet).
       // Only bail on genuinely unexpected errors or abort (panel closed).
       // eslint-disable-next-line no-constant-condition
@@ -131,7 +163,13 @@ export function WechatSetupView({
           setPhase("error");
           return;
         }
-        setPhase("waiting-gateway");
+        if (Date.now() - startedAt >= QR_START_MAX_WAIT_MS) {
+          stopProgress();
+          setErrorMessage(errorMsg || t("wechatSetup.timeout"));
+          setPhase("error");
+          return;
+        }
+        setPhase(gatewayReady ? "loading-qr" : "waiting-gateway");
         await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
       }
 
@@ -181,6 +219,14 @@ export function WechatSetupView({
           return;
         }
 
+        const ready = await waitForWechatReady(controller.signal);
+        if (controller.signal.aborted) return;
+        if (!ready) {
+          setErrorMessage(t("wechatSetup.connectPending"));
+          setPhase("error");
+          return;
+        }
+
         toast.success(t("wechatSetup.connectSuccess"));
         track("channel_ready", {
           channel: "wechat",
@@ -200,7 +246,15 @@ export function WechatSetupView({
         setPhase("error");
       }
     }
-  }, [cleanup, gatewayReady, onConnected, startProgress, stopProgress, t]);
+  }, [
+    cleanup,
+    gatewayReady,
+    onConnected,
+    startProgress,
+    stopProgress,
+    t,
+    waitForWechatReady,
+  ]);
 
   const isLoading =
     phase === "waiting-gateway" ||
@@ -277,7 +331,7 @@ export function WechatSetupView({
           <div className="flex flex-col items-center gap-3 py-8">
             <Loader2 className="h-8 w-8 animate-spin text-[var(--color-success)]" />
             <span className="text-[12px] text-text-muted">
-              {t("wechatSetup.connectSuccess")}
+              {t("wechatSetup.finalizing")}
             </span>
           </div>
         ) : phase === "error" ? (

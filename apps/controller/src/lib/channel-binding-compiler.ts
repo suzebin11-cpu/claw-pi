@@ -198,7 +198,7 @@ export function compileChannelsConfig(params: {
       qqbotChannel = {
         enabled: true,
         appId: secret("appId") || channel.appId || "",
-        clientSecret: secret("clientSecret"),
+        clientSecret: secret("clientSecret") || secret("appSecret"),
         dmPolicy: "open",
         allowFrom: ["*"],
         groupPolicy: "open",

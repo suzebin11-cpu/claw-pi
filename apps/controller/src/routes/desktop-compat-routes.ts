@@ -22,6 +22,10 @@ import {
   cloudStatusResponseSchema,
 } from "@nexu/shared";
 import type { ControllerContainer } from "../app/container.js";
+import {
+  isBuiltInDesktopCloudImageModel,
+  normalizeDesktopCloudImageModelId,
+} from "../lib/desktop-cloud-models.js";
 import { resolveModelId } from "../lib/openclaw-config-compiler.js";
 import type { ControllerBindings } from "../types.js";
 
@@ -31,6 +35,17 @@ const defaultModelSetResponseSchema = z.object({
   ok: z.boolean(),
   modelId: z.string(),
   configPushed: z.boolean(),
+  error: z.string().optional(),
+});
+const defaultImageModelBodySchema = z.object({ modelId: z.string() });
+const defaultImageModelResponseSchema = z.object({
+  modelId: z.string().nullable(),
+});
+const defaultImageModelSetResponseSchema = z.object({
+  ok: z.boolean(),
+  modelId: z.string(),
+  configPushed: z.boolean(),
+  error: z.string().optional(),
 });
 
 export function registerDesktopCompatRoutes(
@@ -100,7 +115,8 @@ export function registerDesktopCompatRoutes(
       const result = await container.desktopLocalService.connectCloudProfile(
         body.name,
       );
-      const { configPushed } = await container.openclawSyncService.syncAll();
+      const { configPushed } =
+        await container.openclawSyncService.syncAllImmediate();
       return c.json({ ...result, configPushed }, 200);
     },
   );
@@ -122,7 +138,8 @@ export function registerDesktopCompatRoutes(
     async (c) => {
       const status = await container.desktopLocalService.refreshCloudStatus();
       await container.modelProviderService.ensureValidDefaultModel();
-      const { configPushed } = await container.openclawSyncService.syncAll();
+      const { configPushed } =
+        await container.openclawSyncService.syncAllImmediate();
       return c.json({ ...status, configPushed }, 200);
     },
   );
@@ -393,6 +410,12 @@ export function registerDesktopCompatRoutes(
       },
     }),
     async (c) => {
+      const runtimeModelId =
+        await container.runtimeModelStateService.getEffectiveModelId();
+      if (runtimeModelId) {
+        return c.json({ modelId: runtimeModelId }, 200);
+      }
+
       const config = await container.configStore.getConfig();
       const rawModelId = config.runtime.defaultModelId;
       const modelId = rawModelId
@@ -423,21 +446,161 @@ export function registerDesktopCompatRoutes(
     }),
     async (c) => {
       const body = c.req.valid("json");
+      const before =
+        await container.openclawSyncService.getRuntimeModelAvailability(
+          body.modelId,
+        );
+      let configPushed = false;
+
+      if (!before.available) {
+        const result = await container.openclawSyncService.syncAllImmediate();
+        configPushed = result.configPushed;
+        const after =
+          await container.openclawSyncService.getRuntimeModelAvailability(
+            body.modelId,
+          );
+
+        if (!after.available) {
+          const error =
+            after.availableModelRefs.length === 0
+              ? "模型服务尚未就绪，请先登录或刷新 Claw-Pi 官方服务。"
+              : `当前 OpenClaw 配置无法使用模型 ${after.resolvedModelRef}。`;
+          return c.json(
+            { ok: false, modelId: body.modelId, configPushed, error },
+            200,
+          );
+        }
+      }
+
       await container.desktopLocalService.setDefaultModel(body.modelId);
-      // Update the runtime-model state file only — this is what the
-      // `nexu-runtime-model` plugin reads to override per-turn model
-      // resolution. We deliberately do not push a fresh openclaw.json:
-      // rewriting agents.defaults.model.primary causes OpenClaw to treat
-      // it as a config change and restart every active channel monitor
-      // (Feishu / WeChat), which surfaces in the UI as a long
-      // "connecting" / "数据同步中" stall every time someone switches
-      // models. The next natural sync (provider/skill/bot change, restart,
-      // …) will eventually flush the new primary into openclaw.json.
+      const target = await container.openclawSyncService.getRuntimeModelAvailability(
+        body.modelId,
+      );
       await container.openclawSyncService.syncRuntimeModelOnly();
+      await container.openclawSyncService.syncSessionModelOverrides(
+        target.resolvedModelRef,
+      );
+
+      const applied =
+        await container.runtimeModelStateService.waitForEffectiveModelId(
+          target.resolvedModelRef,
+          { timeoutMs: 5000, intervalMs: 150 },
+        );
+      if (!applied.ok) {
+        return c.json(
+          {
+            ok: false,
+            modelId: body.modelId,
+            configPushed,
+            error: `模型已保存，但运行时尚未确认切换到 ${target.resolvedModelRef}。`,
+          },
+          200,
+        );
+      }
+
+      return c.json({ ok: true, modelId: body.modelId, configPushed }, 200);
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "get",
+      path: "/api/internal/desktop/default-image-model",
+      tags: ["Desktop"],
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: defaultImageModelResponseSchema },
+          },
+          description: "Default image generation model",
+        },
+      },
+    }),
+    async (c) => {
+      const config = await container.configStore.getConfig();
+      const modelId = config.runtime.defaultImageGenerationModelId;
+      const normalizedModelId =
+        typeof modelId === "string" && modelId.length > 0
+          ? normalizeDesktopCloudImageModelId(modelId)
+          : null;
       return c.json(
-        { ok: true, modelId: body.modelId, configPushed: false },
+        {
+          modelId:
+            normalizedModelId &&
+            isBuiltInDesktopCloudImageModel(normalizedModelId)
+              ? normalizedModelId
+              : null,
+        },
         200,
       );
+    },
+  );
+
+  app.openapi(
+    createRoute({
+      method: "put",
+      path: "/api/internal/desktop/default-image-model",
+      tags: ["Desktop"],
+      request: {
+        body: {
+          content: {
+            "application/json": { schema: defaultImageModelBodySchema },
+          },
+        },
+      },
+      responses: {
+        200: {
+          content: {
+            "application/json": { schema: defaultImageModelSetResponseSchema },
+          },
+          description: "Set default image generation model",
+        },
+      },
+    }),
+    async (c) => {
+      const body = c.req.valid("json");
+      const modelId = normalizeDesktopCloudImageModelId(body.modelId);
+      let configPushed = false;
+
+      if (!isBuiltInDesktopCloudImageModel(modelId)) {
+        return c.json(
+          {
+            ok: false,
+            modelId,
+            configPushed,
+            error: `当前不支持生图模型 ${modelId}。`,
+          },
+          200,
+        );
+      }
+
+      const cloudStatus = await container.desktopLocalService.getCloudStatus();
+      if (
+        !cloudStatus.connected ||
+        typeof cloudStatus.linkUrl !== "string" ||
+        cloudStatus.linkUrl.length === 0
+      ) {
+        const result = await container.openclawSyncService.syncAllImmediate();
+        configPushed = result.configPushed;
+        return c.json(
+          {
+            ok: false,
+            modelId,
+            configPushed,
+            error: "生图模型需要先登录或刷新 Claw-Pi 官方服务。",
+          },
+          200,
+        );
+      }
+
+      await container.desktopLocalService.setDefaultImageGenerationModel(
+        modelId,
+      );
+      if (!configPushed) {
+        const result = await container.openclawSyncService.syncAllImmediate();
+        configPushed = result.configPushed;
+      }
+      return c.json({ ok: true, modelId, configPushed }, 200);
     },
   );
 }

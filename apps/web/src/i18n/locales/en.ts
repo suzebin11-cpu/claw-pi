@@ -129,6 +129,7 @@ const en = {
   "title.home": "Home · Claw-Pi",
   "title.integrations": "Integrations · Claw-Pi",
   "title.skills": "Skills · Claw-Pi",
+  "title.models": "Model Plaza · Claw-Pi",
   "title.settings": "Settings · Claw-Pi",
   "title.linkFeishu": "Link Feishu · Claw-Pi",
   "title.recharge": "Recharge · Claw-Pi",
@@ -139,6 +140,7 @@ const en = {
   "layout.brand": "Your AI Lobster",
   "layout.nav.home": "Lobster Den",
   "layout.nav.deployments": "Deployments",
+  "layout.nav.models": "Model Plaza",
   "layout.nav.skills": "Tricks",
   "layout.nav.recharge": "Feed",
   "layout.nav.settings": "Settings",
@@ -174,6 +176,8 @@ const en = {
   "layout.mobile.deploymentsSubtitle": "All deployment records",
   "layout.mobile.skills": "Tricks",
   "layout.mobile.skillsSubtitle": "Teach your lobster new tricks",
+  "layout.mobile.models": "Model Plaza",
+  "layout.mobile.modelsSubtitle": "Choose chat models",
   "layout.mobile.recharge": "Feed",
   "layout.mobile.rechargeSubtitle": "Give your lobster some energy",
   "layout.mobile.settings": "Settings",
@@ -295,8 +299,8 @@ const en = {
   "home.channel.web": "Web",
 
   // ── Models Page ──
-  "models.pageTitle": "Lobster Brain",
-  "models.pageSubtitle": "Pick a smart brain for your lobster",
+  "models.pageTitle": "Model Plaza",
+  "models.pageSubtitle": "Choose the chat model for the workspace",
   "settings.pageSubtitle": "Tune your lobster's preferences",
   "settings.tabGeneral": "General",
   "settings.tabProviders": "AI Model Providers",
@@ -332,16 +336,59 @@ const en = {
   "models.noModelConfigured": "No model configured",
   "models.configureProviderHint": "Configure a provider below first",
   "models.searchModels": "Search models...",
+  "models.marketplace.categories": "Categories",
+  "models.marketplace.category.all": "All Models",
+  "models.marketplace.category.chat": "Chat Models",
+  "models.marketplace.category.image": "Image Models",
+  "models.marketplace.configureProviders": "Configure Providers",
+  "models.marketplace.backToMarketplace": "Back to Model Plaza",
+  "models.marketplace.chatModelDescription":
+    "Can be used as the default Q&A brain for WeChat, Lobster Brain, and chat channels.",
+  "models.marketplace.chatDetailDefault":
+    "Can be selected as the default chat model",
+  "models.marketplace.chatDetailRuntime":
+    "Switching briefly restarts the runtime",
+  "models.marketplace.chatAction": "Use this as the default Q&A model",
+  "models.marketplace.current": "Current",
+  "models.marketplace.selected": "In use",
+  "models.marketplace.selectChat": "Set as default chat model",
+  "models.marketplace.selectImage": "Set as default image model",
+  "models.marketplace.tag.image": "Image",
+  "models.marketplace.tag.imageEdit": "Image edit",
+  "models.marketplace.tag.2k": "2K",
+  "models.marketplace.tag.lowCost": "Low cost",
+  "models.marketplace.tag.gemini": "Gemini",
+  "models.marketplace.tag.fast": "Low latency",
+  "models.marketplace.tag.conversationEdit": "Conversational edit",
+  "models.marketplace.gptImage2.description":
+    "Generate or edit images through the configured Claw-Pi cloud compatible API. Quality defaults to low to control cost.",
+  "models.marketplace.gptImage2.detailSizes":
+    "Sizes: 1024x1024 / 1536x1024 / 2048x1152",
+  "models.marketplace.gptImage2.detailQuality":
+    "Quality: low / medium / high / auto",
+  "models.marketplace.gptImage2.action":
+    "In chat, say: use GPT Image 2 to generate...",
+  "models.marketplace.gemini31FlashImage.description":
+    "Nano Banana 2 provides high-quality image generation and conversational editing at mainstream pricing with low latency.",
+  "models.marketplace.gemini31FlashImage.detailEndpoint":
+    "Endpoint: /v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+  "models.marketplace.gemini31FlashImage.detailPricing":
+    "Resolution: 512 / 1K, pay-per-use",
+  "models.marketplace.gemini31FlashImage.action":
+    "In chat, say: use Gemini 3.1 to generate an image...",
   "models.modelSwitched": "Model switched",
   "models.autoSwitched": "Auto-switched to {{model}}",
   "models.modelSwitchedAndSynced": "Model switched & synced to bot",
   "models.modelSwitchedSyncFailed": "Model switched (sync to bot pending)",
   "models.modelSwitchFailed": "Failed to switch model",
-  "models.switchingModel": "Switching model…",
+  "models.imageModelSwitched": "Image model switched",
+  "models.imageModelSwitchFailed": "Failed to switch image model",
+  "models.switchingModel": "Switching and syncing model…",
+  "models.switchingImageModel": "Switching image model…",
   "models.confirmSwitch.title": "Switch Model?",
   "models.confirmSwitch.subtitle": "Switching to {{model}}",
   "models.confirmSwitch.body":
-    "Switching models will briefly restart the runtime. Your bot will be temporarily unavailable for a few seconds during the restart.",
+    "This syncs to WeChat and Dragon Brain, then applies after confirmation.",
   "models.confirmSwitch.cancel": "Cancel",
   "models.confirmSwitch.confirm": "Switch",
   "models.provider.nexu.name": "Claw-Pi Official",
@@ -877,6 +924,9 @@ const en = {
     "Open WeChat on your phone and scan the QR code above to link your account.",
   "wechatSetup.connectSuccess": "WeChat connected!",
   "wechatSetup.connectFailed": "Failed to connect WeChat",
+  "wechatSetup.finalizing": "Confirming WeChat is connected...",
+  "wechatSetup.connectPending":
+    "Scanned, but the WeChat runtime is still starting. Please try again shortly.",
   "wechatSetup.timeout": "QR code expired. Please try again.",
   "wechatSetup.retry": "Try Again",
   "wechatSetup.gatewayError":

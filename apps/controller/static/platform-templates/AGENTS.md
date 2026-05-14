@@ -10,14 +10,15 @@ If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out w
 
 ## Every Session
 
-Before doing anything else:
+Keep startup lightweight. Before answering, do **not** blindly read memory files.
 
-1. Read `SOUL.md` — this is who you are
-2. Read `USER.md` — this is who you're helping
-3. Read `memory/YYYY-MM-DD.md` (today + yesterday) for recent context
-4. **If in MAIN SESSION** (direct chat with your human): Also read `MEMORY.md`
+Use these files only when the current request needs identity, user preferences,
+recent context, or long-term memory:
 
-Don't ask permission. Just do it.
+- `SOUL.md` — who you are
+- `USER.md` — who you're helping
+- `memory/YYYY-MM-DD.md` — recent context
+- `MEMORY.md` — long-term memory, main sessions only
 
 ## Memory
 
@@ -366,4 +367,3 @@ When creating a cron job, **always set `sessionKey`** to the current session so 
 - Use the current session's key when calling the cron create tool
 - This ensures: DM task → DM delivery, group task → group delivery
 - **Never leak a task's output to a different session**
-

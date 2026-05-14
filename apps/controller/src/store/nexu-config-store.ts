@@ -24,6 +24,10 @@ import {
 } from "@nexu/shared";
 import type { z } from "zod";
 import type { ControllerEnv } from "../app/env.js";
+import {
+  normalizeDesktopCloudImageModelId,
+  normalizeDesktopCloudModels,
+} from "../lib/desktop-cloud-models.js";
 import { logger } from "../lib/logger.js";
 import { proxyFetch } from "../lib/proxy-fetch.js";
 import { LowDbStore } from "./lowdb-store.js";
@@ -82,6 +86,27 @@ type ActivationState = {
 };
 
 const DEFAULT_MANAGED_CHANNEL_ACCOUNT_ID = "default";
+const DESKTOP_CLOUD_SUPPLEMENTAL_MODEL_IDS = new Set(["gpt-5.5"]);
+
+function pickSupplementalDesktopCloudModels(
+  models: readonly CloudModel[] | null | undefined,
+): CloudModel[] {
+  return normalizeDesktopCloudModels(
+    (models ?? []).filter((model) =>
+      DESKTOP_CLOUD_SUPPLEMENTAL_MODEL_IDS.has(model.id),
+    ),
+  );
+}
+
+function mergeDesktopCloudModelCatalogs(input: {
+  curatedModels: readonly CloudModel[];
+  supplementalModels: readonly CloudModel[] | null | undefined;
+}): CloudModel[] {
+  return normalizeDesktopCloudModels([
+    ...input.curatedModels,
+    ...pickSupplementalDesktopCloudModels(input.supplementalModels),
+  ]);
+}
 
 const defaultCloudProfile: CloudProfileEntry = {
   name: "Default",
@@ -91,7 +116,6 @@ const defaultCloudProfile: CloudProfileEntry = {
 
 const CLOUD_BOOTSTRAP_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const FAST_DEFAULT_MIGRATION_KEY = "fastDefaultModelMigrationV1";
-
 function buildDesktopCloudCacheKey(profile: CloudProfileEntry): string {
   return [profile.name.trim(), profile.cloudUrl.trim(), profile.linkUrl.trim()]
     .join("::")
@@ -351,6 +375,7 @@ export class NexuConfigStore {
             authMode: env.openclawGatewayToken ? "token" : "none",
           },
           defaultModelId: env.defaultModelId,
+          defaultImageGenerationModelId: "",
         },
         providers: [],
         integrations: [],
@@ -408,7 +433,12 @@ export class NexuConfigStore {
         readDesktopActiveCloudProfileName(config) ?? defaultCloudProfile.name;
       const sessions = readDesktopCloudSessions(config);
       const currentCloud = readDesktopCloud(config);
-      const nextModels = input.models ?? currentCloud.models ?? [];
+      const rawNextModels = input.models ?? currentCloud.models ?? [];
+      const shouldIncludeBuiltInModels =
+        rawNextModels.length > 0 || input.apiKey != null;
+      const nextModels = shouldIncludeBuiltInModels
+        ? normalizeDesktopCloudModels(rawNextModels)
+        : rawNextModels;
       const hasModels = nextModels.length > 0;
       const nextCacheKey = hasModels
         ? (input.cacheKey ?? currentCloud.cacheKey ?? null)
@@ -560,11 +590,23 @@ export class NexuConfigStore {
             currentConfig,
             data.linkGatewayUrl,
           );
+          const curatedModels = await this.fetchDesktopCloudModels(
+            buildLinkModelsUrl(activeProfile.cloudUrl),
+          );
+          const supplementalModels = await this.fetchDesktopCloudModels(
+            buildLinkModelsUrl(linkUrl),
+            data.apiKey,
+          );
           const models =
-            data.cloudModels && data.cloudModels.length > 0
-              ? data.cloudModels
-              : ((await this.fetchDesktopCloudModels(linkUrl, data.apiKey)) ??
-                []);
+            curatedModels && curatedModels.length > 0
+              ? mergeDesktopCloudModelCatalogs({
+                  curatedModels,
+                  supplementalModels:
+                    supplementalModels ?? data.cloudModels ?? null,
+                })
+              : pickSupplementalDesktopCloudModels(
+                  supplementalModels ?? data.cloudModels ?? [],
+                );
 
           this.pollingState = null;
           await this.setDesktopCloudState({
@@ -1086,9 +1128,11 @@ export class NexuConfigStore {
         if (previous) {
           delete secrets[`channel:${previous.id}:appId`];
           delete secrets[`channel:${previous.id}:appSecret`];
+          delete secrets[`channel:${previous.id}:clientSecret`];
         }
         secrets[`channel:${channel.id}:appId`] = input.appId;
         secrets[`channel:${channel.id}:appSecret`] = input.appSecret;
+        secrets[`channel:${channel.id}:clientSecret`] = input.appSecret;
         return { secrets };
       })(),
       channels: [
@@ -1462,6 +1506,10 @@ export class NexuConfigStore {
   async getDesktopCloudStatus() {
     const config = await this.getConfig();
     const cloud = readDesktopCloud(config);
+    const models =
+      (cloud.models?.length ?? 0) > 0 || cloud.apiKey
+        ? normalizeDesktopCloudModels(cloud.models)
+        : (cloud.models ?? []);
     const cloudSessions = readDesktopCloudSessions(config);
     const { profiles, activeProfile } =
       await this.readConfiguredDesktopCloudProfile(config);
@@ -1471,7 +1519,7 @@ export class NexuConfigStore {
       userName: cloud.userName ?? null,
       userEmail: cloud.userEmail ?? null,
       connectedAt: cloud.connectedAt ?? null,
-      models: cloud.models ?? [],
+      models,
       cloudUrl: activeProfile.cloudUrl,
       linkUrl: activeProfile.linkUrl,
       activeProfileName: activeProfile.name,
@@ -1574,6 +1622,17 @@ export class NexuConfigStore {
     }));
   }
 
+  async setDefaultImageGenerationModel(modelId: string): Promise<void> {
+    const normalizedModelId = normalizeDesktopCloudImageModelId(modelId);
+    await this.store.update((config) => ({
+      ...config,
+      runtime: {
+        ...config.runtime,
+        defaultImageGenerationModelId: normalizedModelId,
+      },
+    }));
+  }
+
   async markFastDefaultModelMigrationComplete(): Promise<void> {
     await this.store.update((config) => ({
       ...config,
@@ -1608,11 +1667,13 @@ export class NexuConfigStore {
         return null;
       }
 
-      return data.data.map((model) => ({
-        id: model.id,
-        name: model.name || model.id,
-        provider: model.owned_by,
-      }));
+      return normalizeDesktopCloudModels(
+        data.data.map((model) => ({
+          id: model.id,
+          name: model.name || model.id,
+          provider: model.owned_by,
+        })),
+      );
     } catch {
       return null;
     }
@@ -1647,7 +1708,19 @@ export class NexuConfigStore {
     const curatedModels = await this.fetchDesktopCloudModels(
       buildLinkModelsUrl(activeProfile.cloudUrl),
     );
+    const supplementalModels =
+      cloud.connected && cloud.apiKey
+        ? await this.fetchDesktopCloudModels(
+            buildLinkModelsUrl(linkUrl),
+            cloud.apiKey,
+          )
+        : null;
+
     if (curatedModels && curatedModels.length > 0) {
+      const models = mergeDesktopCloudModelCatalogs({
+        curatedModels,
+        supplementalModels: supplementalModels ?? cloud.models ?? null,
+      });
       await this.setDesktopCloudState({
         connected: cloud.connected,
         polling: cloud.polling,
@@ -1656,12 +1729,34 @@ export class NexuConfigStore {
         connectedAt: cloud.connectedAt ?? null,
         linkUrl,
         apiKey: cloud.apiKey ?? null,
-        models: curatedModels,
+        models,
         cacheKey,
         modelsUpdatedAt: Date.now(),
       });
-      await this.alignDefaultModelToCuratedList(curatedModels);
+      await this.alignDefaultModelToCuratedList(models);
       return;
+    }
+
+    if (supplementalModels !== null || (cloud.models?.length ?? 0) > 0) {
+      const models = pickSupplementalDesktopCloudModels(
+        supplementalModels ?? cloud.models ?? [],
+      );
+      if (models.length > 0) {
+        await this.setDesktopCloudState({
+          connected: cloud.connected,
+          polling: cloud.polling,
+          userName: cloud.userName ?? null,
+          userEmail: cloud.userEmail ?? null,
+          connectedAt: cloud.connectedAt ?? null,
+          linkUrl,
+          apiKey: cloud.apiKey ?? null,
+          models,
+          cacheKey,
+          modelsUpdatedAt: Date.now(),
+        });
+        await this.alignDefaultModelToCuratedList(models);
+        return;
+      }
     }
 
     if ((cloud.models?.length ?? 0) > 0 || !cloud.apiKey) {
@@ -1682,26 +1777,7 @@ export class NexuConfigStore {
       return;
     }
 
-    const models = await this.fetchDesktopCloudModels(
-      buildLinkModelsUrl(linkUrl),
-      cloud.apiKey,
-    );
-    if (models === null) {
-      return;
-    }
-
-    await this.setDesktopCloudState({
-      connected: cloud.connected,
-      polling: cloud.polling,
-      userName: cloud.userName ?? null,
-      userEmail: cloud.userEmail ?? null,
-      connectedAt: cloud.connectedAt ?? null,
-      linkUrl,
-      apiKey: cloud.apiKey,
-      models,
-      cacheKey,
-      modelsUpdatedAt: Date.now(),
-    });
+    return;
   }
 
   private async alignDefaultModelToCuratedList(
@@ -1716,6 +1792,9 @@ export class NexuConfigStore {
       ? currentDefault.slice(5)
       : currentDefault;
     if (curatedModels.some((m) => m.id === bare)) {
+      return;
+    }
+    if (DESKTOP_CLOUD_SUPPLEMENTAL_MODEL_IDS.has(bare)) {
       return;
     }
     const envDefault = this.env.defaultModelId;
@@ -2016,6 +2095,7 @@ export class NexuConfigStore {
     }
 
     await this.store.update((currentConfig) => {
+      const currentProfile = readLocalProfile(currentConfig);
       const sessions = readDesktopCloudSessions(currentConfig);
       const nextSession = sessions[nextProfile.name];
 
@@ -2023,6 +2103,10 @@ export class NexuConfigStore {
         ...currentConfig,
         desktop: {
           ...currentConfig.desktop,
+          localProfile: {
+            ...currentProfile,
+            authSource: nextSession?.connected ? "cloud" : "desktop-local",
+          },
           activeCloudProfileName: nextProfile.name,
           cloud: nextSession
             ? {

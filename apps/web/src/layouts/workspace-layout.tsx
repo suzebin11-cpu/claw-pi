@@ -11,6 +11,7 @@ import {
   BookOpen,
   ChevronUp,
   CircleHelp,
+  Cpu,
   Globe,
   Home,
   LogOut,
@@ -534,9 +535,8 @@ function WorkspaceLayoutInner() {
     location.pathname === "/workspace/home";
   const isSkillsPage = location.pathname.includes("/skills");
   const isRechargePage = location.pathname.includes("/recharge");
-  const isModelsPage =
-    location.pathname.includes("/models") ||
-    location.pathname.includes("/settings");
+  const isModelsPage = location.pathname.includes("/models");
+  const isSettingsPage = location.pathname.includes("/settings");
 
   const handleLogout = async () => {
     setShowLogoutConfirm(false);
@@ -562,6 +562,7 @@ function WorkspaceLayoutInner() {
     !isSkillsPage &&
     !isRechargePage &&
     !isModelsPage &&
+    !isSettingsPage &&
     !selectedSessionId;
 
   const selectedSession = selectedSessionId
@@ -574,8 +575,10 @@ function WorkspaceLayoutInner() {
       : isRechargePage
         ? t("layout.mobile.recharge")
         : isModelsPage
-          ? t("layout.mobile.settings")
-          : selectedSession?.title || t("layout.mobile.conversations");
+          ? t("layout.mobile.models")
+          : isSettingsPage
+            ? t("layout.mobile.settings")
+            : selectedSession?.title || t("layout.mobile.conversations");
   const mobileSubtitle = isHomePage
     ? t("layout.mobile.homeSubtitle")
     : isSkillsPage
@@ -583,10 +586,12 @@ function WorkspaceLayoutInner() {
       : isRechargePage
         ? t("layout.mobile.rechargeSubtitle")
         : isModelsPage
-          ? t("layout.mobile.settingsSubtitle")
-          : selectedSession
-            ? `${getPlatformLabel(selectedSession.channelType, t)} · ${formatTime(selectedSession.lastTime, t)}`
-            : t("layout.mobileConversationCount", { count: sessions.length });
+          ? t("layout.mobile.modelsSubtitle")
+          : isSettingsPage
+            ? t("layout.mobile.settingsSubtitle")
+            : selectedSession
+              ? `${getPlatformLabel(selectedSession.channelType, t)} · ${formatTime(selectedSession.lastTime, t)}`
+              : t("layout.mobileConversationCount", { count: sessions.length });
   const desktopGlassTint = isMacDesktop
     ? "rgba(255, 255, 255, 0.08)"
     : "var(--color-surface-0)";
@@ -713,6 +718,20 @@ function WorkspaceLayoutInner() {
                   <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] animate-pulse shrink-0" />
                 )}
             </button>
+            <Link
+              to="/workspace/models"
+              onClick={() => {
+                track("workspace_models_click");
+                track("workspace_sidebar_click", { target: "models" });
+              }}
+              className={cn(
+                "nav-item flex items-center gap-2.5 w-full rounded-[var(--radius-6)] text-[13px] transition-colors cursor-pointer mt-0.5 px-3 py-2 whitespace-nowrap",
+                isModelsPage && "nav-item-active",
+              )}
+            >
+              <Cpu size={16} className="shrink-0" />
+              {t("layout.nav.models")}
+            </Link>
             <Link
               to="/workspace/skills"
               onClick={() => {
@@ -1078,6 +1097,23 @@ function WorkspaceLayoutInner() {
                         <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] animate-pulse shrink-0" />
                       )}
                   </button>
+                  <Link
+                    to="/workspace/models"
+                    onClick={() => {
+                      track("workspace_models_click");
+                      track("workspace_sidebar_click", { target: "models" });
+                      setMobileDrawerOpen(false);
+                    }}
+                    className={cn(
+                      "flex items-center gap-2 w-full rounded-lg text-[12px] font-medium transition-colors cursor-pointer mt-0.5 px-3 py-2",
+                      isModelsPage
+                        ? "bg-accent/10 text-accent"
+                        : "text-text-muted hover:text-text-primary hover:bg-surface-3",
+                    )}
+                  >
+                    <Cpu size={14} />
+                    {t("layout.nav.models")}
+                  </Link>
                   <Link
                     to="/workspace/skills"
                     onClick={() => {

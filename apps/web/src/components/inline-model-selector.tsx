@@ -68,16 +68,28 @@ export function InlineModelSelector() {
   const updateModel = useMutation({
     mutationFn: async (modelId: string) => {
       const toastId = toast.loading(t("models.switchingModel"));
-      const { error } = await putApiInternalDesktopDefaultModel({
+      const { data, error } = await putApiInternalDesktopDefaultModel({
         body: { modelId },
       });
       if (error) {
-        toast.error(t("models.modelSwitchFailed"), { id: toastId });
-        throw new Error("Failed to update model");
+        const message =
+          typeof error === "object" &&
+          error !== null &&
+          "error" in error &&
+          typeof error.error === "string"
+            ? error.error
+            : t("models.modelSwitchFailed");
+        toast.error(message, { id: toastId });
+        throw new Error(message);
       }
-      toast.success(t("models.modelSwitched"), { id: toastId });
+      if (data?.ok === false) {
+        const message = data.error ?? t("models.modelSwitchFailed");
+        toast.error(message, { id: toastId });
+        throw new Error(message);
+      }
+      return { toastId };
     },
-    onSuccess: (_, modelId) => {
+    onSuccess: async ({ toastId }, modelId) => {
       track("workspace_change_model_change", {
         previous_provider_name: getProviderIdFromModelId(
           models,
@@ -87,10 +99,9 @@ export function InlineModelSelector() {
         provider_name: getProviderIdFromModelId(models, modelId),
         model_name: modelId,
       });
-      queryClient.invalidateQueries({ queryKey: ["desktop-default-model"] });
-      // Config push triggers SIGUSR1 restart; immediately refetch live status
-      // so the UI reflects the restart sooner.
+      await queryClient.refetchQueries({ queryKey: ["desktop-default-model"] });
       queryClient.invalidateQueries({ queryKey: ["channels-live-status"] });
+      toast.success(t("models.modelSwitched"), { id: toastId });
     },
   });
 

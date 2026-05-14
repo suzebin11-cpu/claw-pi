@@ -10,23 +10,34 @@ import {
   ArrowUpRight,
   Camera,
   Check,
+  Cpu,
   ExternalLink,
   FolderOpen,
   Loader2,
   LogIn,
   Pencil,
   RefreshCw,
+  Search,
+  Sparkles,
   Trash2,
   X,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ComponentType,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
-import { useSearchParams } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import { toast } from "sonner";
 import {
   deleteApiV1ProvidersByProviderId,
   deleteApiV1ProvidersMinimaxOauthLogin,
   getApiInternalDesktopCloudStatus,
+  getApiInternalDesktopDefaultImageModel,
   getApiInternalDesktopDefaultModel,
   getApiInternalDesktopReady,
   getApiV1Me,
@@ -43,6 +54,7 @@ import {
   postApiV1ProvidersByProviderIdOauthStart,
   postApiV1ProvidersByProviderIdVerify,
   postApiV1ProvidersMinimaxOauthLogin,
+  putApiInternalDesktopDefaultImageModel,
   putApiInternalDesktopDefaultModel,
   putApiV1ProvidersByProviderId,
 } from "../../lib/api/sdk.gen";
@@ -79,6 +91,29 @@ interface DbProvider {
   oauthEmail?: string | null;
   modelsJson: string;
 }
+
+type ApiModel = {
+  id: string;
+  name: string;
+  provider: string;
+  isDefault?: boolean;
+  description?: string;
+};
+
+type MarketplaceCapability = "chat" | "image";
+
+type MarketplaceModel = {
+  id: string;
+  name: string;
+  provider: string;
+  capability: MarketplaceCapability;
+  runtimeModelId: string;
+  descriptionKey: string;
+  tagKeys: string[];
+  detailKeys: string[];
+  actionHintKey: string;
+  available: boolean;
+};
 
 type MiniMaxDesktopOauthStatus = {
   connected: boolean;
@@ -353,7 +388,7 @@ const DEFAULT_MODELS: Record<string, string[]> = {
     "claude-sonnet-4-20250514",
     "claude-3-5-haiku-20241022",
   ],
-  openai: ["gpt-5.4", "gpt-5.1", "gpt-5-mini", "o4-mini"],
+  openai: ["gpt-5.5", "gpt-5.4", "gpt-5.1", "gpt-5-mini", "gpt-4o-mini"],
   google: [
     "gemini-3-pro",
     "gemini-2.5-pro",
@@ -400,15 +435,9 @@ const ZAI_CODING_PLAN_MODELS = [
   "glm-4.7-flashx",
 ];
 
-function buildProviders(
-  apiModels: Array<{
-    id: string;
-    name: string;
-    provider: string;
-    isDefault?: boolean;
-    description?: string;
-  }>,
-): ProviderConfig[] {
+const BUILT_IN_CREATIVE_MODELS: MarketplaceModel[] = [];
+
+function buildProviders(apiModels: ApiModel[]): ProviderConfig[] {
   // Group models by provider
   const grouped = new Map<string, ProviderModel[]>();
   for (const m of apiModels) {
@@ -490,16 +519,10 @@ const BYOK_PROVIDER_IDS = [
   "anthropic",
   "openai",
   "google",
-  "ollama",
-  "siliconflow",
-  "ppio",
-  "openrouter",
   "minimax",
   "kimi",
   "glm",
 ] as const;
-
-const OLLAMA_DUMMY_API_KEY = "ollama-local";
 
 type ConfigurableProviderId =
   PutApiV1ProvidersByProviderIdData["path"]["providerId"];
@@ -713,8 +736,392 @@ function _GeneralSettings() {
 
 // _CurrentModelSelector removed — model switching now lives inline in each provider's model list
 
+function MarketplacePage({
+  models,
+  currentModelId,
+  currentImageModelId,
+  modelsLoading,
+  modelsError,
+  onSelectModel,
+  onSelectImageModel,
+  onRetry,
+  isDesktopClient,
+}: {
+  models: ApiModel[];
+  currentModelId: string;
+  currentImageModelId: string;
+  modelsLoading: boolean;
+  modelsError: boolean;
+  onSelectModel: (modelId: string) => void;
+  onSelectImageModel: (modelId: string) => void;
+  onRetry: () => void;
+  isDesktopClient: boolean;
+}) {
+  const { t } = useTranslation();
+  const [activeCapability, setActiveCapability] = useState<
+    MarketplaceCapability | "all"
+  >("all");
+  const [search, setSearch] = useState("");
+
+  const chatModels = useMemo<MarketplaceModel[]>(
+    () =>
+      models.map((model) => ({
+        id: model.id,
+        name: model.name || getModelDisplayLabel(model.id),
+        provider: model.provider,
+        capability: "chat",
+        runtimeModelId: model.id,
+        descriptionKey:
+          model.description || "models.marketplace.chatModelDescription",
+        tagKeys: [
+          "models.marketplace.category.chat",
+          PROVIDER_META[model.provider]?.name ?? model.provider,
+        ],
+        detailKeys: [
+          "models.marketplace.chatDetailDefault",
+          "models.marketplace.chatDetailRuntime",
+        ],
+        actionHintKey: "models.marketplace.chatAction",
+        available: true,
+      })),
+    [models],
+  );
+
+  const marketplaceModels = useMemo(
+    () => [...chatModels, ...BUILT_IN_CREATIVE_MODELS],
+    [chatModels],
+  );
+
+  const capabilityCounts = useMemo(() => {
+    const counts: Record<MarketplaceCapability | "all", number> = {
+      all: marketplaceModels.length,
+      chat: 0,
+      image: 0,
+    };
+    for (const model of marketplaceModels) {
+      counts[model.capability] += 1;
+    }
+    return counts;
+  }, [marketplaceModels]);
+
+  const categories: Array<{
+    id: MarketplaceCapability | "all";
+    label: string;
+    icon: ComponentType<{ size?: number; className?: string }>;
+  }> = [
+    { id: "all", label: t("models.marketplace.category.all"), icon: Sparkles },
+    { id: "chat", label: t("models.marketplace.category.chat"), icon: Cpu },
+  ];
+
+  const normalizedSearch = search.trim().toLowerCase();
+  const filteredModels = marketplaceModels.filter((model) => {
+    if (activeCapability !== "all" && model.capability !== activeCapability) {
+      return false;
+    }
+
+    if (!normalizedSearch) {
+      return true;
+    }
+
+    return [
+      model.id,
+      model.name,
+      model.provider,
+      t(model.descriptionKey),
+      ...model.tagKeys.map((tagKey) => t(tagKey)),
+      ...model.detailKeys.map((detailKey) => t(detailKey)),
+    ]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedSearch);
+  });
+
+  return (
+    <div className="h-full overflow-y-auto">
+      <div
+        className="mx-auto max-w-6xl px-4 pb-6 sm:px-6 sm:pb-8"
+        style={{ paddingTop: isDesktopClient ? "2rem" : "0.5rem" }}
+      >
+        <div className="mb-5 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <h2 className="heading-page">{t("models.pageTitle")}</h2>
+            <p className="heading-page-desc">{t("models.pageSubtitle")}</p>
+          </div>
+          <Link
+            to="/workspace/settings?tab=providers"
+            className="inline-flex w-fit items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-[12px] font-medium text-text-primary transition-colors hover:border-border-hover hover:bg-surface-1"
+          >
+            <ExternalLink size={13} />
+            {t("models.marketplace.configureProviders")}
+          </Link>
+        </div>
+
+        <div className="flex gap-0 overflow-hidden rounded-2xl border border-border bg-surface-1">
+          <aside className="hidden w-56 shrink-0 border-r border-border-subtle bg-surface-0 p-3 md:block">
+            <div className="mb-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+              {t("models.marketplace.categories")}
+            </div>
+            <div className="space-y-1">
+              {categories.map((category) => {
+                const Icon = category.icon;
+                const isActive = activeCapability === category.id;
+                return (
+                  <button
+                    key={category.id}
+                    type="button"
+                    onClick={() => setActiveCapability(category.id)}
+                    className={cn(
+                      "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[12px] transition-colors",
+                      isActive
+                        ? "bg-surface-3 font-semibold text-text-primary"
+                        : "text-text-secondary hover:bg-surface-2 hover:text-text-primary",
+                    )}
+                  >
+                    <Icon size={14} className="shrink-0" />
+                    <span className="flex-1 truncate">{category.label}</span>
+                    <span className="text-[10px] text-text-tertiary">
+                      {capabilityCounts[category.id]}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </aside>
+
+          <section className="min-h-[560px] flex-1 p-4 sm:p-5">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex gap-2 overflow-x-auto md:hidden">
+                {categories.map((category) => {
+                  const isActive = activeCapability === category.id;
+                  return (
+                    <button
+                      key={category.id}
+                      type="button"
+                      onClick={() => setActiveCapability(category.id)}
+                      className={cn(
+                        "shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors",
+                        isActive
+                          ? "border-accent bg-accent/10 text-accent"
+                          : "border-border text-text-secondary",
+                      )}
+                    >
+                      {category.label} · {capabilityCounts[category.id]}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="relative w-full sm:max-w-xs">
+                <Search
+                  size={14}
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-text-tertiary"
+                />
+                <input
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  placeholder={t("models.searchModels")}
+                  className="w-full rounded-xl border border-border bg-surface-0 py-2 pl-9 pr-3 text-[12px] text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={onRetry}
+                className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-2 hover:text-text-primary"
+              >
+                <RefreshCw size={13} />
+                {t("models.managed.refresh")}
+              </button>
+            </div>
+
+            {modelsLoading ? (
+              <div className="flex min-h-[360px] items-center justify-center text-[13px] text-text-muted">
+                <Loader2 size={16} className="mr-2 animate-spin" />
+                {t("models.loading")}
+              </div>
+            ) : modelsError ? (
+              <div className="flex min-h-[360px] items-center justify-center">
+                <div className="max-w-sm text-center">
+                  <div className="mb-2 text-[13px] font-medium text-red-500">
+                    {t("models.loadFailed")}
+                  </div>
+                  <p className="mb-3 text-[12px] text-text-muted">
+                    {t("models.loadFailedHint")}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onRetry}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-surface-2 px-3 py-1.5 text-[12px] font-medium text-text-primary transition-colors hover:bg-surface-3"
+                  >
+                    <RefreshCw size={12} />
+                    {t("models.retry")}
+                  </button>
+                </div>
+              </div>
+            ) : filteredModels.length === 0 ? (
+              <div className="flex min-h-[360px] items-center justify-center text-[13px] text-text-muted">
+                {t("home.noMatchingModels")}
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {filteredModels.map((model) => (
+                  <MarketplaceModelCard
+                    key={`${model.capability}:${model.id}`}
+                    model={model}
+                    selected={
+                      model.capability === "chat"
+                        ? isModelSelected(model.id, currentModelId)
+                        : isModelSelected(
+                            model.runtimeModelId,
+                            currentImageModelId,
+                          )
+                    }
+                    onSelectModel={onSelectModel}
+                    onSelectImageModel={onSelectImageModel}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MarketplaceModelCard({
+  model,
+  selected,
+  onSelectModel,
+  onSelectImageModel,
+}: {
+  model: MarketplaceModel;
+  selected: boolean;
+  onSelectModel: (modelId: string) => void;
+  onSelectImageModel: (modelId: string) => void;
+}) {
+  const { t } = useTranslation();
+  const capabilityLabel = t(`models.marketplace.category.${model.capability}`);
+  const isChat = model.capability === "chat";
+  const description =
+    model.capability === "chat" && !model.descriptionKey.startsWith("models.")
+      ? model.descriptionKey
+      : t(model.descriptionKey);
+  const tags = model.tagKeys.map((tagKey) =>
+    tagKey.startsWith("models.") ? t(tagKey) : tagKey,
+  );
+  const details = model.detailKeys.map((detailKey) =>
+    detailKey.startsWith("models.") ? t(detailKey) : detailKey,
+  );
+
+  return (
+    <article
+      className={cn(
+        "flex min-h-[230px] flex-col rounded-2xl border bg-surface-0 p-4 transition-colors",
+        selected
+          ? "border-accent shadow-[0_0_0_1px_var(--color-accent)]"
+          : "border-border-subtle hover:border-border-hover",
+      )}
+    >
+      <div className="mb-3 flex items-start gap-3">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border-subtle bg-surface-2">
+          {isChat ? (
+            <ModelLogo model={model.name} provider={model.provider} size={20} />
+          ) : (
+            <Sparkles size={19} className="text-text-secondary" />
+          )}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <h3 className="truncate text-[14px] font-semibold text-text-primary">
+              {model.name}
+            </h3>
+            {selected && (
+              <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">
+                <Check size={11} />
+                {t("models.marketplace.current")}
+              </span>
+            )}
+          </div>
+          <div className="mt-1 text-[11px] text-text-tertiary">
+            {capabilityLabel} ·{" "}
+            {PROVIDER_META[model.provider]?.name ?? model.provider}
+          </div>
+        </div>
+      </div>
+
+      <p className="mb-3 line-clamp-3 text-[12px] leading-relaxed text-text-secondary">
+        {description}
+      </p>
+
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {tags.slice(0, 4).map((tag) => (
+          <span
+            key={tag}
+            className="rounded-full border border-border-subtle bg-surface-1 px-2 py-0.5 text-[10px] font-medium text-text-secondary"
+          >
+            {tag}
+          </span>
+        ))}
+      </div>
+
+      <div className="mb-4 space-y-1">
+        {details.slice(0, 2).map((detail) => (
+          <div
+            key={detail}
+            className="flex gap-1.5 text-[11px] leading-relaxed text-text-muted"
+          >
+            <span className="mt-[0.45em] h-1 w-1 shrink-0 rounded-full bg-text-tertiary" />
+            <span>{detail}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-auto">
+        {isChat ? (
+          <button
+            type="button"
+            disabled={selected}
+            onClick={() => {
+              if (!selected) onSelectModel(model.id);
+            }}
+            className={cn(
+              "inline-flex w-full items-center justify-center rounded-xl px-3 py-2 text-[12px] font-medium transition-colors",
+              selected
+                ? "cursor-default bg-surface-2 text-text-muted"
+                : "bg-accent text-accent-fg hover:bg-accent/90",
+            )}
+          >
+            {selected
+              ? t("models.marketplace.selected")
+              : t("models.marketplace.selectChat")}
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={selected}
+            onClick={() => {
+              if (!selected) onSelectImageModel(model.runtimeModelId);
+            }}
+            className={cn(
+              "inline-flex w-full items-center justify-center rounded-xl px-3 py-2 text-[12px] font-medium transition-colors",
+              selected
+                ? "cursor-default bg-surface-2 text-text-muted"
+                : "bg-accent text-accent-fg hover:bg-accent/90",
+            )}
+          >
+            {selected
+              ? t("models.marketplace.selected")
+              : t("models.marketplace.selectImage")}
+          </button>
+        )}
+      </div>
+    </article>
+  );
+}
+
 export function ModelsPage() {
   const { t } = useTranslation();
+  const location = useLocation();
+  const isMarketplaceRoute = location.pathname.includes("/models");
   const isDesktopClient = useMemo(
     () =>
       typeof navigator !== "undefined" &&
@@ -762,7 +1169,16 @@ export function ModelsPage() {
     },
   });
 
+  const { data: defaultImageModelData } = useQuery({
+    queryKey: ["desktop-default-image-model"],
+    queryFn: async () => {
+      const { data } = await getApiInternalDesktopDefaultImageModel();
+      return data as { modelId: string | null } | undefined;
+    },
+  });
+
   const currentModelId = defaultModelData?.modelId ?? "";
+  const currentImageModelId = defaultImageModelData?.modelId ?? "";
   const models = modelsData?.models ?? [];
   const { data: desktopReadyData } = useQuery({
     queryKey: ["desktop-ready"],
@@ -777,16 +1193,30 @@ export function ModelsPage() {
     mutationFn: async (modelId: string) => {
       userSwitchRef.current = true;
       const toastId = toast.loading(t("models.switchingModel"));
-      const { error } = await putApiInternalDesktopDefaultModel({
+      const { data, error } = await putApiInternalDesktopDefaultModel({
         body: { modelId },
       });
       if (error) {
-        toast.error(t("models.modelSwitchFailed"), { id: toastId });
+        const message =
+          typeof error === "object" &&
+          error !== null &&
+          "error" in error &&
+          typeof error.error === "string"
+            ? error.error
+            : t("models.modelSwitchFailed");
+        toast.error(message, { id: toastId });
+        userSwitchRef.current = false;
+        throw new Error(message);
+      }
+      if (data?.ok === false) {
+        const message = data.error ?? t("models.modelSwitchFailed");
+        toast.error(message, { id: toastId });
+        userSwitchRef.current = false;
         throw new Error("Failed to update model");
       }
-      toast.success(t("models.modelSwitched"), { id: toastId });
+      return { toastId };
     },
-    onSuccess: (_, modelId) => {
+    onSuccess: async ({ toastId }, modelId) => {
       track("workspace_change_model_change", {
         previous_provider_name: getProviderIdFromModelId(
           models,
@@ -796,7 +1226,40 @@ export function ModelsPage() {
         provider_name: getProviderIdFromModelId(models, modelId),
         model_name: modelId,
       });
-      queryClient.invalidateQueries({ queryKey: ["desktop-default-model"] });
+      await queryClient.refetchQueries({ queryKey: ["desktop-default-model"] });
+      queryClient.invalidateQueries({ queryKey: ["channels-live-status"] });
+      toast.success(t("models.modelSwitched"), { id: toastId });
+    },
+  });
+
+  const updateImageModel = useMutation({
+    mutationFn: async (modelId: string) => {
+      const toastId = toast.loading(t("models.switchingImageModel"));
+      const { data, error } = await putApiInternalDesktopDefaultImageModel({
+        body: { modelId },
+      });
+      if (error) {
+        const message =
+          typeof error === "object" &&
+          error !== null &&
+          "error" in error &&
+          typeof error.error === "string"
+            ? error.error
+            : t("models.imageModelSwitchFailed");
+        toast.error(message, { id: toastId });
+        throw new Error(message);
+      }
+      if (data?.ok === false) {
+        const message = data.error ?? t("models.imageModelSwitchFailed");
+        toast.error(message, { id: toastId });
+        throw new Error(message);
+      }
+      toast.success(t("models.imageModelSwitched"), { id: toastId });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({
+        queryKey: ["desktop-default-image-model"],
+      });
     },
   });
 
@@ -809,6 +1272,14 @@ export function ModelsPage() {
       setPendingSwitchModelId(modelId);
     },
     [currentModelId],
+  );
+
+  const handleSelectImageModel = useCallback(
+    (modelId: string) => {
+      if (modelId === currentImageModelId) return;
+      updateImageModel.mutate(modelId);
+    },
+    [currentImageModelId, updateImageModel],
   );
 
   // Detect backend auto-switch (ensureValidDefaultModel) and toast
@@ -922,6 +1393,41 @@ export function ModelsPage() {
     }
   }, [desktopReadyData?.workspacePath]);
 
+  if (isMarketplaceRoute) {
+    return (
+      <>
+        <MarketplacePage
+          models={models}
+          currentModelId={currentModelId}
+          currentImageModelId={currentImageModelId}
+          modelsLoading={modelsLoading}
+          modelsError={modelsError}
+          onSelectModel={handleSelectModel}
+          onSelectImageModel={handleSelectImageModel}
+          onRetry={() =>
+            queryClient.invalidateQueries({
+              queryKey: ["models"],
+            })
+          }
+          isDesktopClient={isDesktopClient}
+        />
+        {pendingSwitchModelId && (
+          <ModelSwitchConfirmDialog
+            modelName={
+              models.find((m) => m.id === pendingSwitchModelId)?.name ??
+              pendingSwitchModelId
+            }
+            onConfirm={() => {
+              updateModel.mutate(pendingSwitchModelId);
+              setPendingSwitchModelId(null);
+            }}
+            onCancel={() => setPendingSwitchModelId(null)}
+          />
+        )}
+      </>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto">
       <div
@@ -930,10 +1436,17 @@ export function ModelsPage() {
       >
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="heading-page">{t("models.pageTitle")}</h2>
-            <p className="heading-page-desc">{t("models.pageSubtitle")}</p>
+            <h2 className="heading-page">{t("layout.nav.settings")}</h2>
+            <p className="heading-page-desc">{t("settings.pageSubtitle")}</p>
           </div>
           <div className="flex items-center gap-2">
+            <Link
+              to="/workspace/models"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-[12px] font-medium text-text-primary hover:border-border-hover hover:bg-surface-1 transition-colors"
+            >
+              <Sparkles size={13} />
+              {t("models.marketplace.backToMarketplace")}
+            </Link>
             <button
               type="button"
               onClick={() => {
@@ -1462,9 +1975,8 @@ function ByokProviderDetail({
     !dbProvider?.hasApiKey,
   );
   const isMiniMax = providerId === "minimax";
-  const isOllama = providerId === "ollama";
   const hostBridge = getModelsHostInvokeBridge();
-  const effectiveApiKey = isOllama ? OLLAMA_DUMMY_API_KEY : apiKey.trim();
+  const effectiveApiKey = apiKey.trim();
 
   const { data: minimaxOauthStatus } = useQuery({
     queryKey: ["minimax-oauth-status"],
@@ -1573,15 +2085,9 @@ function ByokProviderDetail({
 
   const isOAuthConnected =
     isOAuthProvider && oauthProviderStatus.data?.connected === true;
-  const canSubmitApiKeyConfig = Boolean(
-    isOllama || effectiveApiKey || hasSavedApiKey,
-  );
-  const canRefreshModels = Boolean(
-    isOllama || effectiveApiKey || hasSavedApiKey,
-  );
-  const isProviderConfigured = Boolean(
-    isOllama || hasSavedAccess || isOAuthConnected,
-  );
+  const canSubmitApiKeyConfig = Boolean(effectiveApiKey || hasSavedApiKey);
+  const canRefreshModels = Boolean(effectiveApiKey || hasSavedApiKey);
+  const isProviderConfigured = Boolean(hasSavedAccess || isOAuthConnected);
 
   // ── Z.AI Coding Plan state ───────────────────────────
   const isZaiProvider = providerId === "glm";
@@ -1674,7 +2180,7 @@ function ByokProviderDetail({
       const models = result.models ?? [];
       setVerifiedModels(models);
 
-      if (hasSavedAccess || isOllama) {
+      if (hasSavedAccess) {
         await saveProvider(providerId, {
           apiKey: effectiveApiKey || undefined,
           baseUrl: baseUrl || null,
@@ -1701,7 +2207,7 @@ function ByokProviderDetail({
   const saveMutation = useMutation({
     mutationFn: async () => {
       let models = displayModels;
-      if (isOllama || effectiveApiKey || hasSavedApiKey) {
+      if (effectiveApiKey || hasSavedApiKey) {
         const result = await verifyApiKey(
           providerId,
           effectiveApiKey,
@@ -2194,86 +2700,83 @@ function ByokProviderDetail({
 
       {!isOAuthConnected && (!isMiniMax || authMode === "apiKey") && (
         <div className="space-y-4 mb-6">
-          {!isOllama && (
-            <div>
-              <label
-                htmlFor={`apikey-${providerId}`}
-                className="block text-[12px] font-medium text-text-secondary mb-1.5"
-              >
-                {t("models.byok.apiKey")}
-              </label>
-              {dbProvider?.hasApiKey && !isEditingApiKey ? (
-                <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-brand-primary)]/25 bg-[var(--color-brand-subtle)] px-3 py-2.5">
-                  <div className="min-w-0">
-                    <div className="text-[12px] font-medium text-text-primary">
-                      {t("models.byok.apiKeySaved")}
-                    </div>
-                    <div className="text-[10px] text-text-muted">
-                      {t("models.byok.apiKeySavedHint")}
-                    </div>
+          <div>
+            <label
+              htmlFor={`apikey-${providerId}`}
+              className="block text-[12px] font-medium text-text-secondary mb-1.5"
+            >
+              {t("models.byok.apiKey")}
+            </label>
+            {dbProvider?.hasApiKey && !isEditingApiKey ? (
+              <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--color-brand-primary)]/25 bg-[var(--color-brand-subtle)] px-3 py-2.5">
+                <div className="min-w-0">
+                  <div className="text-[12px] font-medium text-text-primary">
+                    {t("models.byok.apiKeySaved")}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setIsEditingApiKey(true)}
-                    className="shrink-0 rounded-lg border border-border px-3 py-2 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-2"
-                  >
-                    {t("models.byok.changeApiKey")}
-                  </button>
+                  <div className="text-[10px] text-text-muted">
+                    {t("models.byok.apiKeySavedHint")}
+                  </div>
                 </div>
-              ) : (
-                <div className="flex gap-2">
-                  <input
-                    id={`apikey-${providerId}`}
-                    type="password"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder={meta.apiKeyPlaceholder}
-                    className="flex-1 rounded-lg border border-border bg-surface-0 px-3 py-2 text-[12px] text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-primary)]/20 focus:border-[var(--color-brand-primary)]/30"
-                  />
-                  <button
-                    type="button"
-                    disabled={!apiKey || verifyMutation.isPending}
-                    onClick={() => verifyMutation.mutate()}
-                    className={cn(
-                      "px-3 py-2 rounded-lg border border-border text-[11px] font-medium transition-colors",
-                      apiKey
-                        ? "text-text-secondary hover:bg-surface-2"
-                        : "text-text-muted cursor-not-allowed",
-                    )}
-                  >
-                    {verifyMutation.isPending ? (
-                      <Loader2 size={12} className="animate-spin" />
-                    ) : verifyMutation.isSuccess &&
-                      verifyMutation.data?.valid ? (
-                      <Check size={12} className="text-emerald-600" />
-                    ) : (
-                      t("models.byok.verify")
-                    )}
-                  </button>
-                </div>
-              )}
-              {verifyMutation.isSuccess && (
-                <div
+                <button
+                  type="button"
+                  onClick={() => setIsEditingApiKey(true)}
+                  className="shrink-0 rounded-lg border border-border px-3 py-2 text-[11px] font-medium text-text-secondary transition-colors hover:bg-surface-2"
+                >
+                  {t("models.byok.changeApiKey")}
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <input
+                  id={`apikey-${providerId}`}
+                  type="password"
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder={meta.apiKeyPlaceholder}
+                  className="flex-1 rounded-lg border border-border bg-surface-0 px-3 py-2 text-[12px] text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-primary)]/20 focus:border-[var(--color-brand-primary)]/30"
+                />
+                <button
+                  type="button"
+                  disabled={!apiKey || verifyMutation.isPending}
+                  onClick={() => verifyMutation.mutate()}
                   className={cn(
-                    "mt-1.5 text-[10px]",
-                    verifyMutation.data?.valid
-                      ? "text-emerald-600"
-                      : "text-red-500",
+                    "px-3 py-2 rounded-lg border border-border text-[11px] font-medium transition-colors",
+                    apiKey
+                      ? "text-text-secondary hover:bg-surface-2"
+                      : "text-text-muted cursor-not-allowed",
                   )}
                 >
-                  {verifyMutation.data?.valid
-                    ? t("models.byok.keyValid", {
-                        count: verifyMutation.data.models?.length ?? 0,
-                      })
-                    : t("models.byok.keyInvalid", {
-                        error:
-                          verifyMutation.data?.error ??
-                          t("models.byok.keyInvalidUnknown"),
-                      })}
-                </div>
-              )}
-            </div>
-          )}
+                  {verifyMutation.isPending ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : verifyMutation.isSuccess && verifyMutation.data?.valid ? (
+                    <Check size={12} className="text-emerald-600" />
+                  ) : (
+                    t("models.byok.verify")
+                  )}
+                </button>
+              </div>
+            )}
+            {verifyMutation.isSuccess && (
+              <div
+                className={cn(
+                  "mt-1.5 text-[10px]",
+                  verifyMutation.data?.valid
+                    ? "text-emerald-600"
+                    : "text-red-500",
+                )}
+              >
+                {verifyMutation.data?.valid
+                  ? t("models.byok.keyValid", {
+                      count: verifyMutation.data.models?.length ?? 0,
+                    })
+                  : t("models.byok.keyInvalid", {
+                      error:
+                        verifyMutation.data?.error ??
+                        t("models.byok.keyInvalidUnknown"),
+                    })}
+              </div>
+            )}
+          </div>
           <div>
             <label
               htmlFor={`baseurl-${providerId}`}
@@ -2309,26 +2812,6 @@ function ByokProviderDetail({
               placeholder={meta.defaultProxyUrl || "https://api.example.com/v1"}
               className="w-full rounded-lg border border-border bg-surface-0 px-3 py-2 text-[12px] text-text-primary placeholder:text-text-muted/50 focus:outline-none focus:ring-2 focus:ring-[var(--color-brand-primary)]/20 focus:border-[var(--color-brand-primary)]/30"
             />
-            {isOllama && verifyMutation.isSuccess && (
-              <div
-                className={cn(
-                  "mt-1.5 text-[10px]",
-                  verifyMutation.data?.valid
-                    ? "text-emerald-600"
-                    : "text-red-500",
-                )}
-              >
-                {verifyMutation.data?.valid
-                  ? t("models.byok.keyValid", {
-                      count: verifyMutation.data.models?.length ?? 0,
-                    })
-                  : t("models.byok.keyInvalid", {
-                      error:
-                        verifyMutation.data?.error ??
-                        t("models.byok.keyInvalidUnknown"),
-                    })}
-              </div>
-            )}
           </div>
         </div>
       )}

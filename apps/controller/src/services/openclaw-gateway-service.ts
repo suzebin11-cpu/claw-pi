@@ -141,6 +141,9 @@ function resolveOpenClawAccountId(
   channelType: string,
   accountId: string,
 ): string {
+  if (channelType === "qqbot") {
+    return "default";
+  }
   if (channelType === "dingtalk" && accountId === "default") {
     return "__default__";
   }

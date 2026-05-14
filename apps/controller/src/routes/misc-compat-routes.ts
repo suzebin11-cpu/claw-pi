@@ -252,18 +252,10 @@ export function registerMiscCompatRoutes(
               : openclawConfig.agents.defaults?.model?.primary));
 
       // Prefer the runtime-model state file (the source of truth used by the
-      // sidecar's nexu-runtime-model plugin) over openclaw.json. The
-      // `setDefaultModel` flow intentionally does NOT push a new openclaw.json
-      // — it only updates `nexu-runtime-model.json` to avoid tearing down
-      // every channel monitor on every model switch. Reading openclaw.json
-      // alone here would mean this OpenAI-compat entry kept routing the
-      // DingTalk traffic to the previous default until the next unrelated
-      // syncAll() finally flushed the new primary into openclaw.json. That
-      // showed up to the user as "切了模 / sidecar 用新模, but DingTalk 仍
-      // 在用旧模" — different surfaces seeing different models for the
-      // same switch. The runtime-model file is updated synchronously by
-      // syncRuntimeModelOnly() and is always at least as fresh as
-      // openclaw.json, so preferring it gives both surfaces the same answer.
+      // sidecar's nexu-runtime-model plugin) over openclaw.json. Model
+      // switching now writes both files so Dragon Brain and channel runtime
+      // agree, but the runtime state file is still the freshest source while a
+      // config write/reload is in flight.
       const runtimeModelRef =
         await container.runtimeModelStateService.getEffectiveModelId();
       const rawModel = runtimeModelRef ?? agentModelFromConfig;

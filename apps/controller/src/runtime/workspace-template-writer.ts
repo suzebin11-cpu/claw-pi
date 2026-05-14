@@ -1,5 +1,12 @@
 import { existsSync } from "node:fs";
-import { cp, mkdir, readdir, stat } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  readFile,
+  readdir,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type { ControllerEnv } from "../app/env.js";
 import { logger } from "../lib/logger.js";
@@ -8,6 +15,25 @@ interface BotInfo {
   id: string;
   status: string;
 }
+
+const LEGACY_AGENTS_EVERY_SESSION_BLOCK = `Before doing anything else:
+
+1. Read \`SOUL.md\` — this is who you are
+2. Read \`USER.md\` — this is who you're helping
+3. Read \`memory/YYYY-MM-DD.md\` (today + yesterday) for recent context
+4. **If in MAIN SESSION** (direct chat with your human): Also read \`MEMORY.md\`
+
+Don't ask permission. Just do it.`;
+
+const LIGHTWEIGHT_AGENTS_EVERY_SESSION_BLOCK = `Keep startup lightweight. Before answering, do **not** blindly read memory files.
+
+Use these files only when the current request needs identity, user preferences,
+recent context, or long-term memory:
+
+- \`SOUL.md\` — who you are
+- \`USER.md\` — who you're helping
+- \`memory/YYYY-MM-DD.md\` — recent context
+- \`MEMORY.md\` — long-term memory, main sessions only`;
 
 export class WorkspaceTemplateWriter {
   constructor(private readonly env: ControllerEnv) {}
@@ -54,6 +80,9 @@ export class WorkspaceTemplateWriter {
         const targetPath = path.join(workspaceDir, entry.name);
 
         if (existsSync(targetPath)) {
+          if (entry.name === "AGENTS.md") {
+            await this.migrateLegacyAgentsTemplate(targetPath, botId);
+          }
           continue;
         }
 
@@ -71,6 +100,37 @@ export class WorkspaceTemplateWriter {
       logger.error(
         { botId, sourceDir, error: err instanceof Error ? err.message : err },
         "failed to seed platform templates",
+      );
+    }
+  }
+
+  private async migrateLegacyAgentsTemplate(
+    targetPath: string,
+    botId: string,
+  ): Promise<void> {
+    try {
+      const content = await readFile(targetPath, "utf8");
+      if (!content.includes(LEGACY_AGENTS_EVERY_SESSION_BLOCK)) {
+        return;
+      }
+
+      const nextContent = content.replace(
+        LEGACY_AGENTS_EVERY_SESSION_BLOCK,
+        LIGHTWEIGHT_AGENTS_EVERY_SESSION_BLOCK,
+      );
+      if (nextContent === content) {
+        return;
+      }
+
+      await writeFile(targetPath, nextContent, "utf8");
+      logger.info(
+        { botId, targetPath },
+        "migrated legacy AGENTS.md startup instructions",
+      );
+    } catch (err) {
+      logger.warn(
+        { botId, targetPath, error: err instanceof Error ? err.message : err },
+        "failed to migrate legacy AGENTS.md startup instructions",
       );
     }
   }

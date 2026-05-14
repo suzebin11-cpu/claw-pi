@@ -150,7 +150,9 @@ describe("ModelProviderService", () => {
     expect(
       models.models.some((model) => model.id === "link/gemini-3.1-pro-preview"),
     ).toBe(true);
-    expect(cloudStatus.models).toHaveLength(1);
+    expect(cloudStatus.models.map((model) => model.id)).toEqual([
+      "gemini-3.1-pro-preview",
+    ]);
     expect(after).toBe(before);
   });
 

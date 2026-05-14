@@ -23,6 +23,12 @@ export interface OpenClawProcessLike {
   isAlive(): boolean;
 }
 
+export type OpenClawWsCloseSnapshot = {
+  code: number;
+  reason: string;
+  at: number;
+};
+
 // ---------------------------------------------------------------------------
 // Device identity helpers (Ed25519, matching openclaw protocol v3)
 // ---------------------------------------------------------------------------
@@ -359,6 +365,7 @@ export class OpenClawWsClient {
   private tickTimer: NodeJS.Timeout | null = null;
   private hardTimeoutTrippedAt: number | null = null;
   private connectTimer: NodeJS.Timeout | null = null;
+  private lastClose: OpenClawWsCloseSnapshot | null = null;
   private onConnectedCallback: (() => void) | null = null;
   private onGatewayShutdownCallback:
     | ((payload: {
@@ -412,6 +419,10 @@ export class OpenClawWsClient {
     return this._connected;
   }
 
+  getLastClose(): OpenClawWsCloseSnapshot | null {
+    return this.lastClose;
+  }
+
   /** Open a WebSocket and begin the handshake. Safe to call multiple times. */
   connect(): void {
     if (this.closed || this.ws) {
@@ -437,6 +448,11 @@ export class OpenClawWsClient {
     };
 
     ws.onclose = (event) => {
+      this.lastClose = {
+        code: event.code,
+        reason: event.reason,
+        at: Date.now(),
+      };
       const reasonText = event.reason.trim().toLowerCase();
       if (
         event.code === 1008 &&
@@ -706,6 +722,7 @@ export class OpenClawWsClient {
       resolve: (helloOk) => {
         this._connected = true;
         this.backoffMs = 500;
+        this.lastClose = null;
 
         const authInfo =
           helloOk && typeof helloOk === "object"

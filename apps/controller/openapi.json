@@ -1554,6 +1554,9 @@
                     "openclawDashboardUrl": {
                       "type": "string"
                     },
+                    "openclawChatUrl": {
+                      "type": "string"
+                    },
                     "bootTimestamp": {
                       "type": "number"
                     }
@@ -2092,6 +2095,9 @@
                     },
                     "configPushed": {
                       "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -3361,6 +3367,84 @@
         "responses": {
           "200": {
             "description": "Set default model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "modelId": {
+                      "type": "string"
+                    },
+                    "configPushed": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "modelId",
+                    "configPushed"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/internal/desktop/default-image-model": {
+      "get": {
+        "tags": [
+          "Desktop"
+        ],
+        "responses": {
+          "200": {
+            "description": "Default image generation model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "modelId": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  },
+                  "required": [
+                    "modelId"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Desktop"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "modelId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "modelId"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Set default image generation model",
             "content": {
               "application/json": {
                 "schema": {
@@ -5487,6 +5571,9 @@
                           "lastError": {
                             "type": "string",
                             "nullable": true
+                          },
+                          "stale": {
+                            "type": "boolean"
                           }
                         },
                         "required": [
@@ -9819,6 +9906,10 @@
                         "defaultModelId": {
                           "type": "string",
                           "default": "link/gpt-5.4-mini"
+                        },
+                        "defaultImageGenerationModelId": {
+                          "type": "string",
+                          "default": "clawpi-image/gemini-3.1-flash-image-preview"
                         }
                       }
                     }
@@ -9878,6 +9969,10 @@
                   "defaultModelId": {
                     "type": "string",
                     "default": "link/gpt-5.4-mini"
+                  },
+                  "defaultImageGenerationModelId": {
+                    "type": "string",
+                    "default": "clawpi-image/gemini-3.1-flash-image-preview"
                   }
                 }
               }
@@ -9931,6 +10026,10 @@
                         "defaultModelId": {
                           "type": "string",
                           "default": "link/gpt-5.4-mini"
+                        },
+                        "defaultImageGenerationModelId": {
+                          "type": "string",
+                          "default": "clawpi-image/gemini-3.1-flash-image-preview"
                         }
                       }
                     }

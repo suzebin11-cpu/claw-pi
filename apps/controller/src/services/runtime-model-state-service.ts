@@ -23,4 +23,21 @@ export class RuntimeModelStateService {
       return null;
     }
   }
+
+  async waitForEffectiveModelId(
+    expectedModelId: string,
+    opts?: { timeoutMs?: number; intervalMs?: number },
+  ): Promise<{ ok: boolean; modelId: string | null }> {
+    const timeoutMs = opts?.timeoutMs ?? 5000;
+    const intervalMs = opts?.intervalMs ?? 150;
+    const deadline = Date.now() + timeoutMs;
+    let current = await this.getEffectiveModelId();
+
+    while (current !== expectedModelId && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      current = await this.getEffectiveModelId();
+    }
+
+    return { ok: current === expectedModelId, modelId: current };
+  }
 }

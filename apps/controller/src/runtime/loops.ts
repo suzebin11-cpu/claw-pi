@@ -14,6 +14,28 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const GATEWAY_AUTH_CLOSE_MAX_AGE_MS = 120_000;
+const GATEWAY_AUTH_RESTART_COOLDOWN_MS = 120_000;
+
+function hasRecentGatewayAuthFailure(
+  wsClient: OpenClawWsClient | undefined,
+): boolean {
+  const lastClose = wsClient?.getLastClose();
+  if (!lastClose) {
+    return false;
+  }
+  if (Date.now() - lastClose.at > GATEWAY_AUTH_CLOSE_MAX_AGE_MS) {
+    return false;
+  }
+  const reason = lastClose.reason.trim().toLowerCase();
+  return (
+    lastClose.code === 1008 &&
+    (reason.includes("auth") ||
+      reason.includes("token") ||
+      reason.includes("unauthorized"))
+  );
+}
+
 export function startSyncLoop(params: {
   env: ControllerEnv;
   state: ControllerRuntimeState;
@@ -60,6 +82,7 @@ export function startHealthLoop(params: {
   wsClient?: OpenClawWsClient;
 }): () => void {
   let stopped = false;
+  let lastGatewayAuthRestartAt = 0;
 
   const run = async () => {
     while (!stopped) {
@@ -68,8 +91,24 @@ export function startHealthLoop(params: {
       const result = await params.runtimeHealth.probe();
       params.state.lastGatewayProbeAt = checkedAt;
       if (result.ok) {
-        params.state.gatewayStatus = "active";
-        params.state.lastGatewayError = null;
+        if (
+          !params.wsClient?.isConnected() &&
+          hasRecentGatewayAuthFailure(params.wsClient)
+        ) {
+          params.state.gatewayStatus = "degraded";
+          params.state.lastGatewayError = "gateway_auth_failed";
+          const now = Date.now();
+          if (
+            now - lastGatewayAuthRestartAt >
+            GATEWAY_AUTH_RESTART_COOLDOWN_MS
+          ) {
+            lastGatewayAuthRestartAt = now;
+            params.processManager?.restartForHealth();
+          }
+        } else {
+          params.state.gatewayStatus = "active";
+          params.state.lastGatewayError = null;
+        }
         // Gateway just became reachable — nudge WS client to connect now
         // instead of waiting for the backoff timer.
         if (prevGateway !== "active") {

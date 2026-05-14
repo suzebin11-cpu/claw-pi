@@ -161,6 +161,9 @@ describe("compileOpenClawConfig", () => {
     expect(result.agents.list[0]).toMatchObject({
       id: "bot-1",
       workspace: "/tmp/openclaw/agents/bot-1",
+      thinkingDefault: "off",
+      reasoningDefault: "off",
+      fastModeDefault: true,
     });
     expect(result.agents.list[0]?.model).toBeUndefined();
     expect(result.models?.providers.openai?.models[0]?.id).toBe("gpt-4o");
@@ -169,6 +172,9 @@ describe("compileOpenClawConfig", () => {
     );
     expect(result.models?.providers.link?.baseUrl).toBe(
       "https://link.example.com/v1",
+    );
+    expect(result.models?.providers.openai?.baseUrl).toBe(
+      "https://api.openai.com/v1",
     );
     expect(result.channels.slack?.accounts["slack-A123-T123"]).toMatchObject({
       mode: "http",
@@ -185,6 +191,124 @@ describe("compileOpenClawConfig", () => {
       "/tmp/openclaw/skills",
       "/tmp/.agents/skills",
     ]);
+    expect(result.agents.defaults).toMatchObject({
+      thinkingDefault: "off",
+      contextInjection: "continuation-skip",
+      bootstrapMaxChars: 3500,
+      bootstrapTotalMaxChars: 12000,
+      bootstrapPromptTruncationWarning: "off",
+      contextTokens: 64000,
+      contextPruning: {
+        mode: "cache-ttl",
+        keepLastAssistants: 4,
+        minPrunableToolChars: 2000,
+      },
+      compaction: {
+        maxHistoryShare: 0.35,
+        keepRecentTokens: 8000,
+        memoryFlush: {
+          softThresholdTokens: 12000,
+          forceFlushTranscriptBytes: 120000,
+        },
+      },
+    });
+  });
+
+  it("does not compile token gateway auth when the controller has no gateway token", () => {
+    const result = compileOpenClawConfig(
+      createConfig({
+        runtime: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+            authMode: "token",
+          },
+          defaultModelId: "anthropic/claude-sonnet-4",
+        },
+      }),
+      createEnv({ openclawGatewayToken: undefined }),
+    );
+
+    expect(result.gateway.auth).toEqual({ mode: "none" });
+  });
+
+  it("does not compile cloud image generation while image models are paused", () => {
+    const result = compileOpenClawConfig(
+      createConfig({
+        runtime: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+            authMode: "token",
+          },
+          defaultModelId: "anthropic/claude-sonnet-4",
+          defaultImageGenerationModelId: "clawpi-image/gpt-image-2",
+        },
+        providers: [],
+      }),
+      createEnv(),
+    );
+
+    expect(result.agents.defaults?.imageGenerationModel).toBeUndefined();
+    expect(result.plugins?.entries?.["clawpi-image"]).toBeUndefined();
+    expect(result.models?.providers.link).toMatchObject({
+      baseUrl: "https://link.example.com/v1",
+      apiKey: "link-key",
+      api: "openai-completions",
+    });
+    expect(result.models?.providers.google).toBeUndefined();
+  });
+
+  it("does not select unavailable Link chat models as OpenClaw defaults", () => {
+    const result = compileOpenClawConfig(
+      createConfig({
+        runtime: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+            authMode: "token",
+          },
+          defaultModelId: "link/gpt-5.5",
+        },
+        bots: [
+          {
+            ...createConfig().bots[0],
+            modelId: "link/gpt-5.5",
+          },
+        ],
+        providers: [],
+        desktop: {
+          selectedModelId: "link/gpt-5.5",
+          cloud: {
+            linkUrl: "https://link.example.com",
+            apiKey: null,
+            models: [
+              {
+                id: "gpt-5.4-mini",
+                name: "GPT-5.4 Mini",
+                provider: "openai",
+              },
+            ],
+          },
+        },
+      }),
+      createEnv(),
+    );
+
+    expect(result.models?.providers.link).toBeUndefined();
+    expect(result.agents.defaults?.models).toMatchObject({
+      "link/gpt-5.4-mini": { alias: "GPT-5.4 Mini" },
+    });
+    expect(result.agents.defaults?.models).not.toHaveProperty("link/gpt-5.5");
+    expect(result.agents.defaults?.models).not.toHaveProperty(
+      "clawpi-image/gpt-image-2",
+    );
+    expect(result.agents.defaults?.models).not.toHaveProperty(
+      "clawpi-image/gemini-3.1-flash-image-preview",
+    );
+    expect(result.agents.defaults?.model).not.toEqual({
+      primary: "link/gpt-5.5",
+    });
   });
 
   it("compiles qqbot channels and enables the canonical qq plugin id", () => {
@@ -356,7 +480,7 @@ describe("compileOpenClawConfig", () => {
       agentId: "bot-1",
       match: {
         channel: "dingtalk-connector",
-        accountId: "default",
+        accountId: "__default__",
       },
     });
     expect(result.plugins?.allow).toContain("dingtalk-connector");

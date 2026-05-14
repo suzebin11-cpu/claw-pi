@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -428,6 +428,185 @@ describe("controller route compatibility", () => {
     };
     expect(payload.channelType).toBe("qqbot");
     expect(payload.appId).toBe("123456");
+  });
+
+  it("rejects default model switches that OpenClaw cannot resolve", async () => {
+    const app = createApp(container);
+
+    const response = await app.request("/api/internal/desktop/default-model", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "link/gpt-5.5" }),
+    });
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      modelId: string;
+      error?: string;
+    };
+    expect(payload).toMatchObject({
+      ok: false,
+      modelId: "link/gpt-5.5",
+    });
+    expect(payload.error).toContain("模型服务尚未就绪");
+
+    const config = await container.configStore.getConfig();
+    expect(config.runtime.defaultModelId).not.toBe("link/gpt-5.5");
+  });
+
+  it("syncs default model switches into runtime state without rewriting OpenClaw config", async () => {
+    await container.configStore.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://link.example.com",
+      apiKey: "link-key",
+      models: [
+        { id: "gpt-5.4-mini", name: "GPT-5.4 Mini", provider: "openai" },
+        { id: "gpt-5.5", name: "GPT-5.5", provider: "openai" },
+      ],
+    });
+    await container.configStore.setDefaultModel("link/gpt-5.4-mini");
+    await container.openclawSyncService.syncAllImmediate();
+    const openclawConfigBefore = await readFile(
+      container.env.openclawConfigPath,
+      "utf8",
+    );
+    const sessionsPath = path.join(
+      container.env.openclawStateDir,
+      "agents",
+      "main",
+      "sessions",
+      "sessions.json",
+    );
+    await mkdir(path.dirname(sessionsPath), { recursive: true });
+    await writeFile(
+      sessionsPath,
+      `${JSON.stringify(
+        {
+          "agent:main:direct:test": {
+            sessionId: "session-1",
+            updatedAt: 1,
+            modelProvider: "link",
+            model: "gpt-5.4-mini",
+            contextTokens: 1000,
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+    const app = createApp(container);
+
+    const response = await app.request("/api/internal/desktop/default-model", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ modelId: "link/gpt-5.5" }),
+    });
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      modelId: "link/gpt-5.5",
+    });
+
+    const config = await container.configStore.getConfig();
+    expect(config.runtime.defaultModelId).toBe("link/gpt-5.5");
+
+    await expect(
+      readFile(container.env.openclawConfigPath, "utf8"),
+    ).resolves.toBe(openclawConfigBefore);
+
+    const sessionStore = JSON.parse(
+      await readFile(sessionsPath, "utf8"),
+    ) as Record<
+      string,
+      {
+        providerOverride?: string;
+        modelOverride?: string;
+        modelProvider?: string;
+        model?: string;
+        contextTokens?: number;
+      }
+    >;
+    expect(sessionStore["agent:main:direct:test"]).toMatchObject({
+      providerOverride: "link",
+      modelOverride: "gpt-5.5",
+    });
+    expect(sessionStore["agent:main:direct:test"]?.modelProvider).toBe(
+      undefined,
+    );
+    expect(sessionStore["agent:main:direct:test"]?.model).toBe(undefined);
+    expect(sessionStore["agent:main:direct:test"]?.contextTokens).toBe(
+      undefined,
+    );
+
+    const runtimeModelState = JSON.parse(
+      await readFile(container.env.openclawRuntimeModelStatePath, "utf8"),
+    ) as { selectedModelRef?: string };
+    expect(runtimeModelState.selectedModelRef).toBe("link/gpt-5.5");
+  });
+
+  it("rejects image model switches while image models are paused", async () => {
+    const app = createApp(container);
+
+    const response = await app.request(
+      "/api/internal/desktop/default-image-model",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelId: "clawpi-image/gpt-image-2" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    const payload = (await response.json()) as {
+      ok: boolean;
+      modelId: string;
+      error?: string;
+    };
+    expect(payload).toMatchObject({
+      ok: false,
+      modelId: "clawpi-image/gpt-image-2",
+    });
+    expect(payload.error).toContain("当前不支持生图模型");
+
+    const config = await container.configStore.getConfig();
+    expect(config.runtime.defaultImageGenerationModelId).not.toBe(
+      "clawpi-image/gpt-image-2",
+    );
+  });
+
+  it("still rejects image model switches after Link provider credentials exist while image models are paused", async () => {
+    await container.configStore.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://link.example.com",
+      apiKey: "link-key",
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", provider: "openai" }],
+    });
+    const app = createApp(container);
+
+    const response = await app.request(
+      "/api/internal/desktop/default-image-model",
+      {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ modelId: "gpt-image-2" }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: false,
+      modelId: "gpt-image-2",
+    });
+
+    const config = await container.configStore.getConfig();
+    expect(config.runtime.defaultImageGenerationModelId).not.toBe(
+      "clawpi-image/gpt-image-2",
+    );
   });
 
   it("supports wecom connect when the plugin is installed", async () => {

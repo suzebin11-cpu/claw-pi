@@ -204,8 +204,39 @@ const agentsConfigSchema = z.object({
       // Subagents
       subagents: subagentsSchema.optional(),
       // Context and bootstrap
+      contextInjection: z.enum(["always", "continuation-skip"]).optional(),
       contextTokens: z.number().optional(),
       bootstrapMaxChars: z.number().optional(),
+      bootstrapTotalMaxChars: z.number().optional(),
+      bootstrapPromptTruncationWarning: z
+        .enum(["off", "once", "always"])
+        .optional(),
+      contextPruning: z
+        .object({
+          mode: z.enum(["off", "cache-ttl"]).optional(),
+          ttl: z.string().optional(),
+          keepLastAssistants: z.number().optional(),
+          softTrimRatio: z.number().optional(),
+          hardClearRatio: z.number().optional(),
+          minPrunableToolChars: z.number().optional(),
+          softTrim: z
+            .object({
+              maxChars: z.number().optional(),
+              headChars: z.number().optional(),
+              tailChars: z.number().optional(),
+            })
+            .passthrough()
+            .optional(),
+          hardClear: z
+            .object({
+              enabled: z.boolean().optional(),
+              placeholder: z.string().optional(),
+            })
+            .passthrough()
+            .optional(),
+        })
+        .passthrough()
+        .optional(),
       userTimezone: z.string().optional(),
       timeFormat: z.enum(["12h", "24h"]).optional(),
       // Max concurrent

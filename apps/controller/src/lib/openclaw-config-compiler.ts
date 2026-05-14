@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "@nexu/shared";
-import { openclawConfigSchema } from "@nexu/shared";
+import { openclawConfigSchema, selectPreferredModel } from "@nexu/shared";
 import type { ControllerEnv } from "../app/env.js";
 import type { OAuthConnectionState } from "../runtime/openclaw-auth-profiles-store.js";
 import type { NexuConfig } from "../store/schemas.js";
@@ -9,6 +9,10 @@ import {
   compileChannelsConfig,
   resolveManagedChannelPluginId,
 } from "./channel-binding-compiler.js";
+import {
+  type DesktopCloudModel,
+  normalizeDesktopCloudModels,
+} from "./desktop-cloud-models.js";
 import { normalizeProviderBaseUrl } from "./provider-base-url.js";
 
 export type { OAuthConnectionState };
@@ -115,6 +119,44 @@ function isDesktopCloudConfig(value: unknown): value is {
     typeof candidate.apiKey === "string" &&
     Array.isArray(candidate.models)
   );
+}
+
+function getDesktopCloudModelCatalog(
+  config: NexuConfig,
+): DesktopCloudModel[] | undefined {
+  const cloud = config.desktop.cloud;
+  if (typeof cloud !== "object" || cloud === null) {
+    return undefined;
+  }
+
+  const models = (cloud as Record<string, unknown>).models;
+  if (!Array.isArray(models)) {
+    return undefined;
+  }
+
+  const catalog: DesktopCloudModel[] = [];
+  for (const model of models) {
+    if (typeof model !== "object" || model === null) {
+      continue;
+    }
+
+    const candidate = model as Record<string, unknown>;
+    if (typeof candidate.id !== "string") {
+      continue;
+    }
+    if (typeof candidate.name !== "string") {
+      continue;
+    }
+
+    catalog.push({
+      id: candidate.id,
+      name: candidate.name,
+      provider:
+        typeof candidate.provider === "string" ? candidate.provider : undefined,
+    });
+  }
+
+  return catalog;
 }
 
 function getDesktopSelectedModel(config: NexuConfig): string | null {
@@ -276,31 +318,20 @@ function compileModelsConfig(
   const desktopCloud = isDesktopCloudConfig(config.desktop.cloud)
     ? config.desktop.cloud
     : null;
-  if (desktopCloud && desktopCloud.models.length > 0) {
+  const desktopCloudModels = normalizeDesktopCloudModels(desktopCloud?.models);
+  if (desktopCloud && desktopCloudModels.length > 0) {
     const linkBaseUrl =
       normalizeProviderBaseUrl(desktopCloud.linkUrl) ?? desktopCloud.linkUrl;
-    const hasGeminiModels = desktopCloud.models.some((m) =>
-      /gemini/i.test(m.id),
-    );
 
     providers.link = {
       baseUrl: `${linkBaseUrl}/v1`,
       apiKey: desktopCloud.apiKey,
       api: "openai-completions",
       headers: LINK_PROVIDER_HEADERS,
-      models: desktopCloud.models.map((model) =>
+      models: desktopCloudModels.map((model) =>
         buildModelEntry(model.id, model.name),
       ),
     };
-
-    if (hasGeminiModels) {
-      providers.google = {
-        baseUrl: `${linkBaseUrl}/v1beta`,
-        apiKey: desktopCloud.apiKey,
-        api: "google-generative-ai",
-        models: [],
-      };
-    }
   }
 
   return Object.keys(providers).length > 0
@@ -313,16 +344,28 @@ function compileModelsConfig(
 
 function compileModelAllowlist(
   modelsConfig: OpenClawConfig["models"],
+  config: NexuConfig,
 ): Record<string, { alias: string }> | undefined {
-  if (!modelsConfig?.providers) return undefined;
-
   const allowlist: Record<string, { alias: string }> = {};
 
-  for (const [providerKey, provider] of Object.entries(
-    modelsConfig.providers,
+  if (modelsConfig?.providers) {
+    for (const [providerKey, provider] of Object.entries(
+      modelsConfig.providers,
+    )) {
+      for (const model of provider.models) {
+        allowlist[`${providerKey}/${model.id}`] = {
+          alias: model.name ?? model.id,
+        };
+      }
+    }
+  }
+
+  for (const model of normalizeDesktopCloudModels(
+    getDesktopCloudModelCatalog(config),
   )) {
-    for (const model of provider.models) {
-      allowlist[`${providerKey}/${model.id}`] = {
+    const modelRef = `link/${model.id}`;
+    if (!allowlist[modelRef]) {
+      allowlist[modelRef] = {
         alias: model.name ?? model.id,
       };
     }
@@ -376,6 +419,49 @@ export function collectAvailableRuntimeModelRefs(
   }
 
   return [...dedup.values()];
+}
+
+function resolveAvailableRuntimeModel(
+  desiredRef: string,
+  availableRuntimeModels: Array<{ id: string; name: string }>,
+): string {
+  if (availableRuntimeModels.some((model) => model.id === desiredRef)) {
+    return desiredRef;
+  }
+
+  return selectPreferredModel(availableRuntimeModels)?.id ?? desiredRef;
+}
+
+function resolveOpenClawDefaultModelRef(
+  desiredRef: string,
+  availableRuntimeModels: Array<{ id: string; name: string }>,
+): string {
+  if (
+    desiredRef.startsWith("link/") &&
+    !availableRuntimeModels.some((model) => model.id.startsWith("link/"))
+  ) {
+    const fallback = selectPreferredModel(
+      availableRuntimeModels.filter((model) => !model.id.startsWith("link/")),
+    );
+    return fallback?.id ?? "debug/mock";
+  }
+
+  return resolveAvailableRuntimeModel(desiredRef, availableRuntimeModels);
+}
+
+function resolveGatewayAuthConfig(config: NexuConfig, env: ControllerEnv) {
+  if (config.runtime.gateway.authMode !== "token") {
+    return { mode: config.runtime.gateway.authMode };
+  }
+
+  if (!env.openclawGatewayToken) {
+    return { mode: "none" as const };
+  }
+
+  return {
+    mode: "token" as const,
+    token: env.openclawGatewayToken,
+  };
 }
 
 export function resolveModelId(
@@ -497,6 +583,9 @@ function compileAgentList(
         name: bot.name,
         workspace: `${env.openclawStateDir}/agents/${bot.id}`,
         default: index === 0,
+        thinkingDefault: "off",
+        reasoningDefault: "off",
+        fastModeDefault: true,
         ...(isExplicitOverride
           ? { model: { primary: botResolvedModelId } }
           : {}),
@@ -554,12 +643,15 @@ function compilePlugins(
   const hasWechatChannelConfigured = config.channels.some(
     (channel) => channel.channelType === "wechat",
   );
-
   return {
     load: {
       paths: [env.openclawExtensionsDir],
     },
-    ...(configuredPluginIds.length > 0 ? { allow: configuredPluginIds } : {}),
+    ...(configuredPluginIds.length > 0
+      ? {
+          allow: [...configuredPluginIds, "nexu-runtime-model"],
+        }
+      : {}),
     entries: {
       "memory-core": {
         enabled: true,
@@ -628,26 +720,23 @@ export function compileOpenClawConfig(
     oauthState,
   );
 
-  const desktopCloud = isDesktopCloudConfig(config.desktop.cloud)
-    ? config.desktop.cloud
-    : null;
-  const hasGeminiImageGen =
-    desktopCloud?.models.some((m) => /gemini/i.test(m.id)) ?? false;
-
   const modelsConfig = compileModelsConfig(config, env);
-  const modelAllowlist = compileModelAllowlist(modelsConfig);
+  const modelAllowlist = compileModelAllowlist(modelsConfig, config);
+  const defaultModelRef = resolveOpenClawDefaultModelRef(
+    defaultModelId,
+    collectAvailableRuntimeModelRefs(
+      { models: modelsConfig } as OpenClawConfig,
+      config,
+      oauthState,
+    ),
+  );
 
   const openClawConfig: OpenClawConfig = {
     gateway: {
       port: env.openclawGatewayPort,
       mode: "local",
       bind: config.runtime.gateway.bind,
-      auth: {
-        mode: config.runtime.gateway.authMode,
-        ...(env.openclawGatewayToken
-          ? { token: env.openclawGatewayToken }
-          : {}),
-      },
+      auth: resolveGatewayAuthConfig(config, env),
       reload: {
         mode: "hybrid",
       },
@@ -665,13 +754,8 @@ export function compileOpenClawConfig(
     },
     agents: {
       defaults: {
-        model: { primary: defaultModelId },
+        model: { primary: defaultModelRef },
         ...(modelAllowlist ? { models: modelAllowlist } : {}),
-        ...(hasGeminiImageGen
-          ? {
-              imageGenerationModel: "google/gemini-3.1-flash-image-preview",
-            }
-          : {}),
         // Raise the default LLM idle timeout from the sidecar default of 60s
         // to 180s. Slow first-token paths (large skill prompts, cloud
         // failover, BYOK retry, dictionary skills warming) routinely
@@ -683,14 +767,39 @@ export function compileOpenClawConfig(
         llm: {
           idleTimeoutSeconds: 180,
         },
+        thinkingDefault: "off",
+        contextInjection: "continuation-skip",
+        bootstrapMaxChars: 3500,
+        bootstrapTotalMaxChars: 12000,
+        bootstrapPromptTruncationWarning: "off",
+        contextTokens: 64000,
+        contextPruning: {
+          mode: "cache-ttl",
+          ttl: "6h",
+          keepLastAssistants: 4,
+          softTrimRatio: 0.35,
+          hardClearRatio: 0.65,
+          minPrunableToolChars: 2000,
+          softTrim: {
+            maxChars: 3000,
+            headChars: 800,
+            tailChars: 1600,
+          },
+          hardClear: {
+            enabled: true,
+            placeholder: "[旧工具输出已清理以保持回复速度]",
+          },
+        },
         compaction: {
           mode: "safeguard",
-          maxHistoryShare: 0.5,
-          keepRecentTokens: 20000,
+          maxHistoryShare: 0.35,
+          keepRecentTokens: 8000,
           recentTurnsPreserve: 5,
           qualityGuard: { enabled: true },
           memoryFlush: {
             enabled: true,
+            softThresholdTokens: 12000,
+            forceFlushTranscriptBytes: 120000,
           },
         },
         humanDelay: {
@@ -703,7 +812,7 @@ export function compileOpenClawConfig(
         config,
         env,
         oauthState,
-        defaultModelId,
+        defaultModelRef,
         installedSkillSlugs,
         workspaceSkillsByAgent,
       ),

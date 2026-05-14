@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControllerEnv } from "../src/app/env.js";
 import { NexuConfigStore } from "../src/store/nexu-config-store.js";
 
@@ -69,6 +69,7 @@ describe("NexuConfigStore", () => {
   });
 
   afterEach(async () => {
+    vi.unstubAllGlobals();
     await rm(rootDir, { recursive: true, force: true });
   });
 
@@ -98,6 +99,112 @@ describe("NexuConfigStore", () => {
     expect(await store.listChannels()).toHaveLength(1);
   });
 
+  it("refreshes connected desktop cloud models from curated models plus allowed authenticated supplements", async () => {
+    const store = new NexuConfigStore(env);
+    const requestedUrls: string[] = [];
+    const authHeaders: Array<string | null> = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        requestedUrls.push(url);
+        const headers = new Headers(init?.headers);
+        authHeaders.push(headers.get("authorization"));
+
+        if (url === "https://yunwu.ai/v1/models") {
+          return new Response(
+            JSON.stringify({
+              data: [
+                { id: "gpt-5.5", name: "GPT-5.5", owned_by: "openai" },
+                { id: "gpt-5.4", name: "GPT-5.4", owned_by: "openai" },
+              ],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (url === "http://47.108.215.151:9080/v1/models") {
+          return new Response(
+            JSON.stringify({
+              data: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+            }),
+            { status: 200 },
+          );
+        }
+
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    await store.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://yunwu.ai",
+      apiKey: "link-key",
+      models: [],
+    });
+
+    const status = await store.refreshDesktopCloudModels();
+
+    expect(requestedUrls).toContain("https://yunwu.ai/v1/models");
+    expect(requestedUrls).toContain("http://47.108.215.151:9080/v1/models");
+    expect(authHeaders).toContain("Bearer link-key");
+    expect(authHeaders).toContain(null);
+    expect(status.models.map((model) => model.id)).toEqual([
+      "gpt-5.4",
+      "gpt-5.5",
+    ]);
+  });
+
+  it("preserves an allowed supplemental default when authenticated model refresh is temporarily unavailable", async () => {
+    env.defaultModelId = "link/gpt-5.4-mini";
+    const store = new NexuConfigStore(env);
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+
+        if (url === "http://47.108.215.151:9080/v1/models") {
+          return new Response(
+            JSON.stringify({
+              data: [{ id: "gpt-5.4-mini", name: "GPT-5.4 Mini" }],
+            }),
+            { status: 200 },
+          );
+        }
+
+        if (url === "https://yunwu.ai/v1/models") {
+          return new Response("temporary gateway timeout", { status: 504 });
+        }
+
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    await store.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://yunwu.ai",
+      apiKey: "link-key",
+      models: [
+        { id: "gpt-5.4-mini", name: "GPT-5.4 Mini" },
+        { id: "gpt-5.5", name: "GPT-5.5" },
+      ],
+    });
+    await store.setDefaultModel("link/gpt-5.5");
+
+    const status = await store.refreshDesktopCloudModels();
+    const config = await store.getConfig();
+
+    expect(status.models.map((model) => model.id)).toEqual([
+      "gpt-5.4-mini",
+      "gpt-5.5",
+    ]);
+    expect(config.runtime.defaultModelId).toBe("link/gpt-5.5");
+  });
+
   it("persists qqbot channels with app secrets in the secret store", async () => {
     const store = new NexuConfigStore(env);
 
@@ -107,7 +214,7 @@ describe("NexuConfigStore", () => {
     });
 
     expect(channel.channelType).toBe("qqbot");
-    expect(channel.accountId).toBe("default");
+    expect(channel.accountId).toBe("qqbot-123456");
     expect(channel.appId).toBe("123456");
     expect(await store.getSecret(`channel:${channel.id}:appId`)).toBe("123456");
     expect(await store.getSecret(`channel:${channel.id}:clientSecret`)).toBe(

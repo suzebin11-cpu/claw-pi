@@ -1,5 +1,6 @@
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, type Dirent } from "node:fs";
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { ChannelType } from "@nexu/shared";
 import { selectPreferredModel } from "@nexu/shared";
 import type { ControllerEnv } from "../app/env.js";
@@ -76,6 +77,63 @@ function resolveAvailableRuntimeModel(
   return selectPreferredModel(availableRuntimeModels)?.id ?? desiredRef;
 }
 
+function splitRuntimeModelRef(
+  modelRef: string,
+): { provider: string; model: string } | null {
+  const slashIndex = modelRef.indexOf("/");
+  if (slashIndex <= 0 || slashIndex === modelRef.length - 1) {
+    return null;
+  }
+
+  const provider = modelRef.slice(0, slashIndex).trim();
+  const model = modelRef.slice(slashIndex + 1).trim();
+  return provider && model ? { provider, model } : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function shouldSyncSessionModelOverride(sessionKey: string): boolean {
+  return (
+    !sessionKey.startsWith("subagent:") &&
+    !sessionKey.startsWith("acp:") &&
+    !sessionKey.startsWith("cron:")
+  );
+}
+
+function applySessionModelOverride(
+  entry: Record<string, unknown>,
+  selection: { provider: string; model: string },
+): boolean {
+  let changed = false;
+
+  if (entry.providerOverride !== selection.provider) {
+    entry.providerOverride = selection.provider;
+    changed = true;
+  }
+  if (entry.modelOverride !== selection.model) {
+    entry.modelOverride = selection.model;
+    changed = true;
+  }
+
+  for (const key of [
+    "model",
+    "modelProvider",
+    "contextTokens",
+    "fallbackNoticeSelectedModel",
+    "fallbackNoticeActiveModel",
+    "fallbackNoticeReason",
+  ]) {
+    if (Object.hasOwn(entry, key)) {
+      delete entry[key];
+      changed = true;
+    }
+  }
+
+  return changed;
+}
+
 export class OpenClawSyncService {
   private pendingSync: Promise<{ configPushed: boolean }> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -131,6 +189,33 @@ export class OpenClawSyncService {
       installedSlugs,
       workspaceMap,
     );
+  }
+
+  async getRuntimeModelAvailability(modelId: string): Promise<{
+    available: boolean;
+    resolvedModelRef: string;
+    availableModelRefs: string[];
+  }> {
+    const config = await this.configStore.getConfig();
+    const oauthState = await this.authProfilesStore.getOAuthConnectionState();
+    const compiled = await this.compileCurrentConfig();
+    const resolvedModelRef = resolveModelId(
+      config,
+      this.env,
+      modelId,
+      oauthState,
+    );
+    const availableModelRefs = collectAvailableRuntimeModelRefs(
+      compiled,
+      config,
+      oauthState,
+    ).map((model) => model.id);
+
+    return {
+      available: availableModelRefs.includes(resolvedModelRef),
+      resolvedModelRef,
+      availableModelRefs,
+    };
   }
 
   /**
@@ -330,12 +415,124 @@ export class OpenClawSyncService {
     );
   }
 
+  async syncSessionModelOverrides(modelRef: string): Promise<{
+    filesScanned: number;
+    filesUpdated: number;
+    sessionsUpdated: number;
+  }> {
+    const selection = splitRuntimeModelRef(modelRef);
+    if (!selection) {
+      logger.warn({ modelRef }, "syncSessionModelOverrides: invalid model ref");
+      return { filesScanned: 0, filesUpdated: 0, sessionsUpdated: 0 };
+    }
+
+    const agentsDir = join(this.env.openclawStateDir, "agents");
+    let agentEntries: Dirent[];
+    try {
+      agentEntries = await readdir(agentsDir, { withFileTypes: true });
+    } catch {
+      return { filesScanned: 0, filesUpdated: 0, sessionsUpdated: 0 };
+    }
+
+    let filesScanned = 0;
+    let filesUpdated = 0;
+    let sessionsUpdated = 0;
+
+    for (const agentEntry of agentEntries) {
+      if (!agentEntry.isDirectory()) {
+        continue;
+      }
+
+      const sessionsPath = join(
+        agentsDir,
+        agentEntry.name,
+        "sessions",
+        "sessions.json",
+      );
+      let raw: string;
+      try {
+        raw = await readFile(sessionsPath, "utf8");
+      } catch {
+        continue;
+      }
+
+      filesScanned += 1;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (err) {
+        logger.warn(
+          {
+            path: sessionsPath,
+            error: err instanceof Error ? err.message : String(err),
+          },
+          "syncSessionModelOverrides: failed to parse sessions store",
+        );
+        continue;
+      }
+
+      if (!isRecord(parsed)) {
+        continue;
+      }
+
+      let changed = false;
+      for (const [sessionKey, entry] of Object.entries(parsed)) {
+        if (!shouldSyncSessionModelOverride(sessionKey) || !isRecord(entry)) {
+          continue;
+        }
+
+        if (applySessionModelOverride(entry, selection)) {
+          changed = true;
+          sessionsUpdated += 1;
+        }
+      }
+
+      if (changed) {
+        await writeFile(sessionsPath, `${JSON.stringify(parsed, null, 2)}\n`);
+        filesUpdated += 1;
+      }
+    }
+
+    logger.info(
+      {
+        modelRef,
+        filesScanned,
+        filesUpdated,
+        sessionsUpdated,
+      },
+      "syncSessionModelOverrides: completed",
+    );
+
+    return { filesScanned, filesUpdated, sessionsUpdated };
+  }
+
   /**
    * Write platform templates to a specific bot's workspace.
    * Called when creating a new bot to seed workspace with platform files.
    */
   async writePlatformTemplatesForBot(botId: string): Promise<void> {
     await this.templateWriter.write([{ id: botId, status: "active" }]);
+  }
+
+  private async writeWorkspaceTemplates(): Promise<void> {
+    const templates = await this.configStore.listTemplates();
+    const activeTemplates = templates.filter(
+      (template) => template.status === "active",
+    );
+    if (activeTemplates.length === 0) {
+      return;
+    }
+
+    await mkdir(this.env.openclawWorkspaceTemplatesDir, { recursive: true });
+    await Promise.all(
+      activeTemplates.map((template) =>
+        writeFile(
+          join(this.env.openclawWorkspaceTemplatesDir, `${template.id}.md`),
+          template.content,
+          "utf8",
+        ),
+      ),
+    );
   }
 
   private async doSync(): Promise<{ configPushed: boolean }> {
@@ -362,6 +559,9 @@ export class OpenClawSyncService {
       installedSlugs,
       workspaceMap,
     );
+
+    await this.templateWriter.write(config.bots);
+    await this.writeWorkspaceTemplates();
 
     // Re-evaluate which bundled channel plugins should be present in the
     // sidecar extensions directory. add/remove of a channel triggers

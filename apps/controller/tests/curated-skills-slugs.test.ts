@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   CURATED_SKILL_SLUGS,
@@ -44,6 +46,20 @@ describe("curated skill slugs", () => {
         STATIC_SKILL_SLUGS,
         `"${slug}" missing from static slugs`,
       ).toContain(slug);
+    }
+  });
+
+  it("all static slugs have bundled skill files", () => {
+    const staticSkillsDir = path.resolve(
+      import.meta.dirname,
+      "../../desktop/static/bundled-skills",
+    );
+
+    for (const slug of STATIC_SKILL_SLUGS) {
+      expect(
+        existsSync(path.join(staticSkillsDir, slug, "SKILL.md")),
+        `"${slug}" is listed as static but has no bundled SKILL.md`,
+      ).toBe(true);
     }
   });
 

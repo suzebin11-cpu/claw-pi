@@ -16,6 +16,7 @@ export default defineConfig({
     port: 5173,
     proxy: {
       "/api/auth/get-session": {
+        target: "http://localhost:3010",
         bypass(_req, res) {
           const body = JSON.stringify({
             session: {

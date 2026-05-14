@@ -166,13 +166,13 @@ describe("provider OAuth routes", () => {
         displayName: "OpenAI",
         enabled: true,
         apiKey: null,
-        modelsJson: JSON.stringify(["gpt-5.4"]),
+        modelsJson: JSON.stringify(["gpt-5.5", "gpt-5.4"]),
       },
     );
     expect(container.openclawSyncService.syncAll).toHaveBeenCalledTimes(1);
     await expect(response.json()).resolves.toMatchObject({
       status: "completed",
-      models: ["gpt-5.4"],
+      models: ["gpt-5.5", "gpt-5.4"],
     });
   });
 
