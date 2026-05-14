@@ -1,11 +1,11 @@
 {
   "name": "@nexu/desktop",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "private": true,
   "license": "MIT",
   "type": "module",
   "main": "dist-electron/main/bootstrap.js",
-  "description": "Electron desktop shell for Nexu local runtime",
+  "description": "ClawPi desktop AI workspace for OpenClaw",
   "packageManager": "pnpm@10.31.0",
   "scripts": {
     "predev": "pnpm run prepare:runtime-sidecars",
