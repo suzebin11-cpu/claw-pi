@@ -980,6 +980,9 @@ export function registerChannelRoutes(
             accountId: channel.accountId,
           })),
         );
+      await container.channelService.reconcileExpiredWechatSessions(
+        liveStatus.channels,
+      );
       const effectiveModelId =
         await container.runtimeModelStateService.getEffectiveModelId();
       const models = await container.modelProviderService.listModels();

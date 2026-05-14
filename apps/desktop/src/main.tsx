@@ -50,6 +50,8 @@ const rendererSentryDsn =
 let rendererSentryInitialized = false;
 let amplitudeTelemetryInitialized = false;
 let rendererCommitReported = false;
+const setupVideoUrl = "data:,";
+const setupLoopVideoUrl = "data:,";
 
 function sendRendererStartupProbe(
   stage: string,

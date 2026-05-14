@@ -340,6 +340,9 @@ const en = {
   "models.marketplace.category.all": "All Models",
   "models.marketplace.category.chat": "Chat Models",
   "models.marketplace.category.image": "Image Models",
+  "models.marketplace.vendors": "Vendors",
+  "models.marketplace.vendor.all": "All Vendors",
+  "models.marketplace.vendor.other": "Other",
   "models.marketplace.configureProviders": "Configure Providers",
   "models.marketplace.backToMarketplace": "Back to Model Plaza",
   "models.marketplace.chatModelDescription":

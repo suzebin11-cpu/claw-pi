@@ -67,6 +67,7 @@ interface ProviderModel {
   id: string;
   name: string;
   description?: string;
+  isDefault?: boolean;
 }
 
 interface ProviderConfig {
@@ -96,6 +97,7 @@ type ApiModel = {
   id: string;
   name: string;
   provider: string;
+  vendor?: string;
   isDefault?: boolean;
   description?: string;
 };
@@ -106,6 +108,8 @@ type MarketplaceModel = {
   id: string;
   name: string;
   provider: string;
+  vendor: string;
+  isDefault?: boolean;
   capability: MarketplaceCapability;
   runtimeModelId: string;
   descriptionKey: string;
@@ -228,6 +232,34 @@ export function isModelSelected(
   }
 
   return modelId.includes("/") !== currentModelId.includes("/");
+}
+
+export function sortSelectedFirst<T>(
+  items: readonly T[],
+  isSelected: (item: T) => boolean,
+): T[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((a, b) => {
+      const aSelected = isSelected(a.item);
+      const bSelected = isSelected(b.item);
+
+      if (aSelected !== bSelected) {
+        return aSelected ? -1 : 1;
+      }
+
+      return a.index - b.index;
+    })
+    .map(({ item }) => item);
+}
+
+function isProviderModelSelected(
+  model: ProviderModel,
+  currentModelId: string,
+): boolean {
+  return currentModelId
+    ? isModelSelected(model.id, currentModelId)
+    : model.isDefault === true;
 }
 
 function normalizeByokModelSelectionKey(
@@ -380,6 +412,73 @@ const PROVIDER_META: Record<
   },
 };
 
+const VENDOR_LABELS: Record<string, string> = {
+  openai: "OpenAI",
+  google: "Google",
+  anthropic: "Anthropic",
+  deepseek: "DeepSeek",
+  qwen: "Qwen",
+  kimi: "Kimi",
+  glm: "GLM",
+  minimax: "MiniMax",
+  other: "Other",
+};
+
+const VENDOR_ORDER = [
+  "openai",
+  "google",
+  "anthropic",
+  "deepseek",
+  "qwen",
+  "kimi",
+  "glm",
+  "minimax",
+  "other",
+];
+
+function inferMarketplaceVendor(input: {
+  id: string;
+  name: string;
+  provider: string;
+  vendor?: string | null;
+}): string {
+  const rawVendor = input.vendor?.trim().toLowerCase();
+  const provider =
+    input.provider === "nexu" ? "" : input.provider.trim().toLowerCase();
+  const text = [rawVendor, input.id, input.name, provider]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  if (text.includes("openai") || /\bgpt[-\s]?\d/.test(text)) return "openai";
+  if (text.includes("google") || text.includes("gemini")) return "google";
+  if (text.includes("anthropic") || text.includes("claude")) {
+    return "anthropic";
+  }
+  if (text.includes("deepseek")) return "deepseek";
+  if (text.includes("qwen") || text.includes("tongyi")) return "qwen";
+  if (text.includes("moonshot") || text.includes("kimi")) return "kimi";
+  if (text.includes("zhipu") || text.includes("glm") || text.includes("zai")) {
+    return "glm";
+  }
+  if (text.includes("minimax")) return "minimax";
+
+  return rawVendor || provider || "other";
+}
+
+function getVendorLabel(vendorId: string): string {
+  return VENDOR_LABELS[vendorId] ?? PROVIDER_META[vendorId]?.name ?? vendorId;
+}
+
+function getVendorDisplayName(
+  vendorId: string,
+  t: (key: string) => string,
+): string {
+  return vendorId === "other"
+    ? t("models.marketplace.vendor.other")
+    : getVendorLabel(vendorId);
+}
+
 // Well-known models per provider (shown when no verify result yet)
 const DEFAULT_MODELS: Record<string, string[]> = {
   anthropic: [
@@ -446,6 +545,7 @@ function buildProviders(apiModels: ApiModel[]): ProviderConfig[] {
       id: m.id,
       name: m.name,
       description: m.description,
+      isDefault: m.isDefault,
     });
     grouped.set(m.provider, list);
   }
@@ -761,29 +861,38 @@ function MarketplacePage({
   const [activeCapability, setActiveCapability] = useState<
     MarketplaceCapability | "all"
   >("all");
+  const [activeVendor, setActiveVendor] = useState("all");
   const [search, setSearch] = useState("");
 
   const chatModels = useMemo<MarketplaceModel[]>(
     () =>
-      models.map((model) => ({
-        id: model.id,
-        name: model.name || getModelDisplayLabel(model.id),
-        provider: model.provider,
-        capability: "chat",
-        runtimeModelId: model.id,
-        descriptionKey:
-          model.description || "models.marketplace.chatModelDescription",
-        tagKeys: [
-          "models.marketplace.category.chat",
-          PROVIDER_META[model.provider]?.name ?? model.provider,
-        ],
-        detailKeys: [
-          "models.marketplace.chatDetailDefault",
-          "models.marketplace.chatDetailRuntime",
-        ],
-        actionHintKey: "models.marketplace.chatAction",
-        available: true,
-      })),
+      models.map((model) => {
+        const name = model.name || getModelDisplayLabel(model.id);
+        const vendor = inferMarketplaceVendor({
+          id: model.id,
+          name,
+          provider: model.provider,
+          vendor: model.vendor,
+        });
+        return {
+          id: model.id,
+          name,
+          provider: model.provider,
+          vendor,
+          isDefault: model.isDefault,
+          capability: "chat",
+          runtimeModelId: model.id,
+          descriptionKey:
+            model.description || "models.marketplace.chatModelDescription",
+          tagKeys: ["models.marketplace.category.chat", getVendorLabel(vendor)],
+          detailKeys: [
+            "models.marketplace.chatDetailDefault",
+            "models.marketplace.chatDetailRuntime",
+          ],
+          actionHintKey: "models.marketplace.chatAction",
+          available: true,
+        };
+      }),
     [models],
   );
 
@@ -804,6 +913,60 @@ function MarketplacePage({
     return counts;
   }, [marketplaceModels]);
 
+  const modelsForActiveCapability = useMemo(
+    () =>
+      marketplaceModels.filter(
+        (model) =>
+          activeCapability === "all" || model.capability === activeCapability,
+      ),
+    [activeCapability, marketplaceModels],
+  );
+
+  const vendorCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      all: modelsForActiveCapability.length,
+    };
+    for (const model of modelsForActiveCapability) {
+      counts[model.vendor] = (counts[model.vendor] ?? 0) + 1;
+    }
+    return counts;
+  }, [modelsForActiveCapability]);
+
+  const vendorFilters = useMemo(() => {
+    const presentVendors = Object.keys(vendorCounts)
+      .filter((vendor) => vendor !== "all" && (vendorCounts[vendor] ?? 0) > 0)
+      .sort((a, b) => {
+        const aIndex = VENDOR_ORDER.indexOf(a);
+        const bIndex = VENDOR_ORDER.indexOf(b);
+        if (aIndex !== -1 || bIndex !== -1) {
+          return (
+            (aIndex === -1 ? Number.MAX_SAFE_INTEGER : aIndex) -
+            (bIndex === -1 ? Number.MAX_SAFE_INTEGER : bIndex)
+          );
+        }
+        return getVendorLabel(a).localeCompare(getVendorLabel(b));
+      });
+
+    return [
+      {
+        id: "all",
+        label: t("models.marketplace.vendor.all"),
+        count: vendorCounts.all ?? 0,
+      },
+      ...presentVendors.map((vendor) => ({
+        id: vendor,
+        label: getVendorDisplayName(vendor, t),
+        count: vendorCounts[vendor] ?? 0,
+      })),
+    ];
+  }, [t, vendorCounts]);
+
+  useEffect(() => {
+    if (activeVendor !== "all" && (vendorCounts[activeVendor] ?? 0) === 0) {
+      setActiveVendor("all");
+    }
+  }, [activeVendor, vendorCounts]);
+
   const categories: Array<{
     id: MarketplaceCapability | "all";
     label: string;
@@ -814,27 +977,57 @@ function MarketplacePage({
   ];
 
   const normalizedSearch = search.trim().toLowerCase();
-  const filteredModels = marketplaceModels.filter((model) => {
-    if (activeCapability !== "all" && model.capability !== activeCapability) {
-      return false;
-    }
+  const isMarketplaceModelSelected = useCallback(
+    (model: MarketplaceModel) => {
+      if (model.capability === "chat") {
+        return currentModelId
+          ? isModelSelected(model.id, currentModelId)
+          : model.isDefault === true;
+      }
 
-    if (!normalizedSearch) {
-      return true;
-    }
+      return currentImageModelId
+        ? isModelSelected(model.runtimeModelId, currentImageModelId)
+        : false;
+    },
+    [currentImageModelId, currentModelId],
+  );
+  const filteredModels = useMemo(() => {
+    const matchingModels = marketplaceModels.filter((model) => {
+      if (activeCapability !== "all" && model.capability !== activeCapability) {
+        return false;
+      }
 
-    return [
-      model.id,
-      model.name,
-      model.provider,
-      t(model.descriptionKey),
-      ...model.tagKeys.map((tagKey) => t(tagKey)),
-      ...model.detailKeys.map((detailKey) => t(detailKey)),
-    ]
-      .join(" ")
-      .toLowerCase()
-      .includes(normalizedSearch);
-  });
+      if (activeVendor !== "all" && model.vendor !== activeVendor) {
+        return false;
+      }
+
+      if (!normalizedSearch) {
+        return true;
+      }
+
+      return [
+        model.id,
+        model.name,
+        model.provider,
+        getVendorDisplayName(model.vendor, t),
+        t(model.descriptionKey),
+        ...model.tagKeys.map((tagKey) => t(tagKey)),
+        ...model.detailKeys.map((detailKey) => t(detailKey)),
+      ]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedSearch);
+    });
+
+    return sortSelectedFirst(matchingModels, isMarketplaceModelSelected);
+  }, [
+    activeCapability,
+    activeVendor,
+    isMarketplaceModelSelected,
+    marketplaceModels,
+    normalizedSearch,
+    t,
+  ]);
 
   return (
     <div className="h-full overflow-y-auto">
@@ -886,29 +1079,79 @@ function MarketplacePage({
                 );
               })}
             </div>
+            <div className="mt-5 border-t border-border-subtle pt-4">
+              <div className="mb-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
+                {t("models.marketplace.vendors")}
+              </div>
+              <div className="space-y-1">
+                {vendorFilters.map((vendor) => {
+                  const isActive = activeVendor === vendor.id;
+                  return (
+                    <button
+                      key={vendor.id}
+                      type="button"
+                      onClick={() => setActiveVendor(vendor.id)}
+                      className={cn(
+                        "flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left text-[12px] transition-colors",
+                        isActive
+                          ? "bg-surface-3 font-semibold text-text-primary"
+                          : "text-text-secondary hover:bg-surface-2 hover:text-text-primary",
+                      )}
+                    >
+                      <span className="flex-1 truncate">{vendor.label}</span>
+                      <span className="text-[10px] text-text-tertiary">
+                        {vendor.count}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
           </aside>
 
           <section className="min-h-[560px] flex-1 p-4 sm:p-5">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex gap-2 overflow-x-auto md:hidden">
-                {categories.map((category) => {
-                  const isActive = activeCapability === category.id;
-                  return (
-                    <button
-                      key={category.id}
-                      type="button"
-                      onClick={() => setActiveCapability(category.id)}
-                      className={cn(
-                        "shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors",
-                        isActive
-                          ? "border-accent bg-accent/10 text-accent"
-                          : "border-border text-text-secondary",
-                      )}
-                    >
-                      {category.label} · {capabilityCounts[category.id]}
-                    </button>
-                  );
-                })}
+              <div className="flex flex-col gap-2 md:hidden">
+                <div className="flex gap-2 overflow-x-auto">
+                  {categories.map((category) => {
+                    const isActive = activeCapability === category.id;
+                    return (
+                      <button
+                        key={category.id}
+                        type="button"
+                        onClick={() => setActiveCapability(category.id)}
+                        className={cn(
+                          "shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors",
+                          isActive
+                            ? "border-accent bg-accent/10 text-accent"
+                            : "border-border text-text-secondary",
+                        )}
+                      >
+                        {category.label} · {capabilityCounts[category.id]}
+                      </button>
+                    );
+                  })}
+                </div>
+                <div className="flex gap-2 overflow-x-auto">
+                  {vendorFilters.map((vendor) => {
+                    const isActive = activeVendor === vendor.id;
+                    return (
+                      <button
+                        key={vendor.id}
+                        type="button"
+                        onClick={() => setActiveVendor(vendor.id)}
+                        className={cn(
+                          "shrink-0 rounded-full border px-3 py-1.5 text-[11px] font-medium transition-colors",
+                          isActive
+                            ? "border-accent bg-accent/10 text-accent"
+                            : "border-border text-text-secondary",
+                        )}
+                      >
+                        {vendor.label} · {vendor.count}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
               <div className="relative w-full sm:max-w-xs">
                 <Search
@@ -966,14 +1209,7 @@ function MarketplacePage({
                   <MarketplaceModelCard
                     key={`${model.capability}:${model.id}`}
                     model={model}
-                    selected={
-                      model.capability === "chat"
-                        ? isModelSelected(model.id, currentModelId)
-                        : isModelSelected(
-                            model.runtimeModelId,
-                            currentImageModelId,
-                          )
-                    }
+                    selected={isMarketplaceModelSelected(model)}
                     onSelectModel={onSelectModel}
                     onSelectImageModel={onSelectImageModel}
                   />
@@ -1011,6 +1247,11 @@ function MarketplaceModelCard({
   const details = model.detailKeys.map((detailKey) =>
     detailKey.startsWith("models.") ? t(detailKey) : detailKey,
   );
+  const vendorLabel = getVendorDisplayName(model.vendor, t);
+  const providerLabel = PROVIDER_META[model.provider]?.name ?? model.provider;
+  const metaParts = [capabilityLabel, vendorLabel, providerLabel].filter(
+    (value, index, list) => list.indexOf(value) === index,
+  );
 
   return (
     <article
@@ -1042,8 +1283,7 @@ function MarketplaceModelCard({
             )}
           </div>
           <div className="mt-1 text-[11px] text-text-tertiary">
-            {capabilityLabel} ·{" "}
-            {PROVIDER_META[model.provider]?.name ?? model.provider}
+            {metaParts.join(" · ")}
           </div>
         </div>
       </div>
@@ -1760,6 +2000,13 @@ function ManagedProviderDetail({
   };
 
   const cloudToggleBusy = loginBusy || cloudDisconnecting;
+  const orderedProviderModels = useMemo(
+    () =>
+      sortSelectedFirst(provider.models, (model) =>
+        isProviderModelSelected(model, currentModelId),
+      ),
+    [currentModelId, provider.models],
+  );
 
   return (
     <div>
@@ -1885,8 +2132,11 @@ function ManagedProviderDetail({
             )}
           </div>
           <div className="space-y-0.5">
-            {provider.models.map((model) => {
-              const isSelected = isModelSelected(model.id, currentModelId);
+            {orderedProviderModels.map((model) => {
+              const isSelected = isProviderModelSelected(
+                model,
+                currentModelId,
+              );
               return (
                 <button
                   key={model.id}
@@ -2368,6 +2618,13 @@ function ByokProviderDetail({
         ? modelId
         : `${providerId}/${modelId}`,
     [providerId],
+  );
+  const orderedDisplayModels = useMemo(
+    () =>
+      sortSelectedFirst(displayModels, (modelId) =>
+        isByokModelSelected(providerId, modelId, currentModelId),
+      ),
+    [currentModelId, displayModels, providerId],
   );
 
   return (
@@ -2911,7 +3168,7 @@ function ByokProviderDetail({
               {t("models.byok.none")}
             </div>
           )}
-          {displayModels.map((modelId) => {
+          {orderedDisplayModels.map((modelId) => {
             const scopedModelId = getScopedByokModelId(modelId);
             const isSelected = isByokModelSelected(
               providerId,

@@ -241,7 +241,11 @@ export class SessionsRuntime {
                   "user",
                 )
               : hints.senderName;
-          if (this.shouldReplaceInferredTitle(title, sessionKey)) {
+          if (
+            this.shouldReplaceInferredTitle(title, sessionKey) ||
+            (channelType === "qqbot" &&
+              this.shouldReplaceQqbotOpaqueTitle(title, sessionKey))
+          ) {
             if (normalizedGroupName) {
               title =
                 channelType &&
@@ -1227,6 +1231,18 @@ export class SessionsRuntime {
     return (
       normalized === sessionKey || UUID_LIKE_TITLE_PATTERN.test(normalized)
     );
+  }
+
+  private shouldReplaceQqbotOpaqueTitle(
+    title: string | undefined,
+    sessionKey: string,
+  ): boolean {
+    if (this.shouldReplaceInferredTitle(title, sessionKey)) {
+      return true;
+    }
+
+    const candidate = title?.trim().replace(/\s*·\s*qqbot$/i, "");
+    return candidate ? this.isOpaqueQqbotValue(candidate, "user") : false;
   }
 
   private extractExactChatTargetMetadata(

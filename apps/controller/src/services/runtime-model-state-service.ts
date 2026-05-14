@@ -3,6 +3,7 @@ import type { ControllerEnv } from "../app/env.js";
 
 type RuntimeModelState = {
   selectedModelRef?: string;
+  availableModelRefs?: string[];
 };
 
 export class RuntimeModelStateService {
@@ -15,10 +16,22 @@ export class RuntimeModelStateService {
         "utf8",
       );
       const parsed = JSON.parse(raw) as RuntimeModelState;
-      return typeof parsed.selectedModelRef === "string" &&
+      const selectedModelRef =
+        typeof parsed.selectedModelRef === "string" &&
         parsed.selectedModelRef.length > 0
-        ? parsed.selectedModelRef
-        : null;
+          ? parsed.selectedModelRef
+          : null;
+      if (!selectedModelRef) {
+        return null;
+      }
+
+      if (Array.isArray(parsed.availableModelRefs)) {
+        return parsed.availableModelRefs.includes(selectedModelRef)
+          ? selectedModelRef
+          : null;
+      }
+
+      return selectedModelRef;
     } catch {
       return null;
     }

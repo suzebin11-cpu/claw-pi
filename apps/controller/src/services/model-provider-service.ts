@@ -174,6 +174,33 @@ function hasSameCloudModels(
   );
 }
 
+function inferModelVendor(input: {
+  id: string;
+  name?: string | null;
+  provider?: string | null;
+}): string | undefined {
+  const text = [input.provider, input.id, input.name]
+    .filter((value): value is string => Boolean(value?.trim()))
+    .join(" ")
+    .toLowerCase();
+
+  if (!text) return undefined;
+  if (text.includes("openai") || /\bgpt[-\s]?\d/.test(text)) return "openai";
+  if (text.includes("google") || text.includes("gemini")) return "google";
+  if (text.includes("anthropic") || text.includes("claude")) {
+    return "anthropic";
+  }
+  if (text.includes("deepseek")) return "deepseek";
+  if (text.includes("qwen") || text.includes("tongyi")) return "qwen";
+  if (text.includes("moonshot") || text.includes("kimi")) return "kimi";
+  if (text.includes("zhipu") || text.includes("glm") || text.includes("zai")) {
+    return "glm";
+  }
+  if (text.includes("minimax")) return "minimax";
+
+  return input.provider?.trim().toLowerCase() || undefined;
+}
+
 const PROVIDER_BASE_URLS: Record<string, string> = {
   anthropic: "https://api.anthropic.com/v1",
   openai: "https://api.openai.com/v1",
@@ -401,13 +428,18 @@ export class ModelProviderService {
       models: string[];
     }>,
     desktopCloud: {
-      models?: Array<{ id: string; name?: string | null }> | null;
+      models?: Array<{
+        id: string;
+        name?: string | null;
+        provider?: string | null;
+      }> | null;
     },
   ): Promise<{ cloudModels: Model[]; byokModels: Model[] }> {
     const cloudModels: Model[] = (desktopCloud.models ?? []).map((model) => ({
       id: normalizeLinkModelId(model.id),
       name: model.name || model.id,
       provider: "nexu",
+      vendor: inferModelVendor(model),
       description: "Cloud model via Claw-Pi Link",
     }));
 
@@ -422,6 +454,11 @@ export class ModelProviderService {
           id: `${provider.providerId}/${modelId}`,
           name: modelId,
           provider: provider.providerId,
+          vendor: inferModelVendor({
+            id: modelId,
+            name: modelId,
+            provider: provider.providerId,
+          }),
         })),
       );
 

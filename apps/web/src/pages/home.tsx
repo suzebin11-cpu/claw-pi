@@ -623,6 +623,18 @@ export function HomePage() {
     }
   }, [liveStatus, pendingChannelId, showBootGrace, t]);
 
+  useEffect(() => {
+    const hasExpiredWechat = (liveStatus?.channels ?? []).some(
+      (entry) =>
+        entry.channelType === "wechat" &&
+        entry.status === "error" &&
+        entry.lastError === "session expired",
+    );
+    if (hasExpiredWechat) {
+      queryClient.invalidateQueries({ queryKey: ["channels"] });
+    }
+  }, [liveStatus, queryClient]);
+
   /* ══════════════════════════════════════════════════════════════════════
      Scene A: First-run — Guided setup flow (no channels connected)
      ══════════════════════════════════════════════════════════════════════ */
@@ -990,6 +1002,7 @@ export function HomePage() {
                     <button
                       key={ch.id}
                       type="button"
+                      disabled={!systemReady}
                       onClick={() => {
                         const channel = normalizeChannel(ch.id);
                         if (channel) {
@@ -1003,7 +1016,7 @@ export function HomePage() {
                           setFeishuOpen(true);
                         }
                       }}
-                      className="group flex items-center gap-2.5 rounded-lg border border-dashed border-border bg-surface-0 px-3 py-2 text-left hover:border-solid hover:border-border-hover hover:bg-surface-1 transition-all"
+                      className="group flex items-center gap-2.5 rounded-lg border border-dashed border-border bg-surface-0 px-3 py-2 text-left hover:border-solid hover:border-border-hover hover:bg-surface-1 transition-all disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       <div className="w-6 h-6 rounded-md flex items-center justify-center shrink-0">
                         {homeChannelIcon(ch, "compact")}

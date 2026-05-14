@@ -833,6 +833,37 @@ export class NexuConfigStore {
     return config.channels.find((channel) => channel.id === channelId) ?? null;
   }
 
+  async setChannelStatus(
+    channelId: string,
+    status: ChannelResponse["status"],
+  ): Promise<ChannelResponse | null> {
+    let updatedChannel: ChannelResponse | null = null;
+    const updatedAt = now();
+
+    await this.store.update((config) => ({
+      ...config,
+      channels: config.channels.map((channel) => {
+        if (channel.id !== channelId) {
+          return channel;
+        }
+
+        if (channel.status === status) {
+          updatedChannel = channel;
+          return channel;
+        }
+
+        updatedChannel = {
+          ...channel,
+          status,
+          updatedAt,
+        };
+        return updatedChannel;
+      }),
+    }));
+
+    return updatedChannel;
+  }
+
   async connectSlack(
     input: ConnectSlackInput & { botUserId?: string | null },
   ): Promise<ChannelResponse> {
@@ -935,11 +966,7 @@ export class NexuConfigStore {
       ...config,
       channels: [
         ...config.channels.filter(
-          (existing) =>
-            !(
-              existing.channelType === channel.channelType &&
-              existing.accountId === channel.accountId
-            ),
+          (existing) => existing.channelType !== channel.channelType,
         ),
         channel,
       ],

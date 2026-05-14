@@ -150,11 +150,14 @@ describe("WeChat connect/disconnect lifecycle", () => {
   let configStore: {
     connectWechat: ReturnType<typeof vi.fn>;
     disconnectChannel: ReturnType<typeof vi.fn>;
+    getChannel: ReturnType<typeof vi.fn>;
+    setChannelStatus: ReturnType<typeof vi.fn>;
     [key: string]: unknown;
   };
   let syncService: {
     writePlatformTemplatesForBot: ReturnType<typeof vi.fn>;
     syncAll: ReturnType<typeof vi.fn>;
+    syncAllImmediate: ReturnType<typeof vi.fn>;
   };
   let gatewayService: {
     getChannelReadiness: ReturnType<typeof vi.fn>;
@@ -168,10 +171,13 @@ describe("WeChat connect/disconnect lifecycle", () => {
     configStore = {
       connectWechat: vi.fn().mockResolvedValue(makeChannel()),
       disconnectChannel: vi.fn().mockResolvedValue(true),
+      getChannel: vi.fn().mockResolvedValue(makeChannel()),
+      setChannelStatus: vi.fn().mockResolvedValue(makeChannel()),
     };
     syncService = {
       writePlatformTemplatesForBot: vi.fn().mockResolvedValue(undefined),
       syncAll: vi.fn().mockResolvedValue(undefined),
+      syncAllImmediate: vi.fn().mockResolvedValue({ configPushed: true }),
     };
     gatewayService = {
       getChannelReadiness: vi.fn().mockResolvedValue({ ready: true }),
@@ -186,10 +192,11 @@ describe("WeChat connect/disconnect lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("connectWechat returns immediately without blocking on readiness", async () => {
+  it("connectWechat waits until the new account is ready", async () => {
     const channel = await service.connectWechat("test-account");
 
     expect(configStore.connectWechat).toHaveBeenCalledWith({
@@ -198,10 +205,12 @@ describe("WeChat connect/disconnect lifecycle", () => {
     expect(syncService.writePlatformTemplatesForBot).toHaveBeenCalledWith(
       "bot-1",
     );
-    expect(syncService.syncAll).toHaveBeenCalledTimes(1);
-    // Must NOT poll readiness — that blocks the connect modal and risks
-    // a rollback that triggers additional config writes + restarts.
-    expect(gatewayService.getChannelReadiness).not.toHaveBeenCalled();
+    expect(syncService.syncAll).not.toHaveBeenCalled();
+    expect(syncService.syncAllImmediate).toHaveBeenCalledTimes(1);
+    expect(gatewayService.getChannelReadiness).toHaveBeenCalledWith(
+      "wechat",
+      "test-account",
+    );
     expect(channel.channelType).toBe("wechat");
   });
 
@@ -211,11 +220,96 @@ describe("WeChat connect/disconnect lifecycle", () => {
       lastError: "monitor failed to start",
     });
 
-    const channel = await service.connectWechat("slow-account");
+    await expect(service.connectWechat("slow-account")).rejects.toThrow(
+      "微信已扫码",
+    );
 
-    expect(channel.channelType).toBe("wechat");
     expect(configStore.disconnectChannel).not.toHaveBeenCalled();
-    expect(syncService.syncAll).toHaveBeenCalledTimes(1);
+    expect(syncService.syncAllImmediate).toHaveBeenCalledTimes(1);
+  });
+
+  it("marks expired WeChat sessions as channel errors and syncs immediately", async () => {
+    const changed = await service.reconcileExpiredWechatSessions([
+      {
+        channelType: "wechat",
+        channelId: "ch-1",
+        accountId: "expired-account",
+        status: "error",
+        ready: false,
+        connected: false,
+        running: false,
+        configured: false,
+        lastError: "session expired",
+      },
+    ]);
+
+    expect(changed).toBe(true);
+    expect(configStore.setChannelStatus).toHaveBeenCalledWith("ch-1", "error");
+    expect(syncService.syncAllImmediate).toHaveBeenCalledTimes(1);
+  });
+
+  it("confirmed QR login replaces stale WeChat account files and index", async () => {
+    const accountsDir = path.join(tmpDir, "openclaw-weixin", "accounts");
+    const indexPath = path.join(tmpDir, "openclaw-weixin", "accounts.json");
+    mkdirSync(accountsDir, { recursive: true });
+    writeFileSync(indexPath, JSON.stringify(["old-account"]));
+    writeFileSync(
+      path.join(accountsDir, "old-account.json"),
+      JSON.stringify({ token: "old" }),
+    );
+    writeFileSync(
+      path.join(accountsDir, "old-account.sync.json"),
+      JSON.stringify({ get_updates_buf: "old-buf" }),
+    );
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("get_bot_qrcode")) {
+          return new Response(
+            JSON.stringify({
+              qrcode: "qr-token",
+              qrcode_img_content: "data:image/png;base64,abc",
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("get_qrcode_status")) {
+          return new Response(
+            JSON.stringify({
+              status: "confirmed",
+              bot_token: "new-token",
+              ilink_bot_id: "new-account",
+              baseurl: "https://ilinkai.weixin.qq.com",
+              ilink_user_id: "user-1",
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const started = await service.wechatQrStart();
+    const result = await service.wechatQrWait(started.sessionKey ?? "");
+
+    expect(result).toMatchObject({
+      connected: true,
+      accountId: "new-account",
+    });
+    expect(JSON.parse(readFileSync(indexPath, "utf-8"))).toEqual([
+      "new-account",
+    ]);
+    expect(existsSync(path.join(accountsDir, "old-account.json"))).toBe(false);
+    expect(existsSync(path.join(accountsDir, "old-account.sync.json"))).toBe(
+      false,
+    );
+    expect(
+      JSON.parse(
+        readFileSync(path.join(accountsDir, "new-account.json"), "utf-8"),
+      ),
+    ).toMatchObject({ token: "new-token" });
   });
 
   it("disconnectChannel calls syncAll after unbinding", async () => {

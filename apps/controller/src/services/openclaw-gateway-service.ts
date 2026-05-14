@@ -724,6 +724,15 @@ export class OpenClawGatewayService {
       }
 
       const isConnected = snapshot.connected === true;
+      const rawLastError = snapshot.lastError?.trim()
+        ? snapshot.lastError
+        : null;
+      const friendlyError =
+        openclawId === "openclaw-weixin" &&
+        rawLastError === "not configured" &&
+        snapshot.running !== true
+          ? "session expired"
+          : rawLastError;
       const isWebhookReady =
         snapshot.running === true &&
         snapshot.configured === true &&
@@ -731,7 +740,7 @@ export class OpenClawGatewayService {
       const isConfiguredReady =
         isConfiguredAsConnectedChannelType(channelType) &&
         snapshot.configured === true &&
-        !snapshot.lastError;
+        !friendlyError;
       const ready = isConnected || isWebhookReady || isConfiguredReady;
 
       return {
@@ -739,7 +748,7 @@ export class OpenClawGatewayService {
         connected: snapshot.connected ?? false,
         running: snapshot.running ?? isConfiguredReady,
         configured: snapshot.configured ?? false,
-        lastError: snapshot.lastError ?? null,
+        lastError: friendlyError,
         gatewayConnected: true,
       };
     } catch (err) {

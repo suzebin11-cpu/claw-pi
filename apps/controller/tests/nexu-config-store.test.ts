@@ -99,6 +99,46 @@ describe("NexuConfigStore", () => {
     expect(await store.listChannels()).toHaveLength(1);
   });
 
+  it("keeps only the latest WeChat channel when reconnecting", async () => {
+    const store = new NexuConfigStore(env);
+
+    const slack = await store.connectSlack({
+      botToken: "xoxb-test",
+      signingSecret: "secret",
+      teamId: "T123",
+      teamName: "Acme",
+      appId: "A123",
+    });
+    await store.connectWechat({ accountId: "old-wechat-account" });
+    const latest = await store.connectWechat({
+      accountId: "new-wechat-account",
+    });
+
+    const channels = await store.listChannels();
+
+    expect(channels.map((channel) => channel.id)).toContain(slack.id);
+    expect(
+      channels
+        .filter((channel) => channel.channelType === "wechat")
+        .map((channel) => channel.accountId),
+    ).toEqual([latest.accountId]);
+  });
+
+  it("can mark a connected channel as errored", async () => {
+    const store = new NexuConfigStore(env);
+
+    const channel = await store.connectWechat({
+      accountId: "expired-wechat-account",
+    });
+    const updated = await store.setChannelStatus(channel.id, "error");
+    const channels = await store.listChannels();
+
+    expect(updated?.status).toBe("error");
+    expect(channels.find((entry) => entry.id === channel.id)?.status).toBe(
+      "error",
+    );
+  });
+
   it("refreshes connected desktop cloud models from curated models plus allowed authenticated supplements", async () => {
     const store = new NexuConfigStore(env);
     const requestedUrls: string[] = [];

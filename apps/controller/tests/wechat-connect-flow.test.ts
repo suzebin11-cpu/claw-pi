@@ -90,6 +90,7 @@ function createTestContainer(): ControllerContainer {
       message: "微信连接成功。",
     }),
     connectWechat: vi.fn().mockResolvedValue(makeChannel()),
+    reconcileExpiredWechatSessions: vi.fn().mockResolvedValue(false),
     disconnectChannel: vi.fn().mockResolvedValue(true),
     listChannels: vi.fn().mockResolvedValue([]),
   };
@@ -250,23 +251,19 @@ describe("WeChat connect flow (API-level)", () => {
     expect(data.connected).toBe(false);
   });
 
-  // ── Connect (non-blocking) ──────────────────────────────────
+  // ── Connect ─────────────────────────────────────────────────
 
-  it("POST /wechat/connect returns immediately without blocking", async () => {
+  it("POST /wechat/connect returns connected channel after service completes", async () => {
     const container = createTestContainer();
     const app = createApp(container);
 
-    const start = Date.now();
     const resp = await app.request("/api/v1/channels/wechat/connect", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ accountId: "abc123-im-bot" }),
     });
-    const elapsed = Date.now() - start;
 
     expect(resp.status).toBe(200);
-    // Must return in under 1 second — proves no readiness polling
-    expect(elapsed).toBeLessThan(1000);
     expect(container.channelService.connectWechat).toHaveBeenCalledWith(
       "abc123-im-bot",
     );
@@ -375,6 +372,16 @@ describe("WeChat connect flow (API-level)", () => {
       ready: false,
       lastError: "session expired",
     });
+    expect(
+      container.channelService.reconcileExpiredWechatSessions,
+    ).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channelType: "wechat",
+          lastError: "session expired",
+        }),
+      ]),
+    );
   });
 
   // ── Live status: connecting (post-connect transition) ───────
@@ -442,7 +449,7 @@ describe("WeChat connect flow (API-level)", () => {
     expect(waitData.connected).toBe(true);
     expect(waitData.accountId).toBeTruthy();
 
-    // Step 3: Connect (non-blocking)
+    // Step 3: Connect
     const connectResp = await app.request("/api/v1/channels/wechat/connect", {
       method: "POST",
       headers: { "content-type": "application/json" },

@@ -541,8 +541,8 @@ function installApplicationMenu(): void {
           ? ([
               { role: "quit", label: "退出" },
             ] satisfies MenuItemConstructorOptions[])
-          : [{ role: "close", label: "关闭窗口" }]),
-      ],
+          : ([{ role: "close", label: "关闭窗口" }] satisfies MenuItemConstructorOptions[])),
+      ] satisfies MenuItemConstructorOptions[],
     },
     {
       label: "编辑",
@@ -556,7 +556,7 @@ function installApplicationMenu(): void {
         { role: "delete", label: "删除" },
         { type: "separator" },
         { role: "selectAll", label: "全选" },
-      ],
+      ] satisfies MenuItemConstructorOptions[],
     },
     {
       label: "视图",
@@ -575,9 +575,11 @@ function installApplicationMenu(): void {
         { role: "zoomOut", label: "缩小" },
         { type: "separator" },
         { role: "togglefullscreen", label: "全屏" },
-      ],
+      ] satisfies MenuItemConstructorOptions[],
     },
-    ...(!app.isPackaged || productionDebugMode ? [developMenu] : []),
+    ...(!app.isPackaged || productionDebugMode
+      ? ([developMenu] satisfies MenuItemConstructorOptions[])
+      : []),
     {
       label: "窗口",
       submenu: [
@@ -588,8 +590,8 @@ function installApplicationMenu(): void {
               { type: "separator" },
               { role: "front", label: "全部置前" },
             ] satisfies MenuItemConstructorOptions[])
-          : [{ role: "close", label: "关闭" }]),
-      ],
+          : ([{ role: "close", label: "关闭" }] satisfies MenuItemConstructorOptions[])),
+      ] satisfies MenuItemConstructorOptions[],
     },
     helpMenu,
   ];

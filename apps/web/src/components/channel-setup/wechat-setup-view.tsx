@@ -21,7 +21,7 @@ type Phase =
 
 const RETRY_DELAY_MS = 2000;
 const QR_START_MAX_WAIT_MS = 45_000;
-const CONNECT_READY_MAX_WAIT_MS = 90_000;
+const CONNECT_READY_MAX_WAIT_MS = 180_000;
 const LIVE_STATUS_POLL_MS = 1500;
 
 // Fake progress: gateway usually ready in 15-30s.
@@ -95,28 +95,32 @@ export function WechatSetupView({
     }
   }, []);
 
-  const waitForWechatReady = useCallback(async (signal: AbortSignal) => {
-    const deadline = Date.now() + CONNECT_READY_MAX_WAIT_MS;
+  const waitForWechatReady = useCallback(
+    async (accountId: string, signal: AbortSignal) => {
+      const deadline = Date.now() + CONNECT_READY_MAX_WAIT_MS;
 
-    while (!signal.aborted && Date.now() < deadline) {
-      const { data } = await getApiV1ChannelsLiveStatus().catch(() => ({
-        data: undefined,
-      }));
-      const wechat = data?.channels?.find(
-        (channel) =>
-          channel.channelType === "wechat" ||
-          channel.channelType === "wechat_personal",
-      );
+      while (!signal.aborted && Date.now() < deadline) {
+        const { data } = await getApiV1ChannelsLiveStatus().catch(() => ({
+          data: undefined,
+        }));
+        const wechat = data?.channels?.find(
+          (channel) =>
+            (channel.channelType === "wechat" ||
+              channel.channelType === "wechat_personal") &&
+            channel.accountId === accountId,
+        );
 
-      if (wechat?.ready && wechat.status === "connected") {
-        return true;
+        if (wechat?.ready && wechat.status === "connected") {
+          return true;
+        }
+
+        await delay(LIVE_STATUS_POLL_MS);
       }
 
-      await delay(LIVE_STATUS_POLL_MS);
-    }
-
-    return false;
-  }, []);
+      return false;
+    },
+    [],
+  );
 
   const startQrFlow = useCallback(async () => {
     cleanup();
@@ -219,7 +223,10 @@ export function WechatSetupView({
           return;
         }
 
-        const ready = await waitForWechatReady(controller.signal);
+        const ready = await waitForWechatReady(
+          waitData.accountId,
+          controller.signal,
+        );
         if (controller.signal.aborted) return;
         if (!ready) {
           setErrorMessage(t("wechatSetup.connectPending"));

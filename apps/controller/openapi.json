@@ -2095,9 +2095,6 @@
                     },
                     "configPushed": {
                       "type": "boolean"
-                    },
-                    "error": {
-                      "type": "string"
                     }
                   },
                   "required": [
@@ -3380,6 +3377,9 @@
                     },
                     "configPushed": {
                       "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -3458,6 +3458,9 @@
                     },
                     "configPushed": {
                       "type": "boolean"
+                    },
+                    "error": {
+                      "type": "string"
                     }
                   },
                   "required": [
@@ -6497,6 +6500,9 @@
                             "type": "string"
                           },
                           "provider": {
+                            "type": "string"
+                          },
+                          "vendor": {
                             "type": "string"
                           },
                           "isDefault": {
@@ -9909,7 +9915,7 @@
                         },
                         "defaultImageGenerationModelId": {
                           "type": "string",
-                          "default": "clawpi-image/gemini-3.1-flash-image-preview"
+                          "default": ""
                         }
                       }
                     }
@@ -9972,7 +9978,7 @@
                   },
                   "defaultImageGenerationModelId": {
                     "type": "string",
-                    "default": "clawpi-image/gemini-3.1-flash-image-preview"
+                    "default": ""
                   }
                 }
               }
@@ -10029,7 +10035,7 @@
                         },
                         "defaultImageGenerationModelId": {
                           "type": "string",
-                          "default": "clawpi-image/gemini-3.1-flash-image-preview"
+                          "default": ""
                         }
                       }
                     }

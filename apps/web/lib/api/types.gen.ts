@@ -2458,6 +2458,7 @@ export type GetApiV1ModelsResponses = {
             id: string;
             name: string;
             provider: string;
+            vendor?: string;
             isDefault?: boolean;
             description?: string;
         }>;

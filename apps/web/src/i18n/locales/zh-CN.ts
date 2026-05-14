@@ -327,6 +327,9 @@ const zhCN = {
   "models.marketplace.category.all": "全部模型",
   "models.marketplace.category.chat": "聊天模型",
   "models.marketplace.category.image": "生图模型",
+  "models.marketplace.vendors": "厂商分类",
+  "models.marketplace.vendor.all": "全部厂商",
+  "models.marketplace.vendor.other": "其他",
   "models.marketplace.configureProviders": "配置服务商",
   "models.marketplace.backToMarketplace": "返回模型广场",
   "models.marketplace.chatModelDescription":
@@ -372,8 +375,7 @@ const zhCN = {
   "models.switchingImageModel": "正在切换生图模型…",
   "models.confirmSwitch.title": "确认切换模型？",
   "models.confirmSwitch.subtitle": "即将切换为 {{model}}",
-  "models.confirmSwitch.body":
-    "会同步到微信和龙虾大脑，完成确认后才会生效。",
+  "models.confirmSwitch.body": "会同步到微信和龙虾大脑，完成确认后才会生效。",
   "models.confirmSwitch.cancel": "取消",
   "models.confirmSwitch.confirm": "确认切换",
   "models.provider.nexu.name": "Claw-Pi 官方",

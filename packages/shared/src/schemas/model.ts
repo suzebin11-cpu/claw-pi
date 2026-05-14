@@ -4,6 +4,7 @@ export const modelSchema = z.object({
   id: z.string(),
   name: z.string(),
   provider: z.string(),
+  vendor: z.string().optional(),
   isDefault: z.boolean().optional(),
   description: z.string().optional(),
 });

@@ -129,8 +129,12 @@ export class OpenClawConfigWriter {
     await writeFile(this.env.openclawConfigPath, content, "utf8");
     this.lastWrittenContent = content;
 
-    // Sync weixin account index for openclaw-weixin plugin compatibility
-    await syncWeixinAccountIndex(this.env.openclawStateDir, config);
+    // Sync weixin account index for openclaw-weixin plugin compatibility.
+    // Older tests and some harnesses only provide openclawConfigPath; in that
+    // case the config directory is the state directory that owns plugin state.
+    const openclawStateDir =
+      this.env.openclawStateDir ?? path.dirname(this.env.openclawConfigPath);
+    await syncWeixinAccountIndex(openclawStateDir, config);
 
     const configStat = await stat(this.env.openclawConfigPath);
     logger.info(
