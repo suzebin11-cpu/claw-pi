@@ -75,6 +75,7 @@ const NEXU_OFFICIAL_MODEL_REFRESH_INTERVAL_MS = 60 * 1000;
 export async function createContainer(): Promise<ControllerContainer> {
   const configStore = new NexuConfigStore(env);
   await configStore.reconcileConfiguredDesktopCloudState();
+  await configStore.resetWechatChannelsForFreshLogin();
   if (env.manageOpenclawProcess) {
     await configStore.syncManagedRuntimeGateway({
       port: env.openclawGatewayPort,

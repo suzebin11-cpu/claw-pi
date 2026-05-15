@@ -13,6 +13,11 @@ const desktopReadyResponseSchema = z.object({
   }),
   status: z.enum(["active", "starting", "degraded", "unhealthy"]),
   gatewayConnected: z.boolean(),
+  model: z.object({
+    ready: z.boolean(),
+    defaultModelId: z.string().nullable(),
+    effectiveModelId: z.string().nullable(),
+  }),
   openclawDashboardUrl: z.string().optional(),
   openclawChatUrl: z.string().optional(),
   bootTimestamp: z.number(),
@@ -154,6 +159,13 @@ export function registerDesktopRoutes(
     }),
     async (c) => {
       const runtime = await container.runtimeHealth.probe();
+      const config = await container.configStore.getConfig();
+      const effectiveModelId =
+        await container.runtimeModelStateService.getEffectiveModelId();
+      const configuredModelId = config.runtime.defaultModelId ?? null;
+      const modelReady =
+        effectiveModelId !== null &&
+        (configuredModelId === null || effectiveModelId === configuredModelId);
       const bots = await container.configStore.listBots();
       const preferredBot =
         bots.find((bot) => bot.status === "active") ??
@@ -182,6 +194,11 @@ export function registerDesktopRoutes(
           runtime,
           status: container.runtimeState.status,
           gatewayConnected: container.gatewayService.isConnected(),
+          model: {
+            ready: modelReady,
+            defaultModelId: configuredModelId,
+            effectiveModelId,
+          },
           openclawDashboardUrl,
           openclawChatUrl,
           bootTimestamp: container.bootTimestamp,

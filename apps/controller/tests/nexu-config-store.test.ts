@@ -124,6 +124,110 @@ describe("NexuConfigStore", () => {
     ).toEqual([latest.accountId]);
   });
 
+  it("reconciles legacy configs with multiple WeChat channels on startup", async () => {
+    await mkdir(path.dirname(env.nexuConfigPath), { recursive: true });
+    await writeFile(
+      env.nexuConfigPath,
+      JSON.stringify(
+        {
+          $schema: "https://api.clawpi.app:9443/config.json",
+          schemaVersion: 1,
+          app: {},
+          bots: [
+            {
+              id: "bot-1",
+              name: "Assistant",
+              slug: "assistant",
+              poolId: null,
+              status: "active",
+              modelId: env.defaultModelId,
+              systemPrompt: null,
+              createdAt: "2026-05-15T00:00:00.000Z",
+              updatedAt: "2026-05-15T00:00:00.000Z",
+            },
+          ],
+          runtime: {
+            gateway: {
+              port: env.openclawGatewayPort,
+              bind: "loopback",
+              authMode: "none",
+            },
+            defaultModelId: env.defaultModelId,
+            defaultImageGenerationModelId: "",
+          },
+          providers: [],
+          integrations: [],
+          channels: [
+            {
+              id: "wechat-old",
+              botId: "bot-1",
+              channelType: "wechat",
+              accountId: "old-wechat-account",
+              status: "connected",
+              teamName: null,
+              appId: null,
+              botUserId: null,
+              createdAt: "2026-05-15T00:00:00.000Z",
+              updatedAt: "2026-05-15T00:00:00.000Z",
+            },
+            {
+              id: "wechat-new",
+              botId: "bot-1",
+              channelType: "wechat",
+              accountId: "new-wechat-account",
+              status: "connected",
+              teamName: null,
+              appId: null,
+              botUserId: null,
+              createdAt: "2026-05-15T00:01:00.000Z",
+              updatedAt: "2026-05-15T00:01:00.000Z",
+            },
+          ],
+          templates: {},
+          desktop: {},
+          secrets: {},
+        },
+        null,
+        2,
+      ),
+    );
+
+    const store = new NexuConfigStore(env);
+    const result = await store.reconcileSingleWechatChannel();
+    const channels = await store.listChannels();
+
+    expect(result).toEqual({
+      changed: true,
+      keptAccountId: "new-wechat-account",
+      removedCount: 1,
+    });
+    expect(channels.map((channel) => channel.accountId)).toEqual([
+      "new-wechat-account",
+    ]);
+  });
+
+  it("clears WeChat channels on startup while preserving other channels", async () => {
+    const store = new NexuConfigStore(env);
+    const slack = await store.connectSlack({
+      botToken: "xoxb-test",
+      signingSecret: "secret",
+      teamId: "T123",
+      teamName: "Acme",
+      appId: "A123",
+    });
+    await store.connectWechat({ accountId: "wechat-account" });
+
+    const result = await store.resetWechatChannelsForFreshLogin();
+    const channels = await store.listChannels();
+
+    expect(result).toEqual({ changed: true, removedCount: 1 });
+    expect(channels).toHaveLength(1);
+    expect(channels[0]?.id).toBe(slack.id);
+    expect(channels.some((channel) => channel.channelType === "wechat")).toBe(
+      false,
+    );
+  });
+
   it("can mark a connected channel as errored", async () => {
     const store = new NexuConfigStore(env);
 

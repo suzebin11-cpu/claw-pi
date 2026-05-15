@@ -948,6 +948,13 @@ export function registerChannelRoutes(
 
   const channelsLiveStatusResponseSchema = z.object({
     gatewayConnected: z.boolean(),
+    system: z.object({
+      runtimeReady: z.boolean(),
+      modelReady: z.boolean(),
+      runtimeStatus: z.enum(["active", "starting", "degraded", "unhealthy"]),
+      defaultModelId: z.string().nullable(),
+      effectiveModelId: z.string().nullable(),
+    }),
     channels: z.array(channelLiveStatusEntrySchema),
     agent: z.object({
       modelId: z.string().nullable(),
@@ -985,8 +992,13 @@ export function registerChannelRoutes(
       );
       const effectiveModelId =
         await container.runtimeModelStateService.getEffectiveModelId();
+      const config = await container.configStore.getConfig();
       const models = await container.modelProviderService.listModels();
       const modelId = effectiveModelId;
+      const configuredModelId = config.runtime.defaultModelId ?? null;
+      const modelReady =
+        modelId !== null &&
+        (configuredModelId === null || modelId === configuredModelId);
       const modelName = modelId
         ? (models.models.find((model) => model.id === modelId)?.name ?? null)
         : null;
@@ -994,6 +1006,15 @@ export function registerChannelRoutes(
       return c.json(
         {
           gatewayConnected: liveStatus.gatewayConnected,
+          system: {
+            runtimeReady:
+              container.runtimeState.status === "active" &&
+              container.gatewayService.isConnected(),
+            modelReady,
+            runtimeStatus: container.runtimeState.status,
+            defaultModelId: configuredModelId,
+            effectiveModelId: modelId,
+          },
           channels: liveStatus.channels,
           agent: {
             modelId,

@@ -1551,6 +1551,27 @@
                     "gatewayConnected": {
                       "type": "boolean"
                     },
+                    "model": {
+                      "type": "object",
+                      "properties": {
+                        "ready": {
+                          "type": "boolean"
+                        },
+                        "defaultModelId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "effectiveModelId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "ready",
+                        "defaultModelId",
+                        "effectiveModelId"
+                      ]
+                    },
                     "openclawDashboardUrl": {
                       "type": "string"
                     },
@@ -1567,6 +1588,7 @@
                     "runtime",
                     "status",
                     "gatewayConnected",
+                    "model",
                     "bootTimestamp"
                   ]
                 }
@@ -5370,6 +5392,12 @@
                     },
                     "accountId": {
                       "type": "string"
+                    },
+                    "pending": {
+                      "type": "boolean"
+                    },
+                    "expired": {
+                      "type": "boolean"
                     }
                   },
                   "required": [
@@ -5535,6 +5563,41 @@
                     "gatewayConnected": {
                       "type": "boolean"
                     },
+                    "system": {
+                      "type": "object",
+                      "properties": {
+                        "runtimeReady": {
+                          "type": "boolean"
+                        },
+                        "modelReady": {
+                          "type": "boolean"
+                        },
+                        "runtimeStatus": {
+                          "type": "string",
+                          "enum": [
+                            "active",
+                            "starting",
+                            "degraded",
+                            "unhealthy"
+                          ]
+                        },
+                        "defaultModelId": {
+                          "type": "string",
+                          "nullable": true
+                        },
+                        "effectiveModelId": {
+                          "type": "string",
+                          "nullable": true
+                        }
+                      },
+                      "required": [
+                        "runtimeReady",
+                        "modelReady",
+                        "runtimeStatus",
+                        "defaultModelId",
+                        "effectiveModelId"
+                      ]
+                    },
                     "channels": {
                       "type": "array",
                       "items": {
@@ -5616,6 +5679,7 @@
                   },
                   "required": [
                     "gatewayConnected",
+                    "system",
                     "channels",
                     "agent"
                   ]

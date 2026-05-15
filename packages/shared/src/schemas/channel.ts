@@ -97,6 +97,8 @@ export const wechatQrWaitResponseSchema = z.object({
   connected: z.boolean(),
   message: z.string(),
   accountId: z.string().optional(),
+  pending: z.boolean().optional(),
+  expired: z.boolean().optional(),
 });
 
 export const whatsappQrStartResponseSchema = z.object({

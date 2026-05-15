@@ -38,7 +38,7 @@ describe("listWeixinAccountIds", () => {
     expect(accountIds).toEqual(["58550d4f9aa4-im-bot"]);
   });
 
-  it("includes persisted account files even when the index file is missing", () => {
+  it("does not auto-activate persisted account files when the index file is missing", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "weixin-accounts-"));
     tempRoots.push(stateDir);
     process.env.OPENCLAW_STATE_DIR = stateDir;
@@ -47,6 +47,6 @@ describe("listWeixinAccountIds", () => {
 
     const accountIds = listWeixinAccountIds(makeConfig([]));
 
-    expect(accountIds).toEqual(["legacy-im-bot"]);
+    expect(accountIds).toEqual([]);
   });
 });

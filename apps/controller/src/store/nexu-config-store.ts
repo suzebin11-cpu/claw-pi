@@ -864,6 +864,100 @@ export class NexuConfigStore {
     return updatedChannel;
   }
 
+  async reconcileSingleWechatChannel(): Promise<{
+    changed: boolean;
+    keptAccountId: string | null;
+    removedCount: number;
+  }> {
+    let keptAccountId: string | null = null;
+    let keptChannelId: string | null = null;
+    let removedCount = 0;
+
+    await this.store.update((config) => {
+      const wechatChannels = config.channels.filter(
+        (channel) => channel.channelType === "wechat",
+      );
+
+      if (wechatChannels.length <= 1) {
+        keptAccountId = wechatChannels[0]?.accountId ?? null;
+        keptChannelId = wechatChannels[0]?.id ?? null;
+        return config;
+      }
+
+      const keptChannel =
+        [...wechatChannels].sort((a, b) => {
+          const aTime = Date.parse(a.updatedAt || a.createdAt);
+          const bTime = Date.parse(b.updatedAt || b.createdAt);
+          return (
+            (Number.isFinite(bTime) ? bTime : 0) -
+            (Number.isFinite(aTime) ? aTime : 0)
+          );
+        })[0] ?? null;
+      keptAccountId = keptChannel?.accountId ?? null;
+      keptChannelId = keptChannel?.id ?? null;
+      removedCount = keptChannel ? wechatChannels.length - 1 : 0;
+
+      return {
+        ...config,
+        channels: config.channels.filter(
+          (channel) =>
+            channel.channelType !== "wechat" || channel.id === keptChannelId,
+        ),
+      };
+    });
+
+    if (removedCount > 0) {
+      logger.info(
+        {
+          keptAccountId,
+          removedCount,
+        },
+        "wechat_channels_reconciled_single_account",
+      );
+    }
+
+    return {
+      changed: removedCount > 0,
+      keptAccountId,
+      removedCount,
+    };
+  }
+
+  async resetWechatChannelsForFreshLogin(): Promise<{
+    changed: boolean;
+    removedCount: number;
+  }> {
+    let removedCount = 0;
+
+    await this.store.update((config) => {
+      const nextChannels = config.channels.filter((channel) => {
+        const remove = channel.channelType === "wechat";
+        if (remove) {
+          removedCount += 1;
+        }
+        return !remove;
+      });
+
+      if (removedCount === 0) {
+        return config;
+      }
+
+      return {
+        ...config,
+        channels: nextChannels,
+      };
+    });
+
+    if (removedCount > 0) {
+      logger.info({ removedCount }, "wechat_channels_reset_for_fresh_login");
+    }
+
+    return {
+      changed: removedCount > 0,
+      removedCount,
+    };
+  }
+
   async connectSlack(
     input: ConnectSlackInput & { botUserId?: string | null },
   ): Promise<ChannelResponse> {

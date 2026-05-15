@@ -6,6 +6,11 @@ export type RuntimeReadySnapshot = {
   status?: RuntimeStatus;
   gatewayConnected?: boolean;
   bootTimestamp?: number;
+  model?: {
+    ready?: boolean;
+    defaultModelId?: string | null;
+    effectiveModelId?: string | null;
+  };
 };
 
 export type ChannelLiveStatus =
@@ -37,7 +42,11 @@ export const CHANNEL_STATUS_HYSTERESIS_MS = 15_000;
 export function isRuntimeFullyOnline(
   runtime: RuntimeReadySnapshot | undefined,
 ): boolean {
-  return runtime?.status === "active" && runtime.gatewayConnected === true;
+  return (
+    runtime?.status === "active" &&
+    runtime.gatewayConnected === true &&
+    runtime.model?.ready === true
+  );
 }
 
 /**

@@ -1,4 +1,3 @@
-import { readdirSync, rmSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "@nexu/shared";
@@ -37,11 +36,11 @@ async function syncWeixinAccountIndex(
     // File doesn't exist or is invalid
   }
 
-  // Authoritative: config is the source of truth for which accounts should
-  // exist. Filter out internal prewarm IDs that should never be persisted,
-  // and only keep existing IDs that are still present in the current config.
-  // This prevents "ghost accounts" from accumulating across connect/disconnect
-  // cycles and avoids persisting the internal prewarm placeholder.
+  // Authoritative: config is the source of truth for which accounts are active.
+  // Filter out internal prewarm IDs that should never be persisted, and only
+  // keep existing IDs that are still present in the current config. Historical
+  // credential/sync files are intentionally preserved so a fresh QR login can
+  // reuse prior context instead of behaving like a destructive logout.
   const configIdSet = new Set(accountIds);
   const mergedIds = [
     ...new Set([
@@ -50,30 +49,14 @@ async function syncWeixinAccountIndex(
     ]),
   ].filter((id) => !id.startsWith(NEXU_INTERNAL_ACCOUNT_PREFIX));
 
-  // Only write if changed
+  // Only write the active account index if changed. The openclaw-weixin plugin
+  // must not auto-activate accounts just because old credential files exist.
   if (JSON.stringify(mergedIds) === JSON.stringify(existingIds)) {
     return;
   }
 
   await mkdir(indexDir, { recursive: true });
   await writeFile(indexPath, JSON.stringify(mergedIds, null, 2), "utf8");
-
-  // Remove orphan credential/sync files for accounts no longer in the
-  // authoritative set.  This prevents listStoredWeixinAccountIds() from
-  // resurrecting stale accounts that were removed from config.
-  const accountsDir = path.join(indexDir, "accounts");
-  try {
-    const validIds = new Set(mergedIds);
-    for (const entry of readdirSync(accountsDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      const id = entry.name.replace(/\.sync\.json$|\.json$/, "");
-      if (!validIds.has(id)) {
-        rmSync(path.join(accountsDir, entry.name), { force: true });
-      }
-    }
-  } catch {
-    // accounts dir may not exist yet — that's fine
-  }
 
   logger.debug(
     { indexPath, accountIds: mergedIds },
@@ -114,6 +97,9 @@ export class OpenClawConfigWriter {
         { path: this.env.openclawConfigPath },
         "openclaw_config_write_skipped_unchanged",
       );
+      const openclawStateDir =
+        this.env.openclawStateDir ?? path.dirname(this.env.openclawConfigPath);
+      await syncWeixinAccountIndex(openclawStateDir, config);
       return;
     }
 

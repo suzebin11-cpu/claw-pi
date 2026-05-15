@@ -192,11 +192,12 @@ describe("WeChat connect/disconnect lifecycle", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     rmSync(tmpDir, { recursive: true, force: true });
   });
 
-  it("connectWechat waits until the new account is ready", async () => {
+  it("connectWechat persists the new account without blocking on readiness", async () => {
     const channel = await service.connectWechat("test-account");
 
     expect(configStore.connectWechat).toHaveBeenCalledWith({
@@ -207,25 +208,26 @@ describe("WeChat connect/disconnect lifecycle", () => {
     );
     expect(syncService.syncAll).not.toHaveBeenCalled();
     expect(syncService.syncAllImmediate).toHaveBeenCalledTimes(1);
-    expect(gatewayService.getChannelReadiness).toHaveBeenCalledWith(
-      "wechat",
-      "test-account",
-    );
+    expect(gatewayService.getChannelReadiness).not.toHaveBeenCalled();
     expect(channel.channelType).toBe("wechat");
   });
 
-  it("connectWechat does not rollback on slow runtime startup", async () => {
+  it("connectWechat does not fail or rollback on slow runtime startup", async () => {
     gatewayService.getChannelReadiness.mockResolvedValue({
       ready: false,
+      connected: false,
+      running: false,
+      configured: false,
+      gatewayConnected: true,
       lastError: "monitor failed to start",
     });
 
-    await expect(service.connectWechat("slow-account")).rejects.toThrow(
-      "微信已扫码",
-    );
+    const channel = await service.connectWechat("slow-account");
 
+    expect(channel.channelType).toBe("wechat");
     expect(configStore.disconnectChannel).not.toHaveBeenCalled();
     expect(syncService.syncAllImmediate).toHaveBeenCalledTimes(1);
+    expect(gatewayService.getChannelReadiness).not.toHaveBeenCalled();
   });
 
   it("marks expired WeChat sessions as channel errors and syncs immediately", async () => {
@@ -248,7 +250,7 @@ describe("WeChat connect/disconnect lifecycle", () => {
     expect(syncService.syncAllImmediate).toHaveBeenCalledTimes(1);
   });
 
-  it("confirmed QR login replaces stale WeChat account files and index", async () => {
+  it("confirmed QR login activates the new account without deleting old account context", async () => {
     const accountsDir = path.join(tmpDir, "openclaw-weixin", "accounts");
     const indexPath = path.join(tmpDir, "openclaw-weixin", "accounts.json");
     mkdirSync(accountsDir, { recursive: true });
@@ -301,15 +303,147 @@ describe("WeChat connect/disconnect lifecycle", () => {
     expect(JSON.parse(readFileSync(indexPath, "utf-8"))).toEqual([
       "new-account",
     ]);
-    expect(existsSync(path.join(accountsDir, "old-account.json"))).toBe(false);
+    expect(existsSync(path.join(accountsDir, "old-account.json"))).toBe(true);
     expect(existsSync(path.join(accountsDir, "old-account.sync.json"))).toBe(
-      false,
+      true,
     );
     expect(
       JSON.parse(
         readFileSync(path.join(accountsDir, "new-account.json"), "utf-8"),
       ),
     ).toMatchObject({ token: "new-token" });
+  });
+
+  it("keeps a QR login pending after a short wait window without activating an account", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    const accountsDir = path.join(tmpDir, "openclaw-weixin", "accounts");
+    const indexPath = path.join(tmpDir, "openclaw-weixin", "accounts.json");
+    mkdirSync(accountsDir, { recursive: true });
+    writeFileSync(indexPath, JSON.stringify([]));
+    let confirmed = false;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("get_bot_qrcode")) {
+          return new Response(
+            JSON.stringify({
+              qrcode: "qr-token",
+              qrcode_img_content: "data:image/png;base64,abc",
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("get_qrcode_status")) {
+          if (confirmed) {
+            return new Response(
+              JSON.stringify({
+                status: "confirmed",
+                bot_token: "new-token",
+                ilink_bot_id: "new-account",
+                baseurl: "https://ilinkai.weixin.qq.com",
+                ilink_user_id: "user-1",
+              }),
+              { status: 200 },
+            );
+          }
+          return new Response(JSON.stringify({ status: "wait" }), {
+            status: 200,
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const started = await service.wechatQrStart();
+    const waitPromise = service.wechatQrWait(started.sessionKey ?? "");
+
+    await vi.advanceTimersByTimeAsync(36_000);
+    const result = await waitPromise;
+
+    expect(result).toEqual({
+      connected: false,
+      message: "等待扫码中，请继续在手机微信确认。",
+      pending: true,
+    });
+    expect(JSON.parse(readFileSync(indexPath, "utf-8"))).toEqual([]);
+    expect(existsSync(path.join(accountsDir, "new-account.json"))).toBe(false);
+
+    confirmed = true;
+    const confirmedResult = await service.wechatQrWait(
+      started.sessionKey ?? "",
+    );
+    expect(confirmedResult).toMatchObject({
+      connected: true,
+      accountId: "new-account",
+    });
+    expect(JSON.parse(readFileSync(indexPath, "utf-8"))).toEqual([
+      "new-account",
+    ]);
+  });
+
+  it("QR wait does not let a long-poll request exceed the total deadline", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+
+    let statusCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url.includes("get_bot_qrcode")) {
+          return new Response(
+            JSON.stringify({
+              qrcode: "qr-token",
+              qrcode_img_content: "data:image/png;base64,abc",
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("get_qrcode_status")) {
+          statusCalls += 1;
+          if (statusCalls === 1) {
+            return new Promise<Response>((resolve) => {
+              setTimeout(() => {
+                resolve(
+                  new Response(JSON.stringify({ status: "wait" }), {
+                    status: 200,
+                  }),
+                );
+              }, 30_000);
+            });
+          }
+
+          return new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const started = await service.wechatQrStart();
+    const waitPromise = service.wechatQrWait(started.sessionKey ?? "");
+
+    await vi.advanceTimersByTimeAsync(36_000);
+
+    await expect(waitPromise).resolves.toEqual({
+      connected: false,
+      message: "等待扫码中，请继续在手机微信确认。",
+      pending: true,
+    });
+    expect(statusCalls).toBe(2);
   });
 
   it("disconnectChannel calls syncAll after unbinding", async () => {
@@ -421,7 +555,7 @@ describe("syncWeixinAccountIndex via OpenClawConfigWriter", () => {
     expect(ids).toEqual([]);
   });
 
-  it("removes orphan credential files not in authoritative set", async () => {
+  it("preserves orphan credential files while removing orphan IDs from the active index", async () => {
     const indexDir = path.join(tmpDir, "openclaw-weixin");
     const accountsDir = path.join(indexDir, "accounts");
     mkdirSync(accountsDir, { recursive: true });
@@ -451,10 +585,14 @@ describe("syncWeixinAccountIndex via OpenClawConfigWriter", () => {
       },
     } as never);
 
-    // Orphan files should be removed
-    expect(existsSync(path.join(accountsDir, "orphan-acct.json"))).toBe(false);
+    const ids = JSON.parse(
+      readFileSync(path.join(indexDir, "accounts.json"), "utf-8"),
+    );
+    expect(ids).toEqual(["current-acct"]);
+    // Historical files are preserved so a fresh QR scan can reconnect context.
+    expect(existsSync(path.join(accountsDir, "orphan-acct.json"))).toBe(true);
     expect(existsSync(path.join(accountsDir, "orphan-acct.sync.json"))).toBe(
-      false,
+      true,
     );
     // Current account files preserved
     expect(existsSync(path.join(accountsDir, "current-acct.json"))).toBe(true);

@@ -1,4 +1,11 @@
-import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "@nexu/shared";
@@ -27,6 +34,7 @@ describe("OpenClawConfigWriter", () => {
     rootDir = await mkdtemp(path.join(tmpdir(), "nexu-config-writer-"));
     env = {
       openclawConfigPath: path.join(rootDir, ".openclaw", "openclaw.json"),
+      openclawStateDir: path.join(rootDir, ".openclaw"),
     } as ControllerEnv;
   });
 
@@ -125,6 +133,94 @@ describe("OpenClawConfigWriter", () => {
     const secondStat = await stat(env.openclawConfigPath);
 
     expect(secondStat.mtimeMs).toBe(firstStat.mtimeMs);
+  });
+
+  it("still cleans stale WeChat account index when config content is unchanged", async () => {
+    const config = makeConfig();
+    const writer1 = new OpenClawConfigWriter(env);
+    await writer1.write(config);
+
+    const wechatStateDir = path.join(env.openclawStateDir, "openclaw-weixin");
+    const accountsDir = path.join(wechatStateDir, "accounts");
+    await mkdir(accountsDir, { recursive: true });
+    await writeFile(
+      path.join(wechatStateDir, "accounts.json"),
+      JSON.stringify(["stale-wechat-account"], null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(accountsDir, "stale-wechat-account.json"),
+      "{}",
+      "utf8",
+    );
+
+    const writer2 = new OpenClawConfigWriter(env);
+    await writer2.write(config);
+
+    const index = JSON.parse(
+      await readFile(path.join(wechatStateDir, "accounts.json"), "utf8"),
+    );
+    expect(index).toEqual([]);
+    await expect(
+      readFile(path.join(accountsDir, "stale-wechat-account.json"), "utf8"),
+    ).resolves.toBe("{}");
+  });
+
+  it("preserves stale WeChat account files when the index is already empty", async () => {
+    const config = makeConfig();
+    const writer1 = new OpenClawConfigWriter(env);
+    await writer1.write(config);
+
+    const wechatStateDir = path.join(env.openclawStateDir, "openclaw-weixin");
+    const accountsDir = path.join(wechatStateDir, "accounts");
+    const sessionsDir = path.join(
+      env.openclawStateDir,
+      "agents",
+      "bot-1",
+      "sessions",
+    );
+    await mkdir(accountsDir, { recursive: true });
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      path.join(wechatStateDir, "accounts.json"),
+      JSON.stringify([], null, 2),
+      "utf8",
+    );
+    await writeFile(
+      path.join(accountsDir, "stale-wechat-account.json"),
+      "{}",
+      "utf8",
+    );
+    await writeFile(
+      path.join(accountsDir, "stale-wechat-account.sync.json"),
+      "{}",
+      "utf8",
+    );
+    await writeFile(
+      path.join(sessionsDir, "wechat-session.jsonl"),
+      "{}\n",
+      "utf8",
+    );
+
+    const writer2 = new OpenClawConfigWriter(env);
+    await writer2.write(config);
+
+    const index = JSON.parse(
+      await readFile(path.join(wechatStateDir, "accounts.json"), "utf8"),
+    );
+    expect(index).toEqual([]);
+    await expect(
+      readFile(path.join(accountsDir, "stale-wechat-account.json"), "utf8"),
+    ).resolves.toBe("{}");
+    await expect(
+      readFile(
+        path.join(accountsDir, "stale-wechat-account.sync.json"),
+        "utf8",
+      ),
+    ).resolves.toBe("{}");
+    await expect(
+      readFile(path.join(sessionsDir, "wechat-session.jsonl"), "utf8"),
+    ).resolves.toBe("{}\n");
   });
 
   it("new writer instance writes when content differs from existing file", async () => {

@@ -17,10 +17,12 @@ type Phase =
   | "loading-qr"
   | "scanning"
   | "connecting"
+  | "pending"
   | "error";
 
 const RETRY_DELAY_MS = 2000;
 const QR_START_MAX_WAIT_MS = 45_000;
+const QR_LOGIN_MAX_WAIT_MS = 5 * 60_000;
 const CONNECT_READY_MAX_WAIT_MS = 180_000;
 const LIVE_STATUS_POLL_MS = 1500;
 
@@ -42,6 +44,25 @@ function calcFakeProgress(elapsedMs: number): number {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function extractApiMessage(error: unknown): string | null {
+  return error &&
+    typeof error === "object" &&
+    "message" in error &&
+    typeof error.message === "string"
+    ? error.message
+    : null;
+}
+
+function shouldKeepPendingAccount(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    !normalized.includes("expired") &&
+    !normalized.includes("qr") &&
+    !message.includes("过期") &&
+    !message.includes("二维码")
+  );
 }
 
 export interface WechatSetupViewProps {
@@ -110,7 +131,12 @@ export function WechatSetupView({
             channel.accountId === accountId,
         );
 
-        if (wechat?.ready && wechat.status === "connected") {
+        if (
+          data?.system?.runtimeReady &&
+          data.system.modelReady &&
+          wechat?.ready &&
+          wechat.status === "connected"
+        ) {
           return true;
         }
 
@@ -120,6 +146,58 @@ export function WechatSetupView({
       return false;
     },
     [],
+  );
+
+  const confirmWechatAccount = useCallback(
+    async (accountId: string, controller: AbortController) => {
+      try {
+        setQrUrl(null);
+        setErrorMessage(null);
+        setPhase("connecting");
+
+        const { error: connectError } = await postApiV1ChannelsWechatConnect({
+          body: { accountId },
+        });
+
+        if (controller.signal.aborted) return;
+
+        if (connectError) {
+          const msg =
+            extractApiMessage(connectError) ?? t("wechatSetup.connectFailed");
+          if (shouldKeepPendingAccount(msg)) {
+            setErrorMessage(msg);
+            setPhase("pending");
+          } else {
+            setErrorMessage(msg);
+            setPhase("error");
+          }
+          return;
+        }
+
+        const ready = await waitForWechatReady(accountId, controller.signal);
+        if (controller.signal.aborted) return;
+        if (!ready) {
+          setErrorMessage(t("wechatSetup.connectPending"));
+          setPhase("pending");
+          return;
+        }
+
+        toast.success(t("wechatSetup.connectSuccess"));
+        track("channel_ready", {
+          channel: "wechat",
+          channel_type: "wechat_personal",
+        });
+        identify({ channels_connected: 1 });
+        onConnected();
+        setPhase("idle");
+      } catch {
+        if (!controller.signal.aborted) {
+          setErrorMessage(t("wechatSetup.connectFailed"));
+          setPhase("error");
+        }
+      }
+    },
+    [onConnected, t, waitForWechatReady],
   );
 
   const startQrFlow = useCallback(async () => {
@@ -185,66 +263,46 @@ export function WechatSetupView({
       }
       setQrUrl(startData.qrDataUrl ?? null);
       setPhase("scanning");
+      const qrWaitStartedAt = Date.now();
 
-      const { data: waitData, error: waitError } =
-        await postApiV1ChannelsWechatQrWait({
-          body: { sessionKey: startData.sessionKey },
-        });
+      while (true) {
+        if (controller.signal.aborted) return;
 
-      if (controller.signal.aborted) return;
+        const { data: waitData, error: waitError } =
+          await postApiV1ChannelsWechatQrWait({
+            body: { sessionKey: startData.sessionKey },
+          });
 
-      if (waitError || !waitData) {
-        const msg =
-          typeof waitError === "object" &&
-          waitError !== null &&
-          "message" in waitError
-            ? String(waitError.message)
-            : t("wechatSetup.timeout");
-        setErrorMessage(msg);
-        setPhase("error");
-        return;
-      }
+        if (controller.signal.aborted) return;
 
-      if (waitData.connected && waitData.accountId) {
-        setPhase("connecting");
-        const { error: connectError } = await postApiV1ChannelsWechatConnect({
-          body: { accountId: waitData.accountId },
-        });
-
-        if (connectError) {
+        if (waitError || !waitData) {
           const msg =
-            typeof connectError === "object" &&
-            connectError !== null &&
-            "message" in connectError
-              ? String(connectError.message)
-              : t("wechatSetup.connectFailed");
+            typeof waitError === "object" &&
+            waitError !== null &&
+            "message" in waitError
+              ? String(waitError.message)
+              : t("wechatSetup.timeout");
           setErrorMessage(msg);
           setPhase("error");
           return;
         }
 
-        const ready = await waitForWechatReady(
-          waitData.accountId,
-          controller.signal,
-        );
-        if (controller.signal.aborted) return;
-        if (!ready) {
-          setErrorMessage(t("wechatSetup.connectPending"));
+        if (waitData.connected && waitData.accountId) {
+          await confirmWechatAccount(waitData.accountId, controller);
+          return;
+        }
+
+        if (
+          waitData.expired ||
+          Date.now() - qrWaitStartedAt >= QR_LOGIN_MAX_WAIT_MS
+        ) {
+          setErrorMessage(waitData.message || t("wechatSetup.timeout"));
           setPhase("error");
           return;
         }
 
-        toast.success(t("wechatSetup.connectSuccess"));
-        track("channel_ready", {
-          channel: "wechat",
-          channel_type: "wechat_personal",
-        });
-        identify({ channels_connected: 1 });
-        onConnected();
-        setPhase("idle");
-      } else {
-        setErrorMessage(waitData.message || t("wechatSetup.timeout"));
-        setPhase("error");
+        setPhase("scanning");
+        await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
       }
     } catch {
       if (!abortRef.current?.signal.aborted) {
@@ -254,14 +312,17 @@ export function WechatSetupView({
       }
     }
   }, [
+    confirmWechatAccount,
     cleanup,
     gatewayReady,
-    onConnected,
     startProgress,
     stopProgress,
     t,
-    waitForWechatReady,
   ]);
+
+  const retryFlow = useCallback(() => {
+    void startQrFlow();
+  }, [startQrFlow]);
 
   const isLoading =
     phase === "waiting-gateway" ||
@@ -351,7 +412,27 @@ export function WechatSetupView({
             </p>
             <button
               type="button"
-              onClick={startQrFlow}
+              onClick={retryFlow}
+              className="flex gap-1.5 items-center px-4 py-2 text-[12px] font-medium text-accent-fg rounded-lg bg-accent hover:bg-accent-hover transition-all cursor-pointer"
+            >
+              <RefreshCw size={13} />
+              {t("wechatSetup.retry")}
+            </button>
+          </div>
+        ) : phase === "pending" ? (
+          <div className="flex flex-col items-center gap-3 py-4">
+            <div className="p-3 rounded-xl bg-[var(--color-warning-subtle)] border border-[rgba(251,191,36,0.18)]">
+              <Loader2
+                size={48}
+                className="animate-spin text-[var(--color-warning)]"
+              />
+            </div>
+            <p className="text-[12px] text-text-secondary text-center max-w-xs">
+              {errorMessage}
+            </p>
+            <button
+              type="button"
+              onClick={retryFlow}
               className="flex gap-1.5 items-center px-4 py-2 text-[12px] font-medium text-accent-fg rounded-lg bg-accent hover:bg-accent-hover transition-all cursor-pointer"
             >
               <RefreshCw size={13} />

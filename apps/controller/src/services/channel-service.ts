@@ -34,7 +34,6 @@ import type { RuntimeHealth } from "../runtime/runtime-health.js";
 import type { NexuConfigStore } from "../store/nexu-config-store.js";
 import type {
   ChannelLiveStatusEntry,
-  ChannelReadiness,
   OpenClawGatewayService,
 } from "./openclaw-gateway-service.js";
 import type { OpenClawSyncService } from "./openclaw-sync-service.js";
@@ -51,8 +50,6 @@ const WECHAT_LOGIN_TTL_MS = 5 * 60_000;
 const WECHAT_QR_POLL_TIMEOUT_MS = 35_000;
 const WECHAT_QR_FETCH_TIMEOUT_MS = 10_000;
 const WECHAT_QR_POLL_BACKOFF_MS = 1_000;
-const WECHAT_READY_TIMEOUT_MS = 180_000;
-const WECHAT_READY_POLL_MS = 1_500;
 const WHATSAPP_LOGIN_TTL_MS = 3 * 60_000;
 const WHATSAPP_QR_TIMEOUT_MS = 45_000;
 const WHATSAPP_WAIT_TIMEOUT_MS = 120_000;
@@ -418,7 +415,7 @@ function writeWeChatAccount(
   }
 }
 
-function replaceWeChatStoredAccount(
+function activateWeChatStoredAccount(
   env: ControllerEnv,
   accountId: string,
   data: WechatStoredAccount,
@@ -428,26 +425,14 @@ function replaceWeChatStoredAccount(
   mkdirSync(stateDir, { recursive: true });
   mkdirSync(accountsDir, { recursive: true });
 
-  let removedFiles = 0;
-  try {
-    for (const entry of readdirSync(accountsDir, { withFileTypes: true })) {
-      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-      rmSync(path.join(accountsDir, entry.name), { force: true });
-      removedFiles += 1;
-    }
-  } catch {
-    // The accounts directory was just created or is temporarily unavailable.
-  }
-
   writeWeChatAccount(env, accountId, data);
   const indexPath = resolveWeChatAccountIndexPath(env);
   writeFileSync(indexPath, JSON.stringify([accountId], null, 2), "utf-8");
   logger.info(
     {
       accountId: redactIdentifier(accountId),
-      removedFiles,
     },
-    "wechat_account_store_replaced",
+    "wechat_account_store_activated",
   );
 }
 
@@ -742,6 +727,7 @@ async function pollWechatQrStatus(
   apiBaseUrl: string,
   qrcode: string,
   headers: Record<string, string>,
+  timeoutMs = WECHAT_QR_POLL_TIMEOUT_MS,
 ): Promise<WechatQrStatusResponse> {
   const base = apiBaseUrl.endsWith("/") ? apiBaseUrl : `${apiBaseUrl}/`;
   const url = new URL(
@@ -749,7 +735,7 @@ async function pollWechatQrStatus(
     base,
   );
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), WECHAT_QR_POLL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await proxyFetch(url.toString(), {
       headers,
@@ -896,17 +882,13 @@ export class ChannelService {
     const channel = await this.configStore.connectWechat({ accountId });
     await this.syncService.writePlatformTemplatesForBot(channel.botId);
     await this.syncService.syncAllImmediate();
-
-    const readiness = await this.waitForWechatReady(accountId);
-    if (!readiness.ready) {
-      throw new Error(
-        readiness.lastError === "session expired" ||
-          readiness.lastError === "not configured"
-          ? "微信登录已过期，请重新扫码连接。"
-          : "微信已扫码，但运行环境尚未确认连接成功，请稍后重试。",
-      );
-    }
-
+    logger.info(
+      {
+        channelId: channel.id,
+        accountId: redactIdentifier(accountId),
+      },
+      "wechat_connect_configured",
+    );
     return channel;
   }
 
@@ -945,33 +927,6 @@ export class ChannelService {
     }
 
     return changed;
-  }
-
-  private async waitForWechatReady(
-    accountId: string,
-  ): Promise<ChannelReadiness> {
-    const deadline = Date.now() + WECHAT_READY_TIMEOUT_MS;
-    let lastReadiness = await this.gatewayService.getChannelReadiness(
-      "wechat",
-      accountId,
-    );
-
-    while (Date.now() < deadline) {
-      if (lastReadiness.ready) {
-        return lastReadiness;
-      }
-      if (lastReadiness.lastError) {
-        return lastReadiness;
-      }
-
-      await sleep(WECHAT_READY_POLL_MS);
-      lastReadiness = await this.gatewayService.getChannelReadiness(
-        "wechat",
-        accountId,
-      );
-    }
-
-    return lastReadiness;
   }
 
   async wechatQrStart() {
@@ -1025,6 +980,7 @@ export class ChannelService {
       return {
         connected: false,
         message: "当前没有进行中的登录，请先发起登录。",
+        expired: true,
       };
     }
 
@@ -1033,10 +989,11 @@ export class ChannelService {
       return {
         connected: false,
         message: "二维码已过期，请重新生成。",
+        expired: true,
       };
     }
 
-    const deadline = Date.now() + 500_000;
+    const deadline = Date.now() + WECHAT_QR_POLL_TIMEOUT_MS;
     const headers = buildWechatQrHeaders(this.env, {
       includeClientVersion: true,
     });
@@ -1053,10 +1010,15 @@ export class ChannelService {
     while (Date.now() < deadline) {
       let status: WechatQrStatusResponse;
       try {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          break;
+        }
         status = await pollWechatQrStatus(
           DEFAULT_WECHAT_BASE_URL,
           activeLogin.qrcode,
           headers,
+          Math.min(WECHAT_QR_POLL_TIMEOUT_MS, remainingMs),
         );
       } catch (error) {
         logger.warn(
@@ -1086,7 +1048,10 @@ export class ChannelService {
       }
 
       if (status.status === "wait" || status.status === "scaned") {
-        await sleep(WECHAT_QR_POLL_BACKOFF_MS);
+        const remainingMs = deadline - Date.now();
+        if (remainingMs > 0) {
+          await sleep(Math.min(WECHAT_QR_POLL_BACKOFF_MS, remainingMs));
+        }
         continue;
       }
 
@@ -1102,6 +1067,7 @@ export class ChannelService {
         return {
           connected: false,
           message: "二维码已过期，请重新生成。",
+          expired: true,
         };
       }
 
@@ -1111,7 +1077,7 @@ export class ChannelService {
         status.ilink_bot_id
       ) {
         const normalizedAccountId = normalizeAccountId(status.ilink_bot_id);
-        replaceWeChatStoredAccount(this.env, normalizedAccountId, {
+        activateWeChatStoredAccount(this.env, normalizedAccountId, {
           token: status.bot_token,
           savedAt: new Date().toISOString(),
           baseUrl: status.baseurl || DEFAULT_WECHAT_BASE_URL,
@@ -1134,7 +1100,6 @@ export class ChannelService {
       }
     }
 
-    activeWechatLogins.delete(sessionKey);
     logger.warn(
       {
         sessionKey: redactIdentifier(sessionKey),
@@ -1144,7 +1109,8 @@ export class ChannelService {
     );
     return {
       connected: false,
-      message: "等待扫码超时，请重新生成二维码。",
+      message: "等待扫码中，请继续在手机微信确认。",
+      pending: true,
     };
   }
 
@@ -1600,10 +1566,9 @@ export class ChannelService {
     const channel = getChannel ? await getChannel(channelId) : null;
     const removed = await this.configStore.disconnectChannel(channelId);
     if (removed) {
-      // syncAll triggers the authoritative index writer which removes
-      // account IDs no longer in config. Credential files are cleaned up
-      // by the writer's orphan sweep — no destructive cleanup here so
-      // disconnect stays a pure "unbind", not a "logout".
+      // syncAll triggers the authoritative index writer, which updates active
+      // account IDs. Credential and sync files are preserved so disconnect
+      // stays a pure "unbind", not a destructive logout.
       await this.syncService.syncAll();
       if (channel?.channelType === "whatsapp") {
         await this.restartOpenClawForWhatsappLifecycle("whatsapp-disconnect");

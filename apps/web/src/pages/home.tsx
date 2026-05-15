@@ -68,6 +68,13 @@ type ChannelLiveStatusEntry = {
 
 type LiveStatusResponse = {
   gatewayConnected: boolean;
+  system?: {
+    runtimeReady: boolean;
+    modelReady: boolean;
+    runtimeStatus: "active" | "starting" | "degraded" | "unhealthy";
+    defaultModelId: string | null;
+    effectiveModelId: string | null;
+  };
   channels: ChannelLiveStatusEntry[];
   agent: {
     modelId: string | null;

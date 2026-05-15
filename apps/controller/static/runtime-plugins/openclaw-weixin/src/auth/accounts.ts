@@ -67,21 +67,6 @@ export function listIndexedWeixinAccountIds(): string[] {
   }
 }
 
-function listStoredWeixinAccountIds(): string[] {
-  const dir = resolveAccountsDir();
-
-  try {
-    if (!fs.existsSync(dir)) return [];
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .map((entry) => normalizeStoredAccountId(entry.name.slice(0, -5)))
-      .filter((id): id is string => id !== null);
-  } catch {
-    return [];
-  }
-}
-
 function listConfiguredWeixinAccountIds(cfg: OpenClawConfig): string[] {
   const section = cfg.channels?.["openclaw-weixin"] as
     | WeixinSectionConfig
@@ -305,11 +290,16 @@ type WeixinSectionConfig = WeixinAccountConfig & {
   accounts?: Record<string, WeixinAccountConfig>;
 };
 
-/** List accountIds from the index file (written at QR login). */
+/**
+ * List active accountIds from the index/config only.
+ *
+ * Stored credential files are deliberately not auto-discovered here: desktop
+ * cold start clears the active index to require a fresh QR scan, while keeping
+ * old files available for context-preserving reactivation after scan.
+ */
 export function listWeixinAccountIds(cfg: OpenClawConfig): string[] {
   return [...new Set([
     ...listIndexedWeixinAccountIds(),
-    ...listStoredWeixinAccountIds(),
     ...listConfiguredWeixinAccountIds(cfg),
   ])];
 }

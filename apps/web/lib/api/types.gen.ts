@@ -627,6 +627,11 @@ export type GetApiInternalDesktopReadyResponses = {
         };
         status: 'active' | 'starting' | 'degraded' | 'unhealthy';
         gatewayConnected: boolean;
+        model: {
+            ready: boolean;
+            defaultModelId: string;
+            effectiveModelId: string;
+        };
         openclawDashboardUrl?: string;
         openclawChatUrl?: string;
         bootTimestamp: number;
@@ -2041,6 +2046,8 @@ export type PostApiV1ChannelsWechatQrWaitResponses = {
         connected: boolean;
         message: string;
         accountId?: string;
+        pending?: boolean;
+        expired?: boolean;
     };
 };
 
@@ -2099,6 +2106,13 @@ export type GetApiV1ChannelsLiveStatusResponses = {
      */
     200: {
         gatewayConnected: boolean;
+        system: {
+            runtimeReady: boolean;
+            modelReady: boolean;
+            runtimeStatus: 'active' | 'starting' | 'degraded' | 'unhealthy';
+            defaultModelId: string;
+            effectiveModelId: string;
+        };
         channels: Array<{
             channelType: string;
             channelId: string;

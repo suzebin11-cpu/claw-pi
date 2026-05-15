@@ -113,7 +113,13 @@ function createTestContainer(): ControllerContainer {
 
   return {
     env,
-    configStore: {} as ControllerContainer["configStore"],
+    configStore: {
+      getConfig: vi.fn().mockResolvedValue({
+        runtime: {
+          defaultModelId: "link/gpt-5.4",
+        },
+      }),
+    } as unknown as ControllerContainer["configStore"],
     gatewayClient: {} as ControllerContainer["gatewayClient"],
     runtimeHealth: {
       probe: vi.fn(async () => ({ ok: true })),

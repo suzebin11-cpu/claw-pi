@@ -32,6 +32,19 @@ function isApiKeyProfile(profile: unknown): profile is { type: "api_key" } {
   );
 }
 
+function getProfileProvider(profile: unknown): string | null {
+  if (
+    typeof profile !== "object" ||
+    profile === null ||
+    !("provider" in profile)
+  ) {
+    return null;
+  }
+
+  const provider = (profile as Record<string, unknown>).provider;
+  return typeof provider === "string" ? provider : null;
+}
+
 export class OpenClawAuthProfilesWriter {
   constructor(private readonly authProfilesStore: OpenClawAuthProfilesStore) {}
 
@@ -140,6 +153,9 @@ export class OpenClawAuthProfilesWriter {
       string,
       AuthProfileRecord
     >;
+    const shouldKeepOpenAiCodexOAuth = Object.values(profiles).some(
+      (profile) => getProfileProvider(profile) === "openai-codex",
+    );
     await Promise.all(
       (config.agents?.list ?? []).map(async (agent) => {
         if (
@@ -152,6 +168,7 @@ export class OpenClawAuthProfilesWriter {
         const authProfilesPath =
           this.authProfilesStore.authProfilesPathForWorkspace(agent.workspace);
         const preservedKeys: string[] = [];
+        const droppedKeys: string[] = [];
 
         await this.authProfilesStore.updateAuthProfiles(
           authProfilesPath,
@@ -159,6 +176,14 @@ export class OpenClawAuthProfilesWriter {
             const preservedProfiles: Record<string, unknown> = {};
             for (const [key, profile] of Object.entries(existing.profiles)) {
               if (!isApiKeyProfile(profile)) {
+                const provider = getProfileProvider(profile);
+                if (
+                  provider === "openai-codex" &&
+                  !shouldKeepOpenAiCodexOAuth
+                ) {
+                  droppedKeys.push(key);
+                  continue;
+                }
                 preservedProfiles[key] = profile;
                 preservedKeys.push(key);
               }
@@ -181,6 +206,15 @@ export class OpenClawAuthProfilesWriter {
               preservedKeys,
             },
             "Preserved non-api_key auth profiles during config sync",
+          );
+        }
+        if (droppedKeys.length > 0) {
+          logger.info(
+            {
+              agent: agent.workspace,
+              droppedKeys,
+            },
+            "Dropped stale openai-codex auth profiles during config sync",
           );
         }
       }),
