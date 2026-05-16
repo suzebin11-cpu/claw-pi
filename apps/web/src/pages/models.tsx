@@ -423,6 +423,9 @@ const VENDOR_LABELS: Record<string, string> = {
   doubao: "Doubao",
   deepseek: "DeepSeek",
   qwen: "Qwen",
+  zimage: "Z-Image",
+  flux: "FLUX",
+  grok: "Grok",
   kimi: "Kimi",
   glm: "GLM",
   minimax: "MiniMax",
@@ -436,6 +439,9 @@ const VENDOR_ORDER = [
   "doubao",
   "deepseek",
   "qwen",
+  "zimage",
+  "flux",
+  "grok",
   "kimi",
   "glm",
   "minimax",
@@ -464,6 +470,9 @@ function inferMarketplaceVendor(input: {
   if (text.includes("doubao") || text.includes("seedream")) return "doubao";
   if (text.includes("deepseek")) return "deepseek";
   if (text.includes("qwen") || text.includes("tongyi")) return "qwen";
+  if (text.includes("z-image") || text.includes("zimage")) return "zimage";
+  if (text.includes("flux")) return "flux";
+  if (text.includes("grok") || text.includes("xai")) return "grok";
   if (text.includes("moonshot") || text.includes("kimi")) return "kimi";
   if (text.includes("zhipu") || text.includes("glm") || text.includes("zai")) {
     return "glm";
@@ -617,6 +626,123 @@ const BUILT_IN_CREATIVE_MODELS: MarketplaceModel[] = [
     ],
     detailKeys: [
       "models.marketplace.imageDetailCn",
+      "models.marketplace.imageDetailEdit",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "doubao-seedream-4-5-251128",
+    name: "Doubao Seedream 4.5",
+    provider: "clawpi-image",
+    vendor: "doubao",
+    capability: "image",
+    runtimeModelId: "clawpi-image/doubao-seedream-4-5-251128",
+    descriptionKey: "models.marketplace.seedream45.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+      "models.marketplace.tag.lowCost",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailCn",
+      "models.marketplace.imageDetailEdit",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "doubao-seedream-5-0-260128",
+    name: "Doubao Seedream 5.0 Lite",
+    provider: "clawpi-image",
+    vendor: "doubao",
+    capability: "image",
+    runtimeModelId: "clawpi-image/doubao-seedream-5-0-260128",
+    descriptionKey: "models.marketplace.seedream50.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+      "models.marketplace.tag.lowCost",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailCn",
+      "models.marketplace.imageDetailEdit",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "qwen-image-max",
+    name: "Qwen Image Max",
+    provider: "clawpi-image",
+    vendor: "qwen",
+    capability: "image",
+    runtimeModelId: "clawpi-image/qwen-image-max",
+    descriptionKey: "models.marketplace.qwenImageMax.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailCn",
+      "models.marketplace.imageDetailQuality",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "z-image-turbo",
+    name: "Z-Image Turbo",
+    provider: "clawpi-image",
+    vendor: "zimage",
+    capability: "image",
+    runtimeModelId: "clawpi-image/z-image-turbo",
+    descriptionKey: "models.marketplace.zImageTurbo.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.lowCost",
+      "models.marketplace.tag.fast",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailLowCost",
+      "models.marketplace.imageDetailQuality",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "flux.1-kontext-pro",
+    name: "FLUX.1 Kontext Pro",
+    provider: "clawpi-image",
+    vendor: "flux",
+    capability: "image",
+    runtimeModelId: "clawpi-image/flux.1-kontext-pro",
+    descriptionKey: "models.marketplace.fluxKontextPro.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailQuality",
+      "models.marketplace.imageDetailEdit",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "grok-imagine-image-pro",
+    name: "Grok Imagine Image Pro",
+    provider: "clawpi-image",
+    vendor: "grok",
+    capability: "image",
+    runtimeModelId: "clawpi-image/grok-imagine-image-pro",
+    descriptionKey: "models.marketplace.grokImagineImagePro.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailQuality",
       "models.marketplace.imageDetailEdit",
     ],
     actionHintKey: "models.marketplace.imageAction",

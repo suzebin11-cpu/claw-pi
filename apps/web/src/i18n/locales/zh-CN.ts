@@ -376,6 +376,18 @@ const zhCN = {
     "在聊天里说：用 Gemini 3.1 生成图片……",
   "models.marketplace.seedream4.description":
     "豆包 Seedream 图片模型，适合中文提示词、商品图和海报风格生成。",
+  "models.marketplace.seedream45.description":
+    "豆包 Seedream 4.5，适合主体一致性、多图融合、商品图和中文海报生成。",
+  "models.marketplace.seedream50.description":
+    "豆包 Seedream 5.0 Lite，适合复杂指令、参考一致性和企业视觉创作。",
+  "models.marketplace.qwenImageMax.description":
+    "通义 Qwen Image Max，适合更真实的人物质感、自然纹理和中文文字渲染。",
+  "models.marketplace.zImageTurbo.description":
+    "Z-Image Turbo，快速低成本图片模型，适合日常文生图和快速出稿。",
+  "models.marketplace.fluxKontextPro.description":
+    "FLUX.1 Kontext Pro，适合高质感创意图、海报风格和参考图编辑。",
+  "models.marketplace.grokImagineImagePro.description":
+    "Grok Imagine Image Pro，适合高细节图片生成和多轮优化。",
   "models.modelSwitched": "模型已切换",
   "models.modelSwitchedAndSynced": "模型已切换，已同步到机器人",
   "models.modelSwitchedSyncFailed": "模型已切换（同步到机器人待确认）",

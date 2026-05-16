@@ -87,7 +87,13 @@ type ActivationState = {
 };
 
 const DEFAULT_MANAGED_CHANNEL_ACCOUNT_ID = "default";
-const DESKTOP_CLOUD_SUPPLEMENTAL_MODEL_IDS = new Set(["gpt-5.5"]);
+const DESKTOP_CLOUD_SUPPLEMENTAL_MODEL_IDS = new Set([
+  "gpt-5.5",
+  "deepseek-v4-flash",
+  "deepseek-v4-pro",
+  "grok-4.2-fast",
+  "grok-4.2",
+]);
 
 function pickSupplementalDesktopCloudModels(
   models: readonly CloudModel[] | null | undefined,

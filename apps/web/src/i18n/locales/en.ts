@@ -396,6 +396,18 @@ const en = {
     "In chat, say: use Gemini 3.1 to generate an image...",
   "models.marketplace.seedream4.description":
     "Doubao Seedream image model for Chinese prompts, product visuals, and poster-style generation.",
+  "models.marketplace.seedream45.description":
+    "Doubao Seedream 4.5 for subject consistency, multi-image fusion, product visuals, and Chinese poster generation.",
+  "models.marketplace.seedream50.description":
+    "Doubao Seedream 5.0 Lite for complex instructions, reference consistency, and business visual creation.",
+  "models.marketplace.qwenImageMax.description":
+    "Qwen Image Max for more realistic people, natural textures, and Chinese text rendering.",
+  "models.marketplace.zImageTurbo.description":
+    "Z-Image Turbo is a fast, low-cost image model for everyday image generation and quick drafts.",
+  "models.marketplace.fluxKontextPro.description":
+    "FLUX.1 Kontext Pro for polished creative images, poster styles, and reference-image edits.",
+  "models.marketplace.grokImagineImagePro.description":
+    "Grok Imagine Image Pro for detailed image generation and iterative refinement.",
   "models.modelSwitched": "Model switched",
   "models.autoSwitched": "Auto-switched to {{model}}",
   "models.modelSwitchedAndSynced": "Model switched & synced to bot",

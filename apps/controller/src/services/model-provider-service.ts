@@ -191,6 +191,7 @@ function inferModelVendor(input: {
     return "anthropic";
   }
   if (text.includes("deepseek")) return "deepseek";
+  if (text.includes("grok") || text.includes("xai")) return "grok";
   if (text.includes("qwen") || text.includes("tongyi")) return "qwen";
   if (text.includes("moonshot") || text.includes("kimi")) return "kimi";
   if (text.includes("zhipu") || text.includes("glm") || text.includes("zai")) {

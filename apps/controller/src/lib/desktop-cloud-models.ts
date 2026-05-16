@@ -37,6 +37,42 @@ export const BUILT_IN_DESKTOP_CLOUD_IMAGE_MODELS: readonly DesktopCloudImageMode
       provider: "doubao",
       runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/doubao-seedream-4-0-250828`,
     },
+    {
+      id: "doubao-seedream-4-5-251128",
+      name: "Doubao Seedream 4.5",
+      provider: "doubao",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/doubao-seedream-4-5-251128`,
+    },
+    {
+      id: "doubao-seedream-5-0-260128",
+      name: "Doubao Seedream 5.0 Lite",
+      provider: "doubao",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/doubao-seedream-5-0-260128`,
+    },
+    {
+      id: "qwen-image-max",
+      name: "Qwen Image Max",
+      provider: "qwen",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/qwen-image-max`,
+    },
+    {
+      id: "z-image-turbo",
+      name: "Z-Image Turbo",
+      provider: "zimage",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/z-image-turbo`,
+    },
+    {
+      id: "flux.1-kontext-pro",
+      name: "FLUX.1 Kontext Pro",
+      provider: "flux",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/flux.1-kontext-pro`,
+    },
+    {
+      id: "grok-imagine-image-pro",
+      name: "Grok Imagine Image Pro",
+      provider: "grok",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/grok-imagine-image-pro`,
+    },
   ];
 
 export function normalizeDesktopCloudImageModelId(modelId: string): string {

@@ -23,13 +23,19 @@ describe("desktop cloud image models", () => {
       .toBe("clawpi-image/gpt-image-1-mini");
   });
 
-  it("keeps the built-in image model list intentionally small", () => {
+  it("keeps the built-in image model list curated", () => {
     expect(BUILT_IN_DESKTOP_CLOUD_IMAGE_MODELS.map((model) => model.id))
       .toEqual([
         "gpt-image-1-mini",
         "gpt-image-1.5",
         "gpt-image-2",
         "doubao-seedream-4-0-250828",
+        "doubao-seedream-4-5-251128",
+        "doubao-seedream-5-0-260128",
+        "qwen-image-max",
+        "z-image-turbo",
+        "flux.1-kontext-pro",
+        "grok-imagine-image-pro",
       ]);
   });
 });
