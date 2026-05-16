@@ -23,6 +23,7 @@ import { ArtifactService } from "../services/artifact-service.js";
 import { ChannelFallbackService } from "../services/channel-fallback-service.js";
 import { ChannelService } from "../services/channel-service.js";
 import { DesktopLocalService } from "../services/desktop-local-service.js";
+import { ImageGenerationService } from "../services/image-generation-service.js";
 import { IntegrationService } from "../services/integration-service.js";
 import { LocalUserService } from "../services/local-user-service.js";
 import { ModelProviderService } from "../services/model-provider-service.js";
@@ -58,6 +59,7 @@ export interface ControllerContainer {
   integrationService: IntegrationService;
   localUserService: LocalUserService;
   desktopLocalService: DesktopLocalService;
+  imageGenerationService: ImageGenerationService;
   analyticsService: AnalyticsService;
   artifactService: ArtifactService;
   templateService: TemplateService;
@@ -193,6 +195,7 @@ export async function createContainer(): Promise<ControllerContainer> {
       openclawProcess,
       env,
     ),
+    imageGenerationService: new ImageGenerationService(configStore, env),
     analyticsService,
     artifactService: new ArtifactService(artifactsStore),
     templateService: new TemplateService(configStore, openclawSyncService),

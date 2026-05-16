@@ -25,6 +25,7 @@ import {
 import type { z } from "zod";
 import type { ControllerEnv } from "../app/env.js";
 import {
+  DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID,
   normalizeDesktopCloudImageModelId,
   normalizeDesktopCloudModels,
 } from "../lib/desktop-cloud-models.js";
@@ -375,7 +376,7 @@ export class NexuConfigStore {
             authMode: env.openclawGatewayToken ? "token" : "none",
           },
           defaultModelId: env.defaultModelId,
-          defaultImageGenerationModelId: "",
+          defaultImageGenerationModelId: DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID,
         },
         providers: [],
         integrations: [],

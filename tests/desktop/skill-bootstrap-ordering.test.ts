@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   STATIC_SKILL_SLUGS,
   copyStaticSkills,
+  removeDefaultAutoSkills,
 } from "#controller/services/skillhub/curated-skills";
 import { SkillDb } from "#controller/services/skillhub/skill-db";
 import { SkillDirWatcher } from "#controller/services/skillhub/skill-dir-watcher";
@@ -160,5 +161,26 @@ describe("skill bootstrap ordering", () => {
 
     expect(installedSlugs).toContain(STATIC_TEST_SLUG);
     expect(installedSlugs).toContain("manual-skill");
+  });
+
+  it("default auto skill cleanup removes bundled defaults but preserves other skills", () => {
+    writeSkill(skillsDir, STATIC_TEST_SLUG);
+    writeSkill(skillsDir, "manual-skill");
+    db.recordInstall(STATIC_TEST_SLUG, "managed");
+    db.recordInstall("manual-skill", "managed");
+
+    const { removed, failed } = removeDefaultAutoSkills({
+      targetDir: skillsDir,
+      skillDb: db,
+    });
+
+    expect(failed).toEqual([]);
+    expect(removed).toContain(STATIC_TEST_SLUG);
+    expect(existsSync(resolve(skillsDir, STATIC_TEST_SLUG))).toBe(false);
+    expect(existsSync(resolve(skillsDir, "manual-skill", "SKILL.md"))).toBe(
+      true,
+    );
+    expect(db.isInstalled(STATIC_TEST_SLUG, "managed")).toBe(false);
+    expect(db.isInstalled("manual-skill", "managed")).toBe(true);
   });
 });

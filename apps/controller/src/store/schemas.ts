@@ -5,6 +5,7 @@ import {
   providerResponseSchema,
 } from "@nexu/shared";
 import { z } from "zod";
+import { DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID } from "../lib/desktop-cloud-models.js";
 
 export const controllerRuntimeConfigSchema = z
   .object({
@@ -16,7 +17,9 @@ export const controllerRuntimeConfigSchema = z
       })
       .default({ port: 18789, bind: "loopback", authMode: "none" }),
     defaultModelId: z.string().default("link/gpt-5.4-mini"),
-    defaultImageGenerationModelId: z.string().default(""),
+    defaultImageGenerationModelId: z
+      .string()
+      .default(DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID),
   })
   .passthrough();
 

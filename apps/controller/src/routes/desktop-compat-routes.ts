@@ -23,6 +23,7 @@ import {
 } from "@nexu/shared";
 import type { ControllerContainer } from "../app/container.js";
 import {
+  DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID,
   isBuiltInDesktopCloudImageModel,
   normalizeDesktopCloudImageModelId,
 } from "../lib/desktop-cloud-models.js";
@@ -518,7 +519,9 @@ export function registerDesktopCompatRoutes(
     }),
     async (c) => {
       const config = await container.configStore.getConfig();
-      const modelId = config.runtime.defaultImageGenerationModelId;
+      const modelId =
+        config.runtime.defaultImageGenerationModelId ||
+        DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID;
       const normalizedModelId =
         typeof modelId === "string" && modelId.length > 0
           ? normalizeDesktopCloudImageModelId(modelId)

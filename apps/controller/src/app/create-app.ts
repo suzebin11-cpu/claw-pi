@@ -8,6 +8,7 @@ import { registerChannelRoutes } from "../routes/channel-routes.js";
 import { registerDesktopCompatRoutes } from "../routes/desktop-compat-routes.js";
 import { registerDesktopRoutes } from "../routes/desktop-routes.js";
 import { registerIntegrationRoutes } from "../routes/integration-routes.js";
+import { registerImageGenerationRoutes } from "../routes/image-generation-routes.js";
 import { registerMiscCompatRoutes } from "../routes/misc-compat-routes.js";
 import { registerModelRoutes } from "../routes/model-routes.js";
 import { registerPaymentRoutes } from "../routes/payment-routes.js";
@@ -45,6 +46,7 @@ export function createApp(container: ControllerContainer) {
   registerModelRoutes(app, container);
   registerProviderOAuthRoutes(app, container);
   registerIntegrationRoutes(app, container);
+  registerImageGenerationRoutes(app, container);
   registerArtifactRoutes(app, container);
   registerSkillhubRoutes(app, container);
   registerUserRoutes(app, container);

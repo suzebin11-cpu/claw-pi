@@ -1,7 +1,11 @@
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import type { ControllerEnv } from "../app/env.js";
 import { CatalogManager } from "./skillhub/catalog-manager.js";
-import { copyStaticSkills } from "./skillhub/curated-skills.js";
+import {
+  copyStaticSkills,
+  removeDefaultAutoSkills,
+} from "./skillhub/curated-skills.js";
 import { InstallQueue } from "./skillhub/install-queue.js";
 import { SkillDb } from "./skillhub/skill-db.js";
 import { SkillDirWatcher } from "./skillhub/skill-dir-watcher.js";
@@ -18,6 +22,14 @@ export type SkillUninstallRequest = {
   source?: SkillSource;
   agentId?: string | null;
 };
+
+const DEFAULT_SKILLS_DISABLED_MARKER = "default-auto-skills-disabled-v1.json";
+
+function isDefaultSkillAutoInstallEnabled(): boolean {
+  const raw = process.env.SKILLHUB_AUTO_INSTALL_DEFAULT_SKILLS?.trim()
+    .toLowerCase();
+  return raw === "1" || raw === "true";
+}
 
 export class SkillhubService {
   private readonly catalogManager: CatalogManager;
@@ -174,6 +186,11 @@ export class SkillhubService {
    * - getCuratedSlugsToEnqueue filters against all known slugs in ledger
    */
   private initialize(): void {
+    if (!isDefaultSkillAutoInstallEnabled()) {
+      this.disableDefaultAutoSkillsOnce();
+      return;
+    }
+
     // Step 1: Copy static bundled skills to skills dir + record in DB
     if (this.env.staticSkillsDir && existsSync(this.env.staticSkillsDir)) {
       const { copied, failed } = copyStaticSkills({
@@ -197,6 +214,58 @@ export class SkillhubService {
     for (const slug of toEnqueue) {
       const canonical = this.catalogManager.canonicalizeSlug(slug);
       this.installQueue.enqueue(canonical, "managed");
+    }
+  }
+
+  private disableDefaultAutoSkillsOnce(): void {
+    const markerPath = resolve(
+      this.env.skillhubCacheDir,
+      DEFAULT_SKILLS_DISABLED_MARKER,
+    );
+    if (existsSync(markerPath)) {
+      return;
+    }
+
+    const { removed, failed } = removeDefaultAutoSkills({
+      targetDir: this.env.openclawSkillsDir,
+      skillDb: this.db,
+    });
+
+    if (removed.length > 0) {
+      this.log(
+        "info",
+        `default auto skills disabled: removed ${removed.length} skill(s): ${removed.join(", ")}`,
+      );
+    }
+    for (const entry of failed) {
+      this.log(
+        "warn",
+        `default auto skill cleanup failed slug=${entry.slug}: ${entry.error}`,
+      );
+    }
+
+    try {
+      mkdirSync(dirname(markerPath), { recursive: true });
+      writeFileSync(
+        markerPath,
+        `${JSON.stringify(
+          {
+            disabledAt: new Date().toISOString(),
+            removed,
+            failed,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+    } catch (error) {
+      this.log(
+        "warn",
+        `default auto skills marker write failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
     }
   }
 

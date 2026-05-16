@@ -363,6 +363,21 @@ const en = {
   "models.marketplace.tag.gemini": "Gemini",
   "models.marketplace.tag.fast": "Low latency",
   "models.marketplace.tag.conversationEdit": "Conversational edit",
+  "models.marketplace.imageDetailDefault": "Default low-cost image model",
+  "models.marketplace.imageDetailLowCost":
+    "Good for daily image generation and lightweight image edits",
+  "models.marketplace.imageDetailQuality":
+    "Better for higher-quality image generation and editing",
+  "models.marketplace.imageDetailEdit":
+    "Supports image editing from a reference image",
+  "models.marketplace.imageDetailCn":
+    "Chinese image model, suitable for lower-cost trials",
+  "models.marketplace.imageAction":
+    "In chat, say: generate an image / edit this image...",
+  "models.marketplace.gptImage1Mini.description":
+    "Low-cost GPT Image model, suitable as the default image model while controlling new-user usage.",
+  "models.marketplace.gptImage15.description":
+    "Higher-quality GPT Image model for better details, text rendering, and image editing tasks.",
   "models.marketplace.gptImage2.description":
     "Generate or edit images through the configured Claw-Pi cloud compatible API. Quality defaults to low to control cost.",
   "models.marketplace.gptImage2.detailSizes":
@@ -379,6 +394,8 @@ const en = {
     "Resolution: 512 / 1K, pay-per-use",
   "models.marketplace.gemini31FlashImage.action":
     "In chat, say: use Gemini 3.1 to generate an image...",
+  "models.marketplace.seedream4.description":
+    "Doubao Seedream image model for Chinese prompts, product visuals, and poster-style generation.",
   "models.modelSwitched": "Model switched",
   "models.autoSwitched": "Auto-switched to {{model}}",
   "models.modelSwitchedAndSynced": "Model switched & synced to bot",
@@ -397,6 +414,8 @@ const en = {
   "models.provider.nexu.name": "Claw-Pi Official",
   "models.provider.nexu.description":
     "Use Claw-Pi official premium models after login, no API key needed",
+  "models.provider.clawpiImage.description":
+    "Generate or edit images through Claw-Pi cloud image models",
   "models.provider.anthropic.description": "Claude series AI models",
   "models.provider.openai.description": "GPT series AI models",
   "models.provider.google.description": "Gemini series AI models",

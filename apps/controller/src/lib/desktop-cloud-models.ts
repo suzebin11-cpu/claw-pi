@@ -9,9 +9,35 @@ export type DesktopCloudImageModel = DesktopCloudModel & {
 };
 
 export const DESKTOP_CLOUD_IMAGE_PROVIDER_ID = "clawpi-image";
+export const DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID = `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/gpt-image-1-mini`;
 
 export const BUILT_IN_DESKTOP_CLOUD_IMAGE_MODELS: readonly DesktopCloudImageModel[] =
-  [];
+  [
+    {
+      id: "gpt-image-1-mini",
+      name: "GPT Image 1 Mini",
+      provider: "openai",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/gpt-image-1-mini`,
+    },
+    {
+      id: "gpt-image-1.5",
+      name: "GPT Image 1.5",
+      provider: "openai",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/gpt-image-1.5`,
+    },
+    {
+      id: "gpt-image-2",
+      name: "GPT Image 2",
+      provider: "openai",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/gpt-image-2`,
+    },
+    {
+      id: "doubao-seedream-4-0-250828",
+      name: "Doubao Seedream 4.0",
+      provider: "doubao",
+      runtimeModelId: `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/doubao-seedream-4-0-250828`,
+    },
+  ];
 
 export function normalizeDesktopCloudImageModelId(modelId: string): string {
   const trimmed = modelId.trim();

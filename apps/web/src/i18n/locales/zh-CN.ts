@@ -348,6 +348,16 @@ const zhCN = {
   "models.marketplace.tag.gemini": "Gemini",
   "models.marketplace.tag.fast": "低延迟",
   "models.marketplace.tag.conversationEdit": "对话式编辑",
+  "models.marketplace.imageDetailDefault": "默认低成本生图模型",
+  "models.marketplace.imageDetailLowCost": "适合日常文生图和轻量图生图",
+  "models.marketplace.imageDetailQuality": "适合更高质量的图片生成和编辑",
+  "models.marketplace.imageDetailEdit": "支持基于参考图进行图片编辑",
+  "models.marketplace.imageDetailCn": "国产图片模型，适合低成本尝试",
+  "models.marketplace.imageAction": "在聊天里说：生成图片 / 修改这张图……",
+  "models.marketplace.gptImage1Mini.description":
+    "低成本 GPT Image 模型，适合作为默认生图模型，优先控制新用户消耗。",
+  "models.marketplace.gptImage15.description":
+    "更高质量的 GPT Image 模型，适合需要更好细节、文字渲染和图片编辑的任务。",
   "models.marketplace.gptImage2.description":
     "通过已配置的 Claw-Pi 云端兼容接口生成或编辑图片，默认 low 质量控制成本。",
   "models.marketplace.gptImage2.detailSizes":
@@ -364,6 +374,8 @@ const zhCN = {
     "分辨率：512 / 1K，按次计费",
   "models.marketplace.gemini31FlashImage.action":
     "在聊天里说：用 Gemini 3.1 生成图片……",
+  "models.marketplace.seedream4.description":
+    "豆包 Seedream 图片模型，适合中文提示词、商品图和海报风格生成。",
   "models.modelSwitched": "模型已切换",
   "models.modelSwitchedAndSynced": "模型已切换，已同步到机器人",
   "models.modelSwitchedSyncFailed": "模型已切换（同步到机器人待确认）",
@@ -381,6 +393,8 @@ const zhCN = {
   "models.provider.nexu.name": "Claw-Pi 官方",
   "models.provider.nexu.description":
     "登录后使用 Claw-Pi 官方高级模型，无需单独配置 API Key",
+  "models.provider.clawpiImage.description":
+    "通过 Claw-Pi 云端图片模型生成或编辑图片",
   "models.provider.anthropic.description": "Claude 系列 AI 模型",
   "models.provider.openai.description": "GPT 系列 AI 模型",
   "models.provider.google.description": "Gemini 系列 AI 模型",

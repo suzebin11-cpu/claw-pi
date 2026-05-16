@@ -598,6 +598,7 @@ function compilePlugins(
   config: NexuConfig,
   env: ControllerEnv,
 ): OpenClawConfig["plugins"] {
+  const imageGenerationPluginId = "clawpi-image-generation";
   const hasMiniMaxOauth = config.providers.some(
     (provider) =>
       provider.providerId === "minimax" &&
@@ -649,7 +650,11 @@ function compilePlugins(
     },
     ...(configuredPluginIds.length > 0
       ? {
-          allow: [...configuredPluginIds, "nexu-runtime-model"],
+          allow: [
+            ...configuredPluginIds,
+            "nexu-runtime-model",
+            imageGenerationPluginId,
+          ],
         }
       : {}),
     entries: {
@@ -690,6 +695,12 @@ function compilePlugins(
         : {}),
       "nexu-runtime-model": {
         enabled: true,
+      },
+      [imageGenerationPluginId]: {
+        enabled: true,
+        config: {
+          controllerUrl: `http://127.0.0.1:${env.port}`,
+        },
       },
       ...(hasMiniMaxOauth
         ? {

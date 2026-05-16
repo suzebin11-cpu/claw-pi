@@ -145,7 +145,7 @@ export class OpenClawSyncService {
   }> = [];
   private static readonly DEBOUNCE_MS = 100;
   private static readonly SETTLING_MIN_MS = 3000;
-  private static readonly SETTLING_MAX_MS = 30000;
+  private static readonly SETTLING_MAX_MS = 120000;
   private syncCounter = 0;
 
   constructor(

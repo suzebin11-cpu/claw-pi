@@ -171,6 +171,55 @@ const GEMINI_TYPE_ARRAY_SEARCH =
   "cleaned.type = types.length === 1 ? types[0] : types;";
 const GEMINI_TYPE_ARRAY_REPLACEMENT =
   'cleaned.type = types.length >= 1 ? types[0] : "string";';
+const CONTROL_UI_BUNDLE_PATTERN = /^index-.*\.js$/u;
+const CONTROL_UI_IMAGE_EXTRACTOR_SEARCH =
+  'function ey(e){let t=e.content,n=[];if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&n.push({url:t.url})}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&n.push({url:e.url})}}return n}';
+const CONTROL_UI_IMAGE_EXTRACTOR_REPLACEMENT =
+  'function ey(e){let t=e.content,n=[];let r=e=>{if(typeof e!=`string`)return;let t=e.trim();if(!t)return;if(!(/^https?:\\/\\//i.test(t)||/^data:image\\//i.test(t)||t.startsWith(`/`)))return;if(!n.some(e=>e.url===t))n.push({url:t,alt:`生成图片`})};let i=e=>{if(!e||typeof e!=`object`)return;let t=e;typeof t.mediaUrl==`string`&&r(t.mediaUrl);Array.isArray(t.mediaUrls)&&t.mediaUrls.forEach(r);typeof t.url==`string`&&r(t.url);typeof t.fileUrl==`string`&&r(t.fileUrl);t.media&&typeof t.media==`object`&&i(t.media)};if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&r(t.url)}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&r(e.url)}}i(e.details);return n}';
+const CONTROL_UI_TOOL_OUTPUT_DETAILS_SEARCH =
+  '<details class="chat-tool-msg-collapse">';
+const CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT =
+  '<details class="chat-tool-msg-collapse" ?open=${f||m}>';
+const CONTROL_UI_CSP_IMAGE_SRC_SEARCH = '"img-src \'self\' data: https:",';
+const CONTROL_UI_CSP_IMAGE_SRC_REPLACEMENT =
+  '"img-src \'self\' data: https: http://127.0.0.1:* http://localhost:*",';
+const CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_SEARCH = [
+  '\tif ("details" in entry) {',
+  "\t\tdelete entry.details;",
+  "\t\tchanged = true;",
+  "\t}",
+].join("\n");
+const CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_REPLACEMENT = [
+  '\tif ("details" in entry) {',
+  "\t\tconst mediaBlocks = [];",
+  "\t\tconst addMediaUrl = (raw) => {",
+  '\t\t\tif (typeof raw !== "string") return;',
+  "\t\t\tconst url = raw.trim();",
+  "\t\t\tif (!url) return;",
+  '\t\t\tif (!(/^data:image\\//i.test(url) || /^https?:\\/\\/(?:127(?:\\.\\d{1,3}){3}|localhost):\\d+\\/api\\/internal\\/desktop\\/generated-images\\//i.test(url))) return;',
+  "\t\t\tif (!mediaBlocks.some((block) => block?.image_url?.url === url)) {",
+  '\t\t\t\tmediaBlocks.push({ type: "image_url", image_url: { url } });',
+  "\t\t\t}",
+  "\t\t};",
+  "\t\tconst collectMedia = (value) => {",
+  '\t\t\tif (!value || typeof value !== "object") return;',
+  '\t\t\tif (typeof value.mediaUrl === "string") addMediaUrl(value.mediaUrl);',
+  "\t\t\tif (Array.isArray(value.mediaUrls)) for (const url of value.mediaUrls) addMediaUrl(url);",
+  '\t\t\tif (typeof value.url === "string") addMediaUrl(value.url);',
+  '\t\t\tif (typeof value.fileUrl === "string") addMediaUrl(value.fileUrl);',
+  '\t\t\tif (value.media && typeof value.media === "object") collectMedia(value.media);',
+  "\t\t};",
+  "\t\tcollectMedia(entry.details);",
+  "\t\tif (mediaBlocks.length > 0) {",
+  "\t\t\tif (Array.isArray(entry.content)) entry.content = [...entry.content, ...mediaBlocks];",
+  '\t\t\telse if (typeof entry.content === "string") entry.content = [{ type: "text", text: entry.content }, ...mediaBlocks];',
+  '\t\t\telse if (typeof entry.text === "string") entry.content = [{ type: "text", text: entry.text }, ...mediaBlocks];',
+  "\t\t\telse entry.content = mediaBlocks;",
+  "\t\t}",
+  "\t\tdelete entry.details;",
+  "\t\tchanged = true;",
+  "\t}",
+].join("\n");
 const GEMINI_NORMALIZE_IMPORT_ANCHOR =
   'import { t as getProviderEnvVars } from "./provider-env-vars-';
 const GEMINI_NORMALIZE_IMPORT_ADDITION =
@@ -1318,6 +1367,136 @@ async function patchGeminiToolSanitization(openclawPackageRoot) {
   return patchedFiles;
 }
 
+async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
+  const patchedFiles = new Map();
+  const distDir = resolve(openclawPackageRoot, "dist");
+
+  let distEntries;
+  try {
+    distEntries = await readdir(distDir);
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] dist directory not found, skipping Control UI generated image patch",
+    );
+    return patchedFiles;
+  }
+
+  const assetsDir = resolve(distDir, "control-ui", "assets");
+  const patchedControlUiBundles = [];
+  let assetEntries = [];
+  try {
+    assetEntries = await readdir(assetsDir);
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] Control UI assets directory not found, skipping generated image patch",
+    );
+  }
+
+  for (const entry of assetEntries) {
+    if (!CONTROL_UI_BUNDLE_PATTERN.test(entry)) continue;
+    const entryPath = resolve(assetsDir, entry);
+    let source;
+    try {
+      source = await readFile(entryPath, "utf8");
+    } catch {
+      continue;
+    }
+
+    let patchCount = 0;
+    if (source.includes(CONTROL_UI_IMAGE_EXTRACTOR_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_IMAGE_EXTRACTOR_SEARCH,
+        CONTROL_UI_IMAGE_EXTRACTOR_REPLACEMENT,
+        `${entry}: generated image media extraction`,
+      );
+      patchCount += 1;
+    }
+    if (
+      source.includes(CONTROL_UI_TOOL_OUTPUT_DETAILS_SEARCH) &&
+      !source.includes(CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT)
+    ) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_TOOL_OUTPUT_DETAILS_SEARCH,
+        CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT,
+        `${entry}: auto-open media tool output`,
+      );
+      patchCount += 1;
+    }
+
+    if (patchCount > 0) {
+      patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
+      patchedControlUiBundles.push(entry);
+      console.log(
+        `[openclaw-sidecar] patched Control UI generated image rendering in ${entry}`,
+      );
+    }
+  }
+
+  if (patchedControlUiBundles.length > 0) {
+    const indexHtmlPath = resolve(distDir, "control-ui", "index.html");
+    let html;
+    try {
+      html = await readFile(indexHtmlPath, "utf8");
+    } catch {
+      html = "";
+    }
+
+    let updatedHtml = html;
+    for (const entry of patchedControlUiBundles) {
+      updatedHtml = updatedHtml.replace(
+        `src="./assets/${entry}"`,
+        `src="./assets/${entry}?clawpi-media=1"`,
+      );
+    }
+    if (updatedHtml !== html) {
+      patchedFiles.set(relative(openclawPackageRoot, indexHtmlPath), updatedHtml);
+      console.log(
+        "[openclaw-sidecar] patched Control UI entry asset cache key",
+      );
+    }
+  }
+
+  for (const entry of distEntries) {
+    if (!/^server\.impl-.*\.js$/u.test(entry)) continue;
+    const entryPath = resolve(distDir, entry);
+    let source;
+    try {
+      source = await readFile(entryPath, "utf8");
+    } catch {
+      continue;
+    }
+    if (!source.includes(CONTROL_UI_CSP_IMAGE_SRC_SEARCH)) continue;
+    source = applyExactReplacement(
+      source,
+      CONTROL_UI_CSP_IMAGE_SRC_SEARCH,
+      CONTROL_UI_CSP_IMAGE_SRC_REPLACEMENT,
+      `${entry}: allow localhost generated images in Control UI CSP`,
+    );
+    if (source.includes(CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_SEARCH,
+        CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_REPLACEMENT,
+        `${entry}: preserve generated image media for Control UI history`,
+      );
+    }
+    patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
+    console.log(
+      `[openclaw-sidecar] patched Control UI image CSP in ${entry}`,
+    );
+  }
+
+  if (patchedFiles.size === 0) {
+    console.warn(
+      "[openclaw-sidecar] no Control UI generated image anchors found (may already be fixed upstream)",
+    );
+  }
+
+  return patchedFiles;
+}
+
 async function stagePatchedOpenclawPackage() {
   await mkdir(dirname(sidecarRoot), { recursive: true });
   const stageRoot = await mkdtemp(
@@ -1334,10 +1513,13 @@ async function stagePatchedOpenclawPackage() {
   const bridgePatchedFiles = await patchReplyOutcomeBridge(stagedOpenclawRoot);
   const geminiPatchedFiles =
     await patchGeminiToolSanitization(stagedOpenclawRoot);
+  const controlUiPatchedFiles =
+    await patchControlUiGeneratedImageRendering(stagedOpenclawRoot);
   const patchedFiles = new Map([
     ...overlayFiles,
     ...bridgePatchedFiles,
     ...geminiPatchedFiles,
+    ...controlUiPatchedFiles,
   ]);
 
   for (const [patchRelativePath, patchedSource] of patchedFiles) {

@@ -39,6 +39,10 @@ export const STATIC_SKILL_SLUGS: readonly string[] = [
   "self-improving",
 ] as const;
 
+export const DEFAULT_AUTO_SKILL_SLUGS: readonly string[] = [
+  ...new Set([...STATIC_SKILL_SLUGS, ...CURATED_SKILL_SLUGS]),
+];
+
 /**
  * Copies static skills from the app bundle to the target skills directory.
  * Respects the user's removal ledger — won't re-copy skills the user uninstalled.
@@ -115,6 +119,41 @@ export function copyStaticSkills(params: {
   }
 
   return { copied, skipped, failed };
+}
+
+export function removeDefaultAutoSkills(params: {
+  targetDir: string;
+  skillDb: SkillDb;
+}): {
+  removed: string[];
+  skipped: string[];
+  failed: StaticSkillCopyFailure[];
+} {
+  const removed: string[] = [];
+  const skipped: string[] = [];
+  const failed: StaticSkillCopyFailure[] = [];
+
+  for (const slug of DEFAULT_AUTO_SKILL_SLUGS) {
+    const destDir = resolve(params.targetDir, slug);
+    if (!existsSync(resolve(destDir, "SKILL.md"))) {
+      skipped.push(slug);
+      continue;
+    }
+
+    try {
+      rmSync(destDir, { recursive: true, force: true });
+      removed.push(slug);
+    } catch (error) {
+      failed.push({
+        slug,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  params.skillDb.markUninstalledBySlugs(DEFAULT_AUTO_SKILL_SLUGS, "managed");
+
+  return { removed, skipped, failed };
 }
 
 export type CuratedInstallResult = {

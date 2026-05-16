@@ -922,6 +922,10 @@ app.on("second-instance", () => {
 function createMainWindow(): BrowserWindow {
   logLaunchTimeline("main window creation requested");
   const isMacOS = process.platform === "darwin";
+  const devWindowIconPath =
+    !isMacOS && !app.isPackaged
+      ? resolve(electronRoot, "build/icon.png")
+      : undefined;
   const window = new BrowserWindow({
     width: 1280,
     height: 720,
@@ -938,6 +942,7 @@ function createMainWindow(): BrowserWindow {
           visualEffectState: "followWindow" as const,
         }
       : {}),
+    ...(devWindowIconPath ? { icon: devWindowIconPath } : {}),
     show: false,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),

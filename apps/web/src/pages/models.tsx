@@ -325,6 +325,10 @@ const PROVIDER_META: Record<
     name: "Claw-Pi 官方",
     descriptionKey: "models.provider.nexu.description",
   },
+  "clawpi-image": {
+    name: "Claw-Pi 生图",
+    descriptionKey: "models.provider.clawpiImage.description",
+  },
   anthropic: {
     name: "Anthropic",
     descriptionKey: "models.provider.anthropic.description",
@@ -416,6 +420,7 @@ const VENDOR_LABELS: Record<string, string> = {
   openai: "OpenAI",
   google: "Google",
   anthropic: "Anthropic",
+  doubao: "Doubao",
   deepseek: "DeepSeek",
   qwen: "Qwen",
   kimi: "Kimi",
@@ -428,6 +433,7 @@ const VENDOR_ORDER = [
   "openai",
   "google",
   "anthropic",
+  "doubao",
   "deepseek",
   "qwen",
   "kimi",
@@ -455,6 +461,7 @@ function inferMarketplaceVendor(input: {
   if (text.includes("anthropic") || text.includes("claude")) {
     return "anthropic";
   }
+  if (text.includes("doubao") || text.includes("seedream")) return "doubao";
   if (text.includes("deepseek")) return "deepseek";
   if (text.includes("qwen") || text.includes("tongyi")) return "qwen";
   if (text.includes("moonshot") || text.includes("kimi")) return "kimi";
@@ -534,7 +541,88 @@ const ZAI_CODING_PLAN_MODELS = [
   "glm-4.7-flashx",
 ];
 
-const BUILT_IN_CREATIVE_MODELS: MarketplaceModel[] = [];
+const BUILT_IN_CREATIVE_MODELS: MarketplaceModel[] = [
+  {
+    id: "gpt-image-1-mini",
+    name: "GPT Image 1 Mini",
+    provider: "clawpi-image",
+    vendor: "openai",
+    capability: "image",
+    runtimeModelId: "clawpi-image/gpt-image-1-mini",
+    descriptionKey: "models.marketplace.gptImage1Mini.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+      "models.marketplace.tag.lowCost",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailDefault",
+      "models.marketplace.imageDetailLowCost",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "gpt-image-1.5",
+    name: "GPT Image 1.5",
+    provider: "clawpi-image",
+    vendor: "openai",
+    capability: "image",
+    runtimeModelId: "clawpi-image/gpt-image-1.5",
+    descriptionKey: "models.marketplace.gptImage15.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+      "models.marketplace.tag.2k",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailQuality",
+      "models.marketplace.imageDetailEdit",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+  {
+    id: "gpt-image-2",
+    name: "GPT Image 2",
+    provider: "clawpi-image",
+    vendor: "openai",
+    capability: "image",
+    runtimeModelId: "clawpi-image/gpt-image-2",
+    descriptionKey: "models.marketplace.gptImage2.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+      "models.marketplace.tag.2k",
+    ],
+    detailKeys: [
+      "models.marketplace.gptImage2.detailSizes",
+      "models.marketplace.gptImage2.detailQuality",
+    ],
+    actionHintKey: "models.marketplace.gptImage2.action",
+    available: true,
+  },
+  {
+    id: "doubao-seedream-4-0-250828",
+    name: "Doubao Seedream 4.0",
+    provider: "clawpi-image",
+    vendor: "doubao",
+    capability: "image",
+    runtimeModelId: "clawpi-image/doubao-seedream-4-0-250828",
+    descriptionKey: "models.marketplace.seedream4.description",
+    tagKeys: [
+      "models.marketplace.tag.image",
+      "models.marketplace.tag.imageEdit",
+      "models.marketplace.tag.lowCost",
+    ],
+    detailKeys: [
+      "models.marketplace.imageDetailCn",
+      "models.marketplace.imageDetailEdit",
+    ],
+    actionHintKey: "models.marketplace.imageAction",
+    available: true,
+  },
+];
 
 function buildProviders(apiModels: ApiModel[]): ProviderConfig[] {
   // Group models by provider
@@ -974,6 +1062,11 @@ function MarketplacePage({
   }> = [
     { id: "all", label: t("models.marketplace.category.all"), icon: Sparkles },
     { id: "chat", label: t("models.marketplace.category.chat"), icon: Cpu },
+    {
+      id: "image",
+      label: t("models.marketplace.category.image"),
+      icon: Camera,
+    },
   ];
 
   const normalizedSearch = search.trim().toLowerCase();

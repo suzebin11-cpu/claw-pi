@@ -338,6 +338,7 @@ type Frame = RequestFrame | ResponseFrame | EventFrame;
 const PROTOCOL_VERSION = 3;
 const MAX_BACKOFF_MS = 4_000;
 const REQUEST_TIMEOUT_MS = 15_000;
+const CONNECT_TIMEOUT_MS = 75_000;
 
 interface Pending {
   resolve: (value: unknown) => void;
@@ -714,9 +715,12 @@ export class OpenClawWsClient {
 
     const timer = setTimeout(() => {
       this.pending.delete(id);
-      logger.error({}, "openclaw_ws_connect_timeout");
+      logger.error(
+        { timeoutMs: CONNECT_TIMEOUT_MS },
+        "openclaw_ws_connect_timeout",
+      );
       this.ws?.close(4008, "connect timeout");
-    }, 10_000);
+    }, CONNECT_TIMEOUT_MS);
 
     this.pending.set(id, {
       resolve: (helloOk) => {
