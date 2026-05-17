@@ -553,7 +553,14 @@ function compileAgentList(
   installedSkillSlugs?: readonly string[],
   workspaceSkillsByAgent?: ReadonlyMap<string, readonly string[]>,
 ): OpenClawConfig["agents"]["list"] {
-  const sharedSlugs = installedSkillSlugs ?? [];
+  // Keep normal chat turns fast: globally installed skills can expand into a
+  // very large skillsSnapshot in every session prompt. Workspace-scoped skills
+  // still attach to the agent that owns that workspace, while global skills can
+  // be re-enabled for diagnostics/power users with OPENCLAW_ENABLE_GLOBAL_SKILLS.
+  const sharedSlugs =
+    process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS === "1"
+      ? (installedSkillSlugs ?? [])
+      : [];
 
   return config.bots
     .filter((bot) => bot.status === "active")
@@ -583,13 +590,13 @@ function compileAgentList(
         name: bot.name,
         workspace: `${env.openclawStateDir}/agents/${bot.id}`,
         default: index === 0,
+        skills: merged,
         thinkingDefault: "off",
         reasoningDefault: "off",
         fastModeDefault: true,
         ...(isExplicitOverride
           ? { model: { primary: botResolvedModelId } }
           : {}),
-        ...(merged.length > 0 ? { skills: merged } : {}),
       };
     });
 }
@@ -662,7 +669,7 @@ function compilePlugins(
         enabled: true,
         config: {
           dreaming: {
-            enabled: true,
+            enabled: false,
           },
         },
       },
@@ -783,34 +790,14 @@ export function compileOpenClawConfig(
         bootstrapMaxChars: 3500,
         bootstrapTotalMaxChars: 12000,
         bootstrapPromptTruncationWarning: "off",
-        contextTokens: 64000,
-        contextPruning: {
-          mode: "cache-ttl",
-          ttl: "6h",
-          keepLastAssistants: 4,
-          softTrimRatio: 0.35,
-          hardClearRatio: 0.65,
-          minPrunableToolChars: 2000,
-          softTrim: {
-            maxChars: 3000,
-            headChars: 800,
-            tailChars: 1600,
-          },
-          hardClear: {
-            enabled: true,
-            placeholder: "[旧工具输出已清理以保持回复速度]",
-          },
-        },
         compaction: {
           mode: "safeguard",
-          maxHistoryShare: 0.35,
-          keepRecentTokens: 8000,
+          maxHistoryShare: 0.5,
+          keepRecentTokens: 20000,
           recentTurnsPreserve: 5,
           qualityGuard: { enabled: true },
           memoryFlush: {
             enabled: true,
-            softThresholdTokens: 12000,
-            forceFlushTranscriptBytes: 120000,
           },
         },
         humanDelay: {

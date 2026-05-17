@@ -269,6 +269,7 @@ export async function processOneMessage(
   );
   logger.debug(`inbound context: ${redactBody(JSON.stringify(finalized))}`);
 
+  const recordInboundStartedAt = Date.now();
   await deps.channelRuntime.session.recordInboundSession({
     storePath,
     sessionKey: route.sessionKey,
@@ -286,6 +287,7 @@ export async function processOneMessage(
   logger.debug(
     `recordInboundSession: done storePath=${storePath} sessionKey=${route.sessionKey ?? "(none)"}`,
   );
+  const recordInboundDoneAt = Date.now();
 
   const contextToken = getContextTokenFromMsgContext(ctx);
   if (contextToken) {
@@ -338,12 +340,16 @@ export async function processOneMessage(
   }> = [];
   let firstDeliveryAt: number | null = null;
   let lastDeliveryDoneAt: number | null = null;
+  let dispatchStartAt = 0;
+  let replyStartAt: number | null = null;
+  let firstBlockQueuedAt: number | null = null;
+  let firstBlockKind: string | null = null;
 
   const { dispatcher, replyOptions, markDispatchIdle } =
     deps.channelRuntime.reply.createReplyDispatcherWithTyping({
       humanDelay,
       typingCallbacks,
-      deliver: async (payload) => {
+      deliver: async (payload, info) => {
         firstDeliveryAt ??= Date.now();
         const text = markdownToPlainText(payload.text ?? "");
         const mediaUrl = payload.mediaUrl ?? payload.mediaUrls?.[0];
@@ -351,7 +357,7 @@ export async function processOneMessage(
           `outbound payload: ${redactBody(JSON.stringify(payload))}`,
         );
         logger.info(
-          `outbound: to=${ctx.To} contextToken=${redactToken(contextToken)} textLen=${text.length} mediaUrl=${mediaUrl ? "present" : "none"}`,
+          `outbound: kind=${info?.kind ?? "unknown"} to=${ctx.To} contextToken=${redactToken(contextToken)} textLen=${text.length} mediaUrl=${mediaUrl ? "present" : "none"}`,
         );
 
         if (debug) {
@@ -476,10 +482,48 @@ export async function processOneMessage(
       },
     });
 
+  const instrumentedReplyOptions = {
+    ...replyOptions,
+    onReplyStart: async (...args: unknown[]) => {
+      replyStartAt ??= Date.now();
+      logger.info(
+        `reply-stage: onReplyStart delayMs=${dispatchStartAt > 0 ? replyStartAt - dispatchStartAt : "n/a"}`,
+      );
+      const originalOnReplyStart = replyOptions.onReplyStart as
+        | ((...innerArgs: unknown[]) => unknown | Promise<unknown>)
+        | undefined;
+      await originalOnReplyStart?.(...args);
+    },
+    onBlockReplyQueued: async (payload: unknown, queuedContext: unknown) => {
+      firstBlockQueuedAt ??= Date.now();
+      firstBlockKind ??=
+        payload && typeof payload === "object" && "kind" in payload
+          ? String((payload as { kind?: unknown }).kind ?? "unknown")
+          : "unknown";
+      const text =
+        payload && typeof payload === "object" && "text" in payload
+          ? String((payload as { text?: unknown }).text ?? "")
+          : "";
+      logger.info(
+        `reply-stage: onBlockReplyQueued delayMs=${dispatchStartAt > 0 ? firstBlockQueuedAt - dispatchStartAt : "n/a"} kind=${firstBlockKind} textLen=${text.length}`,
+      );
+      const originalOnBlockReplyQueued = replyOptions.onBlockReplyQueued as
+        | ((innerPayload: unknown, innerContext: unknown) => unknown | Promise<unknown>)
+        | undefined;
+      await originalOnBlockReplyQueued?.(payload, queuedContext);
+    },
+    // Weixin has no native edit/update UX. Block streaming sends each block as
+    // a separate chat bubble, which reads like fragmented answers in WeChat.
+    disableBlockStreaming: true,
+  };
+
   logger.debug(
     `dispatchReplyFromConfig: starting agentId=${route.agentId ?? "(none)"}`,
   );
-  const dispatchStartAt = Date.now();
+  dispatchStartAt = Date.now();
+  logger.info(
+    `pre-dispatch-timing: totalMs=${dispatchStartAt - receivedAt} recordInboundMs=${recordInboundDoneAt - recordInboundStartedAt} afterRecordMs=${dispatchStartAt - recordInboundDoneAt}`,
+  );
   try {
     await deps.channelRuntime.reply.withReplyDispatcher({
       dispatcher,
@@ -488,7 +532,7 @@ export async function processOneMessage(
           ctx: finalized,
           cfg: deps.config,
           dispatcher,
-          replyOptions,
+          replyOptions: instrumentedReplyOptions,
         }),
     });
     logger.debug(
@@ -508,6 +552,14 @@ export async function processOneMessage(
     const aiAndDeliveryMs = dispatchDoneAt - dispatchStartAt;
     const firstDeliveryDelayMs =
       firstDeliveryAt !== null ? firstDeliveryAt - dispatchStartAt : null;
+    const replyStartDelayMs =
+      replyStartAt !== null ? replyStartAt - dispatchStartAt : null;
+    const firstBlockQueuedDelayMs =
+      firstBlockQueuedAt !== null ? firstBlockQueuedAt - dispatchStartAt : null;
+    const queuedToDeliveryMs =
+      firstBlockQueuedAt !== null && firstDeliveryAt !== null
+        ? firstDeliveryAt - firstBlockQueuedAt
+        : null;
     const deliveryMs =
       firstDeliveryAt !== null && lastDeliveryDoneAt !== null
         ? lastDeliveryDoneAt - firstDeliveryAt
@@ -516,7 +568,7 @@ export async function processOneMessage(
       eventTs > 0 ? dispatchDoneAt - eventTs : dispatchDoneAt - receivedAt;
 
     logger.info(
-      `reply-timing: accountId=${deps.accountId} from=${senderId} totalMs=${totalMs} platformDelayMs=${platformDelayMs ?? "n/a"} inboundProcessMs=${inboundProcessMs} aiAndDeliveryMs=${aiAndDeliveryMs} firstDeliveryDelayMs=${firstDeliveryDelayMs ?? "n/a"} deliveryMs=${deliveryMs ?? "n/a"} mediaDownloadMs=${mediaDownloadMs}`,
+      `reply-timing: accountId=${deps.accountId} from=${senderId} totalMs=${totalMs} platformDelayMs=${platformDelayMs ?? "n/a"} inboundProcessMs=${inboundProcessMs} aiAndDeliveryMs=${aiAndDeliveryMs} replyStartDelayMs=${replyStartDelayMs ?? "n/a"} firstBlockQueuedDelayMs=${firstBlockQueuedDelayMs ?? "n/a"} firstBlockKind=${firstBlockKind ?? "n/a"} firstDeliveryDelayMs=${firstDeliveryDelayMs ?? "n/a"} queuedToDeliveryMs=${queuedToDeliveryMs ?? "n/a"} deliveryMs=${deliveryMs ?? "n/a"} mediaDownloadMs=${mediaDownloadMs}`,
     );
 
     logger.info(

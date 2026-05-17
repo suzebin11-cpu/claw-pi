@@ -22,11 +22,41 @@ interface ConfigCacheEntry {
  */
 export class WeixinConfigManager {
   private cache = new Map<string, ConfigCacheEntry>();
+  private inFlight = new Map<string, Promise<void>>();
 
   constructor(
     private apiOpts: { baseUrl: string; token?: string },
     private log: (msg: string) => void,
   ) {}
+
+  getCachedForUser(userId: string): CachedConfig | null {
+    return this.cache.get(userId)?.config ?? null;
+  }
+
+  refreshForUser(userId: string, contextToken?: string): Promise<void> {
+    const now = Date.now();
+    const entry = this.cache.get(userId);
+    if (entry && now < entry.nextFetchAt) {
+      return Promise.resolve();
+    }
+
+    const existing = this.inFlight.get(userId);
+    if (existing) return existing;
+
+    const startedAt = Date.now();
+    const task = this.fetchAndUpdate(userId, contextToken, now)
+      .catch(() => {
+        // fetchAndUpdate already logs and records backoff state.
+      })
+      .finally(() => {
+        this.inFlight.delete(userId);
+        this.log(
+          `[weixin] getConfig refresh done for ${userId} ms=${Date.now() - startedAt}`,
+        );
+      });
+    this.inFlight.set(userId, task);
+    return task;
+  }
 
   async getForUser(
     userId: string,
@@ -37,48 +67,58 @@ export class WeixinConfigManager {
     const shouldFetch = !entry || now >= entry.nextFetchAt;
 
     if (shouldFetch) {
-      let fetchOk = false;
-      try {
-        const resp = await getConfig({
-          baseUrl: this.apiOpts.baseUrl,
-          token: this.apiOpts.token,
-          ilinkUserId: userId,
-          contextToken,
-        });
-        if (resp.ret === 0) {
-          this.cache.set(userId, {
-            config: { typingTicket: resp.typing_ticket ?? "" },
-            everSucceeded: true,
-            nextFetchAt: now + Math.random() * CONFIG_CACHE_TTL_MS,
-            retryDelayMs: CONFIG_CACHE_INITIAL_RETRY_MS,
-          });
-          this.log(
-            `[weixin] config ${entry?.everSucceeded ? "refreshed" : "cached"} for ${userId}`,
-          );
-          fetchOk = true;
-        }
-      } catch (err) {
-        this.log(
-          `[weixin] getConfig failed for ${userId} (ignored): ${String(err)}`,
-        );
-      }
-      if (!fetchOk) {
-        const prevDelay = entry?.retryDelayMs ?? CONFIG_CACHE_INITIAL_RETRY_MS;
-        const nextDelay = Math.min(prevDelay * 2, CONFIG_CACHE_MAX_RETRY_MS);
-        if (entry) {
-          entry.nextFetchAt = now + nextDelay;
-          entry.retryDelayMs = nextDelay;
-        } else {
-          this.cache.set(userId, {
-            config: { typingTicket: "" },
-            everSucceeded: false,
-            nextFetchAt: now + CONFIG_CACHE_INITIAL_RETRY_MS,
-            retryDelayMs: CONFIG_CACHE_INITIAL_RETRY_MS,
-          });
-        }
-      }
+      await this.refreshForUser(userId, contextToken);
     }
 
     return this.cache.get(userId)?.config ?? { typingTicket: "" };
+  }
+
+  private async fetchAndUpdate(
+    userId: string,
+    contextToken: string | undefined,
+    now: number,
+  ): Promise<void> {
+    const entry = this.cache.get(userId);
+    let fetchOk = false;
+    try {
+      const resp = await getConfig({
+        baseUrl: this.apiOpts.baseUrl,
+        token: this.apiOpts.token,
+        ilinkUserId: userId,
+        contextToken,
+      });
+      if (resp.ret === 0) {
+        this.cache.set(userId, {
+          config: { typingTicket: resp.typing_ticket ?? "" },
+          everSucceeded: true,
+          nextFetchAt: now + Math.random() * CONFIG_CACHE_TTL_MS,
+          retryDelayMs: CONFIG_CACHE_INITIAL_RETRY_MS,
+        });
+        this.log(
+          `[weixin] config ${entry?.everSucceeded ? "refreshed" : "cached"} for ${userId}`,
+        );
+        fetchOk = true;
+      }
+    } catch (err) {
+      this.log(
+        `[weixin] getConfig failed for ${userId} (ignored): ${String(err)}`,
+      );
+    }
+
+    if (fetchOk) return;
+
+    const prevDelay = entry?.retryDelayMs ?? CONFIG_CACHE_INITIAL_RETRY_MS;
+    const nextDelay = Math.min(prevDelay * 2, CONFIG_CACHE_MAX_RETRY_MS);
+    if (entry) {
+      entry.nextFetchAt = now + nextDelay;
+      entry.retryDelayMs = nextDelay;
+    } else {
+      this.cache.set(userId, {
+        config: { typingTicket: "" },
+        everSucceeded: false,
+        nextFetchAt: now + CONFIG_CACHE_INITIAL_RETRY_MS,
+        retryDelayMs: CONFIG_CACHE_INITIAL_RETRY_MS,
+      });
+    }
   }
 }

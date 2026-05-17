@@ -597,7 +597,10 @@ export function SessionsPage() {
       return data;
     },
     enabled: !!id,
-    refetchInterval: 5000,
+    refetchInterval: () =>
+      typeof document !== "undefined" && document.visibilityState === "hidden"
+        ? 10_000
+        : 1_000,
   });
 
   const { data: channelsData } = useQuery({

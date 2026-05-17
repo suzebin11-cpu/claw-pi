@@ -626,9 +626,14 @@ export class OpenClawGatewayService {
       if (!cached) {
         return null;
       }
+      const shouldSoftenConnected =
+        input.channelType === "wechat" && cached.status === "connected";
       stickyChannels.push({
         ...cached,
         accountId: input.accountId,
+        status: shouldSoftenConnected ? "connecting" : cached.status,
+        ready: shouldSoftenConnected ? false : cached.ready,
+        connected: shouldSoftenConnected ? false : cached.connected,
         stale: true,
       });
     }

@@ -140,7 +140,9 @@ export function ChannelsPage() {
             (e) => e.channelId === configuredChannel?.id,
           );
           const channelLiveStatus = liveStatusData
-            ? (channelLive?.status ?? "connecting")
+            ? channelLive?.stale === true && channelLive.status === "connected"
+              ? "connecting"
+              : (channelLive?.status ?? "connecting")
             : undefined;
           return (
             <button
@@ -276,11 +278,12 @@ function ConfiguredView({
   // Before live-status data arrives, show a neutral loading state
   // instead of defaulting to green "connected".
   const liveStatus = liveStatusData
-    ? (liveEntry?.status ?? "connecting")
+    ? liveEntry?.stale === true && liveEntry.status === "connected"
+      ? "connecting"
+      : (liveEntry?.status ?? "connecting")
     : "connecting";
   const liveError = liveEntry?.lastError ?? null;
-  const showSyncingHint =
-    liveEntry?.stale === true && liveStatus === "connected";
+  const showSyncingHint = liveEntry?.stale === true;
 
   const disconnectMutation = useMutation({
     mutationFn: async () => {

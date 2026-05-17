@@ -180,9 +180,296 @@ const CONTROL_UI_TOOL_OUTPUT_DETAILS_SEARCH =
   '<details class="chat-tool-msg-collapse">';
 const CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT =
   '<details class="chat-tool-msg-collapse" ?open=${f||m}>';
+const CONTROL_UI_NODE_LIST_POLL_SEARCH =
+  "function Ir(e){e.nodesPollInterval??=window.setInterval(()=>void Fr(e,{quiet:!0}),5e3)}";
+const CONTROL_UI_NODE_LIST_POLL_60S_SEARCH =
+  "function Ir(e){e.nodesPollInterval??=window.setInterval(()=>void Fr(e,{quiet:!0}),6e4)}";
+const CONTROL_UI_NODE_LIST_POLL_REPLACEMENT =
+  CONTROL_UI_NODE_LIST_POLL_SEARCH;
 const CONTROL_UI_CSP_IMAGE_SRC_SEARCH = '"img-src \'self\' data: https:",';
 const CONTROL_UI_CSP_IMAGE_SRC_REPLACEMENT =
   '"img-src \'self\' data: https: http://127.0.0.1:* http://localhost:*",';
+const CONTROL_UI_NODE_LIST_HANDLER_SEARCH = [
+  '\t"node.list": async ({ params, respond, context }) => {',
+  "\t\tif (!validateNodeListParams(params)) {",
+  "\t\t\trespondInvalidParams({",
+  "\t\t\t\trespond,",
+  '\t\t\t\tmethod: "node.list",',
+  "\t\t\t\tvalidator: validateNodeListParams",
+  "\t\t\t});",
+  "\t\t\treturn;",
+  "\t\t}",
+  "\t\tawait respondUnavailableOnThrow(respond, async () => {",
+  "\t\t\tconst [devicePairing, nodePairing] = await Promise.all([listDevicePairing(), listNodePairing()]);",
+  "\t\t\tconst nodes = listKnownNodes(createKnownNodeCatalog({",
+  "\t\t\t\tpairedDevices: devicePairing.paired,",
+  "\t\t\t\tpairedNodes: nodePairing.paired,",
+  "\t\t\t\tconnectedNodes: context.nodeRegistry.listConnected()",
+  "\t\t\t}));",
+  "\t\t\trespond(true, {",
+  "\t\t\t\tts: Date.now(),",
+  "\t\t\t\tnodes",
+  "\t\t\t}, void 0);",
+  "\t\t});",
+  "\t},",
+].join("\n");
+const PI_EMBEDDED_RUN_QUEUE_TIMING_SEARCH = [
+  "\treturn enqueueSession(() => {",
+  "\t\tthrowIfAborted();",
+  "\t\treturn enqueueGlobal(async () => {",
+  "\t\t\tthrowIfAborted();",
+  "\t\t\tconst started = Date.now();",
+].join("\n");
+const PI_EMBEDDED_RUN_QUEUE_TIMING_REPLACEMENT = [
+  "\tconst __clawpiRunQueuedAt = Date.now();",
+  '\tconst __clawpiRunTimingId = params.runId ?? params.sessionId ?? params.sessionKey ?? "unknown";',
+  "\treturn enqueueSession(() => {",
+  "\t\tconst __clawpiSessionDequeuedAt = Date.now();",
+  '\t\tconsole.info(`[clawpi-run-timing] runId=${__clawpiRunTimingId} stage=session-dequeued waitMs=${__clawpiSessionDequeuedAt - __clawpiRunQueuedAt} sessionKey=${params.sessionKey ?? ""} lane=${sessionLane}`);',
+  "\t\tthrowIfAborted();",
+  "\t\treturn enqueueGlobal(async () => {",
+  "\t\t\tconst __clawpiGlobalDequeuedAt = Date.now();",
+  '\t\t\tconsole.info(`[clawpi-run-timing] runId=${__clawpiRunTimingId} stage=global-dequeued sessionWaitMs=${__clawpiSessionDequeuedAt - __clawpiRunQueuedAt} globalWaitMs=${__clawpiGlobalDequeuedAt - __clawpiSessionDequeuedAt} globalLane=${globalLane}`);',
+  "\t\t\tthrowIfAborted();",
+  "\t\t\tconst started = Date.now();",
+].join("\n");
+const PI_EMBEDDED_RUN_STAGE_MARK_SEARCH = [
+  "\t\t\tconst started = Date.now();",
+  "\t\t\tconst workspaceResolution = resolveRunWorkspaceDir({",
+].join("\n");
+const PI_EMBEDDED_RUN_STAGE_MARK_REPLACEMENT = [
+  "\t\t\tconst started = Date.now();",
+  "\t\t\tlet __clawpiRunStageAt = started;",
+  "\t\t\tconst __clawpiMarkRunStage = (stage) => {",
+  "\t\t\t\tconst __now = Date.now();",
+  '\t\t\t\tconsole.info(`[clawpi-run-timing] runId=${__clawpiRunTimingId} stage=${stage} deltaMs=${__now - __clawpiRunStageAt} totalMs=${__now - started}`);',
+  "\t\t\t\t__clawpiRunStageAt = __now;",
+  "\t\t\t};",
+  "\t\t\tconst workspaceResolution = resolveRunWorkspaceDir({",
+].join("\n");
+const PI_EMBEDDED_WORKSPACE_MARK_SEARCH =
+  '\t\t\tif (workspaceResolution.usedFallback) log$16.warn(`[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`);\n\t\t\tensureRuntimePluginsLoaded({';
+const PI_EMBEDDED_WORKSPACE_MARK_REPLACEMENT =
+  '\t\t\tif (workspaceResolution.usedFallback) log$16.warn(`[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`);\n\t\t\t__clawpiMarkRunStage("workspace-resolved");\n\t\t\t__clawpiMarkRunStage("runtime-plugins-load-start");\n\t\t\tensureRuntimePluginsLoaded({';
+const PI_EMBEDDED_RUNTIME_PLUGINS_MARK_SEARCH = [
+  "\t\t\tensureRuntimePluginsLoaded({",
+  "\t\t\t\tconfig: params.config,",
+  "\t\t\t\tworkspaceDir: resolvedWorkspace,",
+  "\t\t\t\tallowGatewaySubagentBinding: params.allowGatewaySubagentBinding",
+  "\t\t\t});",
+  "\t\t\tlet provider = (params.provider ?? \"openai\").trim() || \"openai\";",
+].join("\n");
+const PI_EMBEDDED_RUNTIME_PLUGINS_MARK_REPLACEMENT = [
+  "\t\t\tensureRuntimePluginsLoaded({",
+  "\t\t\t\tconfig: params.config,",
+  "\t\t\t\tworkspaceDir: resolvedWorkspace,",
+  "\t\t\t\tallowGatewaySubagentBinding: params.allowGatewaySubagentBinding",
+  "\t\t\t});",
+  '\t\t\t__clawpiMarkRunStage("runtime-plugins-loaded");',
+  "\t\t\tlet provider = (params.provider ?? \"openai\").trim() || \"openai\";",
+].join("\n");
+const PI_EMBEDDED_MODELS_JSON_MARK_SEARCH =
+  "\t\t\tawait ensureOpenClawModelsJson(params.config, agentDir);\n\t\t\tconst resolvedSessionKey = normalizedSessionKey;";
+const PI_EMBEDDED_MODELS_JSON_MARK_REPLACEMENT =
+  '\t\t\t__clawpiMarkRunStage("models-json-start");\n\t\t\tconst __clawpiModelsJsonPath = path.join(agentDir, "models.json");\n\t\t\tconst __clawpiModelsJsonSentinelPath = path.join(agentDir, ".clawpi-models-json.key");\n\t\t\tconst __clawpiProviders = params.config?.models?.providers;\n\t\t\tconst __clawpiModelsJsonKey = stableStringify$1({ providers: __clawpiProviders, secrets: params.config?.secrets?.defaults });\n\t\t\tconst __clawpiModelsJsonCachedKey = await fs$1.readFile(__clawpiModelsJsonSentinelPath, "utf8").catch(() => "");\n\t\t\tlet __clawpiModelsJsonStage = "models-json-cache-hit";\n\t\t\tlet __clawpiModelsJsonUsable = false;\n\t\t\tif (__clawpiModelsJsonCachedKey === __clawpiModelsJsonKey) {\n\t\t\t\t__clawpiModelsJsonUsable = await fs$1.stat(__clawpiModelsJsonPath).then((stat) => stat.isFile() && stat.size > 0).catch(() => false);\n\t\t\t}\n\t\t\tif (!__clawpiModelsJsonUsable) {\n\t\t\t\tconst __clawpiProviderEntries = __clawpiProviders && typeof __clawpiProviders === "object" && !Array.isArray(__clawpiProviders) ? Object.entries(__clawpiProviders) : [];\n\t\t\t\tconst __clawpiHasRunnableConfiguredProvider = __clawpiProviderEntries.some(([, providerConfig]) => providerConfig && typeof providerConfig === "object" && !Array.isArray(providerConfig) && Array.isArray(providerConfig.models) && providerConfig.models.length > 0 && (typeof providerConfig.api === "string" || typeof providerConfig.baseUrl === "string"));\n\t\t\t\tif (__clawpiHasRunnableConfiguredProvider) {\n\t\t\t\t\tawait fs$1.mkdir(agentDir, { recursive: true, mode: 448 }).catch(() => {});\n\t\t\t\t\tawait fs$1.writeFile(__clawpiModelsJsonPath, `${JSON.stringify({ providers: __clawpiProviders }, null, 2)}\\n`, { mode: 384 });\n\t\t\t\t\tawait fs$1.chmod(__clawpiModelsJsonPath, 384).catch(() => {});\n\t\t\t\t\t__clawpiModelsJsonStage = "models-json-direct-write";\n\t\t\t\t} else {\n\t\t\t\t\tawait ensureOpenClawModelsJson(params.config, agentDir);\n\t\t\t\t\t__clawpiModelsJsonStage = "models-json-ready";\n\t\t\t\t}\n\t\t\t\tawait fs$1.writeFile(__clawpiModelsJsonSentinelPath, __clawpiModelsJsonKey, "utf8").catch(() => {});\n\t\t\t}\n\t\t\t__clawpiMarkRunStage(__clawpiModelsJsonStage);\n\t\t\tconst resolvedSessionKey = normalizedSessionKey;';
+const PI_EMBEDDED_HOOK_SELECTION_MARK_SEARCH =
+  "\t\t\tconst hookSelection = await resolveHookModelSelection({";
+const PI_EMBEDDED_HOOK_SELECTION_MARK_REPLACEMENT =
+  '\t\t\t__clawpiMarkRunStage("hook-model-selection-start");\n\t\t\tconst hookSelection = await resolveHookModelSelection({';
+const PI_EMBEDDED_RESOLVE_MODEL_MARK_SEARCH =
+  "\t\t\tconst { model, error, authStorage, modelRegistry } = await resolveModelAsync(provider, modelId, agentDir, params.config);";
+const PI_EMBEDDED_RESOLVE_MODEL_MARK_REPLACEMENT =
+  '\t\t\t__clawpiMarkRunStage("hook-model-selection-ready");\n\t\t\t__clawpiMarkRunStage("resolve-model-start");\n\t\t\tconst __clawpiResolveModelCache = globalThis.__clawpiResolveModelCache ??= new Map();\n\t\t\tconst __clawpiProviderConfigForCache = params.config?.models?.providers?.[provider];\n\t\t\tconst __clawpiCanCacheResolvedModel = __clawpiProviderConfigForCache && typeof __clawpiProviderConfigForCache === "object" && !Array.isArray(__clawpiProviderConfigForCache) && Array.isArray(__clawpiProviderConfigForCache.models) && __clawpiProviderConfigForCache.models.length > 0;\n\t\t\tconst __clawpiResolvedModelCacheKey = __clawpiCanCacheResolvedModel ? `${__clawpiModelsJsonKey}:${provider}:${modelId}` : "";\n\t\t\tlet __clawpiResolvedModel = __clawpiResolvedModelCacheKey ? __clawpiResolveModelCache.get(__clawpiResolvedModelCacheKey) : void 0;\n\t\t\tconst __clawpiResolvedModelCacheHit = Boolean(__clawpiResolvedModel);\n\t\t\tif (!__clawpiResolvedModel) {\n\t\t\t\t__clawpiResolvedModel = await resolveModelAsync(provider, modelId, agentDir, params.config);\n\t\t\t\tif (__clawpiResolvedModelCacheKey && __clawpiResolvedModel?.model) {\n\t\t\t\t\tif (__clawpiResolveModelCache.size > 16) __clawpiResolveModelCache.clear();\n\t\t\t\t\t__clawpiResolveModelCache.set(__clawpiResolvedModelCacheKey, __clawpiResolvedModel);\n\t\t\t\t}\n\t\t\t}\n\t\t\tconst { model, error, authStorage, modelRegistry } = __clawpiResolvedModel;\n\t\t\t__clawpiMarkRunStage(__clawpiResolvedModelCacheHit ? "resolve-model-cache-hit" : "resolve-model-ready");';
+const PI_EMBEDDED_INIT_AUTH_MARK_SEARCH =
+  "\t\t\tawait initializeAuthProfile();";
+const PI_EMBEDDED_INIT_AUTH_MARK_REPLACEMENT =
+  '\t\t\t__clawpiMarkRunStage("auth-profile-init-start");\n\t\t\tawait initializeAuthProfile();\n\t\t\t__clawpiMarkRunStage("auth-profile-init-ready");';
+const PI_EMBEDDED_CONTEXT_ENGINE_MARK_SEARCH =
+  "\t\t\tensureContextEnginesInitialized();\n\t\t\tconst contextEngine = await resolveContextEngine(params.config);";
+const PI_EMBEDDED_CONTEXT_ENGINE_MARK_REPLACEMENT =
+  '\t\t\t__clawpiMarkRunStage("context-engines-init-start");\n\t\t\tensureContextEnginesInitialized();\n\t\t\t__clawpiMarkRunStage("context-engines-init-ready");\n\t\t\t__clawpiMarkRunStage("context-engine-resolve-start");\n\t\t\tconst contextEngine = await resolveContextEngine(params.config);\n\t\t\t__clawpiMarkRunStage("context-engine-resolve-ready");';
+const PI_EMBEDDED_ATTEMPT_MARK_SEARCH =
+  "\t\t\t\t\tconst attempt = await runEmbeddedAttempt({";
+const PI_EMBEDDED_ATTEMPT_MARK_REPLACEMENT =
+  '\t\t\t\t\t__clawpiMarkRunStage("embedded-attempt-start");\n\t\t\t\t\tconst attempt = await runEmbeddedAttempt({';
+const PI_EMBEDDED_ATTEMPT_READY_MARK_SEARCH =
+  "\t\t\t\t\tconst { aborted, promptError, promptErrorSource, preflightRecovery, timedOut, timedOutDuringCompaction, sessionIdUsed, lastAssistant } = attempt;";
+const PI_EMBEDDED_ATTEMPT_READY_MARK_REPLACEMENT =
+  '\t\t\t\t\t__clawpiMarkRunStage("embedded-attempt-ready");\n\t\t\t\t\tconst { aborted, promptError, promptErrorSource, preflightRecovery, timedOut, timedOutDuringCompaction, sessionIdUsed, lastAssistant } = attempt;';
+const CONTROL_UI_NODE_LIST_HANDLER_REPLACEMENT = [
+  '\t"node.list": async ({ params, respond, context }) => {',
+  "\t\tif (!validateNodeListParams(params)) {",
+  "\t\t\trespondInvalidParams({",
+  "\t\t\t\trespond,",
+  '\t\t\t\tmethod: "node.list",',
+  "\t\t\t\tvalidator: validateNodeListParams",
+  "\t\t\t});",
+  "\t\t\treturn;",
+  "\t\t}",
+  "\t\tawait respondUnavailableOnThrow(respond, async () => {",
+  "\t\t\tconst cache = globalThis.__clawpiNodeListCache ??= {",
+  "\t\t\t\tpairedDevices: [],",
+  "\t\t\t\tpairedNodes: [],",
+  "\t\t\t\trefreshing: false",
+  "\t\t\t};",
+  "\t\t\trespond(true, {",
+  "\t\t\t\tts: Date.now(),",
+  "\t\t\t\tnodes: listKnownNodes(createKnownNodeCatalog({",
+  "\t\t\t\t\tpairedDevices: cache.pairedDevices,",
+  "\t\t\t\t\tpairedNodes: cache.pairedNodes,",
+  "\t\t\t\t\tconnectedNodes: context.nodeRegistry.listConnected()",
+  "\t\t\t\t}))",
+  "\t\t\t}, void 0);",
+  "\t\t\tif (!cache.refreshing) {",
+  "\t\t\t\tcache.refreshing = true;",
+  "\t\t\t\tPromise.all([listDevicePairing(), listNodePairing()]).then(([devicePairing, nodePairing]) => {",
+  "\t\t\t\t\tcache.pairedDevices = devicePairing.paired;",
+  "\t\t\t\t\tcache.pairedNodes = nodePairing.paired;",
+  "\t\t\t\t}).catch(() => {}).finally(() => {",
+  "\t\t\t\t\tcache.refreshing = false;",
+  "\t\t\t\t});",
+  "\t\t\t}",
+  "\t\t});",
+  "\t},",
+].join("\n");
+const CONTROL_UI_DEVICE_PAIR_LIST_HANDLER_SEARCH = [
+  '\t"device.pair.list": async ({ params, respond }) => {',
+  "\t\tif (!validateDevicePairListParams(params)) {",
+  "\t\t\trespond(false, void 0, errorShape(ErrorCodes.INVALID_REQUEST, `invalid device.pair.list params: ${formatValidationErrors(validateDevicePairListParams.errors)}`));",
+  "\t\t\treturn;",
+  "\t\t}",
+  "\t\tconst list = await listDevicePairing();",
+  "\t\trespond(true, {",
+  "\t\t\tpending: list.pending,",
+  "\t\t\tpaired: list.paired.map((device) => redactPairedDevice(device))",
+  "\t\t}, void 0);",
+  "\t},",
+].join("\n");
+const CONTROL_UI_DEVICE_PAIR_LIST_HANDLER_REPLACEMENT = [
+  '\t"device.pair.list": async ({ params, respond }) => {',
+  "\t\tif (!validateDevicePairListParams(params)) {",
+  "\t\t\trespond(false, void 0, errorShape(ErrorCodes.INVALID_REQUEST, `invalid device.pair.list params: ${formatValidationErrors(validateDevicePairListParams.errors)}`));",
+  "\t\t\treturn;",
+  "\t\t}",
+  "\t\tconst cache = globalThis.__clawpiDevicePairListCache ??= { pending: [], paired: [], refreshing: false, promise: null };",
+  "\t\tconst refresh = () => {",
+  "\t\t\tif (!cache.promise) {",
+  "\t\t\t\tcache.refreshing = true;",
+  "\t\t\t\tcache.promise = listDevicePairing().then((list) => {",
+  "\t\t\t\t\tcache.pending = list.pending;",
+  "\t\t\t\t\tcache.paired = list.paired.map((device) => redactPairedDevice(device));",
+  "\t\t\t\t\treturn { pending: cache.pending, paired: cache.paired };",
+  "\t\t\t\t}).finally(() => {",
+  "\t\t\t\t\tcache.refreshing = false;",
+  "\t\t\t\t\tcache.promise = null;",
+  "\t\t\t\t});",
+  "\t\t\t}",
+  "\t\t\treturn cache.promise;",
+  "\t\t};",
+  "\t\tconst fresh = await Promise.race([",
+  "\t\t\trefresh(),",
+  "\t\t\tnew Promise((resolve) => setTimeout(() => resolve(null), 500))",
+  "\t\t]);",
+  "\t\tif (fresh) {",
+  "\t\t\trespond(true, fresh, void 0);",
+  "\t\t\treturn;",
+  "\t\t}",
+  "\t\trespond(true, { pending: cache.pending, paired: cache.paired }, void 0);",
+  "\t\trefresh().catch(() => {});",
+  "\t},",
+].join("\n");
+const CONTROL_UI_MODELS_LIST_HANDLER_SEARCH = [
+  'const modelsHandlers = { "models.list": async ({ params, respond, context }) => {',
+  "\tif (!validateModelsListParams(params)) {",
+  "\t\trespond(false, void 0, errorShape(ErrorCodes.INVALID_REQUEST, `invalid models.list params: ${formatValidationErrors(validateModelsListParams.errors)}`));",
+  "\t\treturn;",
+  "\t}",
+  "\ttry {",
+  "\t\tconst catalog = await context.loadGatewayModelCatalog();",
+  "\t\tconst { allowedCatalog } = buildAllowedModelSet({",
+  "\t\t\tcfg: loadConfig(),",
+  "\t\t\tcatalog,",
+  "\t\t\tdefaultProvider: DEFAULT_PROVIDER",
+  "\t\t});",
+  "\t\trespond(true, { models: allowedCatalog.length > 0 ? allowedCatalog : catalog }, void 0);",
+  "\t} catch (err) {",
+  "\t\trespond(false, void 0, errorShape(ErrorCodes.UNAVAILABLE, String(err)));",
+  "\t}",
+  "} };",
+].join("\n");
+const CONTROL_UI_MODELS_LIST_HANDLER_REPLACEMENT = [
+  'const modelsHandlers = { "models.list": async ({ params, respond, context }) => {',
+  "\tif (!validateModelsListParams(params)) {",
+  "\t\trespond(false, void 0, errorShape(ErrorCodes.INVALID_REQUEST, `invalid models.list params: ${formatValidationErrors(validateModelsListParams.errors)}`));",
+  "\t\treturn;",
+  "\t}",
+  "\ttry {",
+  "\t\tconst cfg = loadConfig();",
+  "\t\tconst cache = globalThis.__clawpiModelsListCache ??= { models: [], refreshing: false };",
+  "\t\tconst configuredModels = Object.entries(cfg?.agents?.defaults?.models ?? {}).map(([key, value]) => {",
+  "\t\t\tconst slashIndex = key.indexOf(\"/\");",
+  "\t\t\tconst provider = slashIndex > 0 ? key.slice(0, slashIndex) : DEFAULT_PROVIDER;",
+  "\t\t\tconst id = slashIndex > 0 ? key.slice(slashIndex + 1) : key;",
+  "\t\t\treturn {",
+  "\t\t\t\tprovider,",
+  "\t\t\t\tid,",
+  "\t\t\t\tname: typeof value?.alias === \"string\" && value.alias.trim() ? value.alias : id,",
+  "\t\t\t\tcontextWindow: typeof value?.contextWindow === \"number\" ? value.contextWindow : void 0,",
+  "\t\t\t\treasoning: typeof value?.reasoning === \"boolean\" ? value.reasoning : void 0,",
+  "\t\t\t\tinput: Array.isArray(value?.input) ? value.input : [\"text\", \"image\"]",
+  "\t\t\t};",
+  "\t\t});",
+  "\t\tconst immediateModels = configuredModels.length > 0 ? configuredModels : cache.models;",
+  "\t\tif (immediateModels.length > 0) {",
+  "\t\t\trespond(true, { models: immediateModels }, void 0);",
+  "\t\t\treturn;",
+  "\t\t} else {",
+  "\t\t\tconst catalog = await context.loadGatewayModelCatalog();",
+  "\t\t\tconst { allowedCatalog } = buildAllowedModelSet({",
+  "\t\t\t\tcfg,",
+  "\t\t\t\tcatalog,",
+  "\t\t\t\tdefaultProvider: DEFAULT_PROVIDER",
+  "\t\t\t});",
+  "\t\t\tcache.models = allowedCatalog.length > 0 ? allowedCatalog : catalog;",
+  "\t\t\trespond(true, { models: cache.models }, void 0);",
+  "\t\t\treturn;",
+  "\t\t}",
+  "\t} catch (err) {",
+  "\t\trespond(false, void 0, errorShape(ErrorCodes.UNAVAILABLE, String(err)));",
+  "\t}",
+  "} };",
+].join("\n");
+const CONTROL_UI_CHAT_HISTORY_THINKING_SEARCH = [
+  "\t\tlet thinkingLevel = entry?.thinkingLevel;",
+  "\t\tif (!thinkingLevel) {",
+  "\t\t\tconst resolvedModel = resolveSessionModelRef(cfg, entry, resolveSessionAgentId({",
+  "\t\t\t\tsessionKey,",
+  "\t\t\t\tconfig: cfg",
+  "\t\t\t}));",
+  "\t\t\tconst catalog = await context.loadGatewayModelCatalog();",
+  "\t\t\tthinkingLevel = resolveThinkingDefault({",
+  "\t\t\t\tcfg,",
+  "\t\t\t\tprovider: resolvedModel.provider,",
+  "\t\t\t\tmodel: resolvedModel.model,",
+  "\t\t\t\tcatalog",
+  "\t\t\t});",
+  "\t\t}",
+].join("\n");
+const CONTROL_UI_CHAT_HISTORY_THINKING_REPLACEMENT = [
+  "\t\tlet thinkingLevel = entry?.thinkingLevel;",
+  "\t\tif (!thinkingLevel) {",
+  "\t\t\tconst resolvedModel = resolveSessionModelRef(cfg, entry, resolveSessionAgentId({",
+  "\t\t\t\tsessionKey,",
+  "\t\t\t\tconfig: cfg",
+  "\t\t\t}));",
+  "\t\t\tthinkingLevel = resolveThinkingDefault({",
+  "\t\t\t\tcfg,",
+  "\t\t\t\tprovider: resolvedModel.provider,",
+  "\t\t\t\tmodel: resolvedModel.model,",
+  "\t\t\t\tcatalog: []",
+  "\t\t\t});",
+  "\t\t}",
+].join("\n");
 const CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_SEARCH = [
   '\tif ("details" in entry) {',
   "\t\tdelete entry.details;",
@@ -219,6 +506,116 @@ const CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_REPLACEMENT = [
   "\t\tdelete entry.details;",
   "\t\tchanged = true;",
   "\t}",
+].join("\n");
+const CONTROL_UI_CHAT_FINAL_BROADCAST_SEARCH = [
+  "function broadcastChatFinal(params) {",
+  "\tconst seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);",
+  "\tconst strippedEnvelopeMessage = stripEnvelopeFromMessage(params.message);",
+  "\tconst payload = {",
+  "\t\trunId: params.runId,",
+  "\t\tsessionKey: params.sessionKey,",
+  "\t\tseq,",
+  '\t\tstate: "final",',
+  "\t\tmessage: stripInlineDirectiveTagsFromMessageForDisplay(strippedEnvelopeMessage)",
+  "\t};",
+  '\tparams.context.broadcast("chat", payload);',
+  '\tparams.context.nodeSendToSession(params.sessionKey, "chat", payload);',
+  "\tparams.context.agentRunSeq.delete(params.runId);",
+  "}",
+].join("\n");
+const CONTROL_UI_CHAT_FINAL_BROADCAST_REPLACEMENT = [
+  CONTROL_UI_CHAT_FINAL_BROADCAST_SEARCH,
+  "function broadcastChatDelta(params) {",
+  '\tconst text = typeof params.text === "string" ? params.text : "";',
+  "\tif (!text.trim()) return;",
+  "\tconst seq = nextChatSeq({ agentRunSeq: params.context.agentRunSeq }, params.runId);",
+  "\tconst message = {",
+  '\t\trole: "assistant",',
+  "\t\tcontent: [{",
+  '\t\t\ttype: "text",',
+  "\t\t\ttext",
+  "\t\t}],",
+  "\t\ttimestamp: Date.now()",
+  "\t};",
+  "\tconst payload = {",
+  "\t\trunId: params.runId,",
+  "\t\tsessionKey: params.sessionKey,",
+  "\t\tseq,",
+  '\t\tstate: "delta",',
+  "\t\tmessage: stripInlineDirectiveTagsFromMessageForDisplay(message)",
+  "\t};",
+  '\tparams.context.broadcast("chat", payload);',
+  '\tparams.context.nodeSendToSession(params.sessionKey, "chat", payload);',
+  "}",
+].join("\n");
+const CONTROL_UI_CHAT_PARTIAL_STATE_SEARCH =
+  "\t\t\tlet agentRunStarted = false;";
+const CONTROL_UI_CHAT_PARTIAL_STATE_REPLACEMENT = [
+  "\t\t\tlet agentRunStarted = false;",
+  '\t\t\tlet lastPartialText = "";',
+  "\t\t\tlet lastPartialBroadcastAt = 0;",
+  "\t\t\tconst broadcastWebchatPartial = (payload) => {",
+  '\t\t\t\tconst text = typeof payload?.text === "string" ? payload.text : "";',
+  "\t\t\t\tif (!text.trim() || text === lastPartialText) return;",
+  "\t\t\t\tconst now = Date.now();",
+  "\t\t\t\tconst grewEnough = text.length - lastPartialText.length >= 12;",
+  "\t\t\t\tconst waitedEnough = now - lastPartialBroadcastAt >= 120;",
+  "\t\t\t\tconst shouldReplace = payload?.replace === true;",
+  "\t\t\t\tif (!shouldReplace && !grewEnough && !waitedEnough) return;",
+  "\t\t\t\tlastPartialText = text;",
+  "\t\t\t\tlastPartialBroadcastAt = now;",
+  "\t\t\t\tbroadcastChatDelta({",
+  "\t\t\t\t\tcontext,",
+  "\t\t\t\t\trunId: clientRunId,",
+  "\t\t\t\t\tsessionKey,",
+  "\t\t\t\t\ttext",
+  "\t\t\t\t});",
+  "\t\t\t};",
+].join("\n");
+const CONTROL_UI_CHAT_PARTIAL_REPLY_OPTIONS_SEARCH = [
+  "\t\t\t\t\timageOrder: parsedImageOrder.length > 0 ? parsedImageOrder : void 0,",
+  "\t\t\t\t\tonAgentRunStart: (runId) => {",
+].join("\n");
+const CONTROL_UI_CHAT_PARTIAL_REPLY_OPTIONS_REPLACEMENT = [
+  "\t\t\t\t\timageOrder: parsedImageOrder.length > 0 ? parsedImageOrder : void 0,",
+  "\t\t\t\t\tonPartialReply: broadcastWebchatPartial,",
+  "\t\t\t\t\tonAgentRunStart: (runId) => {",
+].join("\n");
+const MODELS_CONFIG_BUNDLE_PATTERN = /^models-config-.*\.js$/u;
+const MODELS_CONFIG_FINGERPRINT_SEARCH = [
+  "async function buildModelsJsonFingerprint(params) {",
+  '\tconst authProfilesMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "auth-profiles.json"));',
+  '\tconst modelsFileMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "models.json"));',
+  "\tconst envShape = createConfigRuntimeEnv(params.config, {});",
+  "\treturn stableStringify({",
+  "\t\tconfig: params.config,",
+  "\t\tsourceConfigForSecrets: params.sourceConfigForSecrets,",
+  "\t\tenvShape,",
+  "\t\tauthProfilesMtimeMs,",
+  "\t\tmodelsFileMtimeMs",
+  "\t});",
+  "}",
+].join("\n");
+const MODELS_CONFIG_FINGERPRINT_REPLACEMENT = [
+  "async function readFileRawForFingerprint(pathname) {",
+  "\ttry {",
+  '\t\treturn await fs.readFile(pathname, "utf8");',
+  "\t} catch {",
+  "\t\treturn null;",
+  "\t}",
+  "}",
+  "async function buildModelsJsonFingerprint(params) {",
+  '\tconst authProfilesRaw = await readFileRawForFingerprint(path.join(params.agentDir, "auth-profiles.json"));',
+  '\tconst modelsFileRaw = await readFileRawForFingerprint(path.join(params.agentDir, "models.json"));',
+  "\tconst envShape = createConfigRuntimeEnv(params.config, {});",
+  "\treturn stableStringify({",
+  "\t\tconfig: params.config,",
+  "\t\tsourceConfigForSecrets: params.sourceConfigForSecrets,",
+  "\t\tenvShape,",
+  "\t\tauthProfilesRaw,",
+  "\t\tmodelsFileRaw",
+  "\t});",
+  "}",
 ].join("\n");
 const GEMINI_NORMALIZE_IMPORT_ANCHOR =
   'import { t as getProviderEnvVars } from "./provider-env-vars-';
@@ -1280,10 +1677,115 @@ async function patchGeminiToolSanitization(openclawPackageRoot) {
       );
       patched = true;
     }
+    if (
+      entrySource.includes(PI_EMBEDDED_RUN_QUEUE_TIMING_SEARCH) &&
+      !entrySource.includes("[clawpi-run-timing]")
+    ) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_RUN_QUEUE_TIMING_SEARCH,
+        PI_EMBEDDED_RUN_QUEUE_TIMING_REPLACEMENT,
+        `${entry}: add embedded run queue timing diagnostics`,
+      );
+      patched = true;
+    }
+    if (
+      entrySource.includes(PI_EMBEDDED_RUN_STAGE_MARK_SEARCH) &&
+      !entrySource.includes("__clawpiMarkRunStage")
+    ) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_RUN_STAGE_MARK_SEARCH,
+        PI_EMBEDDED_RUN_STAGE_MARK_REPLACEMENT,
+        `${entry}: add embedded run stage timing diagnostics`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_WORKSPACE_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_WORKSPACE_MARK_SEARCH,
+        PI_EMBEDDED_WORKSPACE_MARK_REPLACEMENT,
+        `${entry}: mark workspace and runtime plugin timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_RUNTIME_PLUGINS_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_RUNTIME_PLUGINS_MARK_SEARCH,
+        PI_EMBEDDED_RUNTIME_PLUGINS_MARK_REPLACEMENT,
+        `${entry}: mark runtime plugin timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_MODELS_JSON_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_MODELS_JSON_MARK_SEARCH,
+        PI_EMBEDDED_MODELS_JSON_MARK_REPLACEMENT,
+        `${entry}: mark models json timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_HOOK_SELECTION_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_HOOK_SELECTION_MARK_SEARCH,
+        PI_EMBEDDED_HOOK_SELECTION_MARK_REPLACEMENT,
+        `${entry}: mark hook model selection timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_RESOLVE_MODEL_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_RESOLVE_MODEL_MARK_SEARCH,
+        PI_EMBEDDED_RESOLVE_MODEL_MARK_REPLACEMENT,
+        `${entry}: mark resolve model timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_INIT_AUTH_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_INIT_AUTH_MARK_SEARCH,
+        PI_EMBEDDED_INIT_AUTH_MARK_REPLACEMENT,
+        `${entry}: mark auth profile timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_CONTEXT_ENGINE_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_CONTEXT_ENGINE_MARK_SEARCH,
+        PI_EMBEDDED_CONTEXT_ENGINE_MARK_REPLACEMENT,
+        `${entry}: mark context engine timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_ATTEMPT_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_ATTEMPT_MARK_SEARCH,
+        PI_EMBEDDED_ATTEMPT_MARK_REPLACEMENT,
+        `${entry}: mark embedded attempt start timing`,
+      );
+      patched = true;
+    }
+    if (entrySource.includes(PI_EMBEDDED_ATTEMPT_READY_MARK_SEARCH)) {
+      entrySource = applyExactReplacement(
+        entrySource,
+        PI_EMBEDDED_ATTEMPT_READY_MARK_SEARCH,
+        PI_EMBEDDED_ATTEMPT_READY_MARK_REPLACEMENT,
+        `${entry}: mark embedded attempt ready timing`,
+      );
+      patched = true;
+    }
     if (patched) {
       patchedFiles.set(relative(openclawPackageRoot, entryPath), entrySource);
       console.log(
-        `[openclaw-sidecar] patched normalizeProviderToolSchemas in ${entry}`,
+        `[openclaw-sidecar] patched pi-embedded runtime in ${entry}`,
       );
     }
   }
@@ -1424,6 +1926,23 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
       );
       patchCount += 1;
     }
+    if (
+      source.includes(CONTROL_UI_NODE_LIST_POLL_SEARCH) ||
+      source.includes(CONTROL_UI_NODE_LIST_POLL_60S_SEARCH)
+    ) {
+      const nodeListPollSearch = source.includes(
+        CONTROL_UI_NODE_LIST_POLL_60S_SEARCH,
+      )
+        ? CONTROL_UI_NODE_LIST_POLL_60S_SEARCH
+        : CONTROL_UI_NODE_LIST_POLL_SEARCH;
+      source = applyExactReplacement(
+        source,
+        nodeListPollSearch,
+        CONTROL_UI_NODE_LIST_POLL_REPLACEMENT,
+        `${entry}: keep Control UI node.list polling responsive`,
+      );
+      patchCount += 1;
+    }
 
     if (patchCount > 0) {
       patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
@@ -1447,7 +1966,7 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
     for (const entry of patchedControlUiBundles) {
       updatedHtml = updatedHtml.replace(
         `src="./assets/${entry}"`,
-        `src="./assets/${entry}?clawpi-media=1"`,
+        `src="./assets/${entry}?clawpi-media=1&clawpi-node-poll=5s"`,
       );
     }
     if (updatedHtml !== html) {
@@ -1467,13 +1986,52 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
     } catch {
       continue;
     }
-    if (!source.includes(CONTROL_UI_CSP_IMAGE_SRC_SEARCH)) continue;
-    source = applyExactReplacement(
-      source,
-      CONTROL_UI_CSP_IMAGE_SRC_SEARCH,
-      CONTROL_UI_CSP_IMAGE_SRC_REPLACEMENT,
-      `${entry}: allow localhost generated images in Control UI CSP`,
-    );
+    let patchCount = 0;
+    if (source.includes(CONTROL_UI_CSP_IMAGE_SRC_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_CSP_IMAGE_SRC_SEARCH,
+        CONTROL_UI_CSP_IMAGE_SRC_REPLACEMENT,
+        `${entry}: allow localhost generated images in Control UI CSP`,
+      );
+      patchCount += 1;
+    }
+    if (source.includes(CONTROL_UI_NODE_LIST_HANDLER_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_NODE_LIST_HANDLER_SEARCH,
+        CONTROL_UI_NODE_LIST_HANDLER_REPLACEMENT,
+        `${entry}: timeout slow node.list for Control UI`,
+      );
+      patchCount += 1;
+    }
+    if (source.includes(CONTROL_UI_DEVICE_PAIR_LIST_HANDLER_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_DEVICE_PAIR_LIST_HANDLER_SEARCH,
+        CONTROL_UI_DEVICE_PAIR_LIST_HANDLER_REPLACEMENT,
+        `${entry}: timeout slow device.pair.list for Control UI`,
+      );
+      patchCount += 1;
+    }
+    if (source.includes(CONTROL_UI_MODELS_LIST_HANDLER_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_MODELS_LIST_HANDLER_SEARCH,
+        CONTROL_UI_MODELS_LIST_HANDLER_REPLACEMENT,
+        `${entry}: return configured models before slow catalog refresh`,
+      );
+      patchCount += 1;
+    }
+    if (source.includes(CONTROL_UI_CHAT_HISTORY_THINKING_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_CHAT_HISTORY_THINKING_SEARCH,
+        CONTROL_UI_CHAT_HISTORY_THINKING_REPLACEMENT,
+        `${entry}: avoid model catalog wait in chat.history`,
+      );
+      patchCount += 1;
+    }
     if (source.includes(CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_SEARCH)) {
       source = applyExactReplacement(
         source,
@@ -1481,16 +2039,104 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
         CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_REPLACEMENT,
         `${entry}: preserve generated image media for Control UI history`,
       );
+      patchCount += 1;
     }
-    patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
-    console.log(
-      `[openclaw-sidecar] patched Control UI image CSP in ${entry}`,
-    );
+    if (
+      source.includes(CONTROL_UI_CHAT_FINAL_BROADCAST_SEARCH) &&
+      !source.includes("function broadcastChatDelta(params)")
+    ) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_CHAT_FINAL_BROADCAST_SEARCH,
+        CONTROL_UI_CHAT_FINAL_BROADCAST_REPLACEMENT,
+        `${entry}: add WebChat partial reply broadcast helper`,
+      );
+      patchCount += 1;
+    }
+    if (
+      source.includes(CONTROL_UI_CHAT_PARTIAL_STATE_SEARCH) &&
+      !source.includes("const broadcastWebchatPartial = (payload) =>")
+    ) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_CHAT_PARTIAL_STATE_SEARCH,
+        CONTROL_UI_CHAT_PARTIAL_STATE_REPLACEMENT,
+        `${entry}: add WebChat partial reply throttle`,
+      );
+      patchCount += 1;
+    }
+    if (
+      source.includes(CONTROL_UI_CHAT_PARTIAL_REPLY_OPTIONS_SEARCH) &&
+      source.includes("const broadcastWebchatPartial = (payload) =>") &&
+      !source.includes("onPartialReply: broadcastWebchatPartial")
+    ) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_CHAT_PARTIAL_REPLY_OPTIONS_SEARCH,
+        CONTROL_UI_CHAT_PARTIAL_REPLY_OPTIONS_REPLACEMENT,
+        `${entry}: stream partial replies to Control UI only`,
+      );
+      patchCount += 1;
+    }
+    if (patchCount > 0) {
+      patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
+      console.log(
+        `[openclaw-sidecar] patched Control UI server behavior in ${entry}`,
+      );
+    }
   }
 
   if (patchedFiles.size === 0) {
     console.warn(
       "[openclaw-sidecar] no Control UI generated image anchors found (may already be fixed upstream)",
+    );
+  }
+
+  return patchedFiles;
+}
+
+async function patchModelsConfigCaching(openclawPackageRoot) {
+  const patchedFiles = new Map();
+  const distDir = resolve(openclawPackageRoot, "dist");
+  let entries;
+  try {
+    entries = await readdir(distDir);
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] dist directory not found, skipping models config cache patch",
+    );
+    return patchedFiles;
+  }
+
+  for (const entry of entries) {
+    if (!MODELS_CONFIG_BUNDLE_PATTERN.test(entry)) continue;
+    const entryPath = resolve(distDir, entry);
+    let source;
+    try {
+      source = await readFile(entryPath, "utf8");
+    } catch {
+      continue;
+    }
+    if (
+      source.includes(MODELS_CONFIG_FINGERPRINT_SEARCH) &&
+      !source.includes("readFileRawForFingerprint")
+    ) {
+      source = applyExactReplacement(
+        source,
+        MODELS_CONFIG_FINGERPRINT_SEARCH,
+        MODELS_CONFIG_FINGERPRINT_REPLACEMENT,
+        `${entry}: stabilize models.json cache fingerprint`,
+      );
+      patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
+      console.log(
+        `[openclaw-sidecar] patched models config cache fingerprint in ${entry}`,
+      );
+    }
+  }
+
+  if (patchedFiles.size === 0) {
+    console.warn(
+      "[openclaw-sidecar] no models config cache anchors found (may already be fixed upstream)",
     );
   }
 
@@ -1515,11 +2161,14 @@ async function stagePatchedOpenclawPackage() {
     await patchGeminiToolSanitization(stagedOpenclawRoot);
   const controlUiPatchedFiles =
     await patchControlUiGeneratedImageRendering(stagedOpenclawRoot);
+  const modelsConfigPatchedFiles =
+    await patchModelsConfigCaching(stagedOpenclawRoot);
   const patchedFiles = new Map([
     ...overlayFiles,
     ...bridgePatchedFiles,
     ...geminiPatchedFiles,
     ...controlUiPatchedFiles,
+    ...modelsConfigPatchedFiles,
   ]);
 
   for (const [patchRelativePath, patchedSource] of patchedFiles) {

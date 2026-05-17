@@ -247,6 +247,8 @@ function ConnectedChannelRow({
   // as an explicit `connecting` state for any connected channel row.
   const rawStatus: ChannelLiveStatus | undefined = !statusEntry
     ? "connecting"
+    : statusEntry.stale === true && statusEntry.status === "connected"
+      ? "connecting"
     : isPendingChannel && statusEntry.status === "disconnected"
       ? "connecting"
       : statusEntry.status;
@@ -254,10 +256,14 @@ function ConnectedChannelRow({
     rawStatus,
     showBootGrace,
   );
-  const effectiveStatus = useChannelStatusWithHysteresis(
+  const hysteresisStatus = useChannelStatusWithHysteresis(
     graceAdjustedStatus,
     statusEntry?.lastError ?? null,
   );
+  const effectiveStatus =
+    statusEntry?.stale === true && graceAdjustedStatus === "connecting"
+      ? "connecting"
+      : hysteresisStatus;
   // During boot grace we replace the generic "connecting" label with a
   // first-launch specific one so users know the slow progress is expected.
   const statusLabelOverride =
@@ -273,10 +279,10 @@ function ConnectedChannelRow({
   const isConnectedLive = effectiveStatus === "connected";
   const isErrored = effectiveStatus === "error";
   // Sticky snapshot indicator: gateway is transiently unreachable but we're
-  // preserving the last-known status so the pill doesn't jitter. Only render
-  // this hint when the pill still shows "connected" — any other state already
-  // communicates an in-progress condition on its own.
-  const showSyncingHint = statusEntry?.stale === true && isConnectedLive;
+  // preserving the last-known context. We soften stale connected snapshots to
+  // "connecting" so the UI never claims the channel is ready while RPCs are
+  // currently timing out.
+  const showSyncingHint = statusEntry?.stale === true;
   const channelChatUrl = getChannelChatUrl(
     channelOption.id,
     connectedChannel.appId,
@@ -594,7 +600,14 @@ export function HomePage() {
       toast.loading(t("home.channel.phase.configuring"), { id: toastId });
       return;
     }
-    if (pending.status === "connected") {
+    if (
+      pending.status === "connected" &&
+      pending.ready &&
+      pending.stale !== true &&
+      liveStatus?.gatewayConnected === true &&
+      liveStatus.system?.runtimeReady === true &&
+      liveStatus.system?.modelReady === true
+    ) {
       toast.success(t("home.channel.phase.done"), { id: toastId });
       connectingToastIdRef.current = null;
       setPendingChannelId(null);
@@ -613,7 +626,7 @@ export function HomePage() {
       return;
     }
     toast.loading(t("home.channel.phase.almostReady"), { id: toastId });
-  }, [liveStatusByChannelId, pendingChannelId, t]);
+  }, [liveStatus, liveStatusByChannelId, pendingChannelId, t]);
 
   useEffect(() => {
     const previous = previousLiveStatusesRef.current;
@@ -622,7 +635,16 @@ export function HomePage() {
       // Skip channels being tracked by the pending-channel toast above,
       // and suppress during the controller boot grace window.
       if (entry.channelId !== pendingChannelId && !showBootGrace) {
-        if (last && last !== "connected" && entry.status === "connected") {
+        if (
+          last &&
+          last !== "connected" &&
+          entry.status === "connected" &&
+          entry.ready &&
+          entry.stale !== true &&
+          liveStatus?.gatewayConnected === true &&
+          liveStatus.system?.runtimeReady === true &&
+          liveStatus.system?.modelReady === true
+        ) {
           toast.success(t("home.channel.phase.done"));
         }
       }

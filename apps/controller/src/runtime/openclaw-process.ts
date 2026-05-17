@@ -214,6 +214,8 @@ export class OpenClawProcessManager {
         ...process.env,
         ...extraEnv,
         OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_RAW_STREAM: "1",
+        OPENCLAW_DEBUG_INGRESS_TIMING: "1",
         // Explicitly pass config path so OpenClaw's file watcher monitors the correct file
         OPENCLAW_CONFIG_PATH: this.env.openclawConfigPath,
         NEXU_CONTROLLER_URL: `http://127.0.0.1:${this.env.port}`,

@@ -13,6 +13,7 @@ const statePath = path.resolve(
 let cachedRaw = null;
 let cachedMtimeMs = null;
 let cachedState = null;
+const llmRuns = new Map();
 
 function loadState() {
   try {
@@ -68,6 +69,19 @@ function isSelectionAvailable(state) {
   return state.availableModelRefs.includes(state.selectedModelRef);
 }
 
+function toModelOverride(modelRef) {
+  const slashIndex = modelRef.indexOf("/");
+  if (slashIndex <= 0) {
+    return {
+      modelOverride: modelRef,
+    };
+  }
+  return {
+    providerOverride: modelRef.slice(0, slashIndex),
+    modelOverride: modelRef.slice(slashIndex + 1),
+  };
+}
+
 const plugin = {
   id: "nexu-runtime-model",
   name: "Nexu Runtime Model",
@@ -82,18 +96,7 @@ const plugin = {
       if (!isSelectionAvailable(state)) {
         return;
       }
-      const slashIndex = state.selectedModelRef.indexOf("/");
-      if (slashIndex <= 0) {
-        return {
-          modelOverride: state.selectedModelRef,
-        };
-      }
-      const providerOverride = state.selectedModelRef.slice(0, slashIndex);
-      const modelOverride = state.selectedModelRef.slice(slashIndex + 1);
-      return {
-        providerOverride,
-        modelOverride,
-      };
+      return toModelOverride(state.selectedModelRef);
     });
 
     api.on("before_prompt_build", async () => {
@@ -107,6 +110,38 @@ const plugin = {
       return {
         prependSystemContext: state.promptNotice,
       };
+    });
+
+    api.on("llm_input", async (event, ctx) => {
+      const runId = event?.runId || ctx?.runId || "";
+      if (runId) {
+        llmRuns.set(runId, Date.now());
+      }
+      const promptChars =
+        typeof event?.prompt === "string" ? event.prompt.length : 0;
+      const systemPromptChars =
+        typeof event?.systemPrompt === "string" ? event.systemPrompt.length : 0;
+      const historyMessages = Array.isArray(event?.historyMessages)
+        ? event.historyMessages.length
+        : 0;
+      console.info(
+        `[nexu-runtime-model] llm-input runId=${runId || "n/a"} provider=${event?.provider ?? "n/a"} model=${event?.model ?? "n/a"} channel=${ctx?.channelId ?? ctx?.messageProvider ?? "n/a"} sessionKey=${ctx?.sessionKey ?? "n/a"} promptChars=${promptChars} systemPromptChars=${systemPromptChars} historyMessages=${historyMessages} images=${event?.imagesCount ?? 0}`,
+      );
+    });
+
+    api.on("llm_output", async (event, ctx) => {
+      const runId = event?.runId || ctx?.runId || "";
+      const startedAt = runId ? llmRuns.get(runId) : null;
+      if (runId) {
+        llmRuns.delete(runId);
+      }
+      const outputDelayMs = startedAt ? Date.now() - startedAt : null;
+      const assistantTextChars = Array.isArray(event?.assistantTexts)
+        ? event.assistantTexts.join("").length
+        : 0;
+      console.info(
+        `[nexu-runtime-model] llm-output runId=${runId || "n/a"} provider=${event?.provider ?? "n/a"} model=${event?.model ?? "n/a"} channel=${ctx?.channelId ?? ctx?.messageProvider ?? "n/a"} outputDelayMs=${outputDelayMs ?? "n/a"} assistantTextChars=${assistantTextChars} usage=${JSON.stringify(event?.usage ?? {})}`,
+      );
     });
   },
 };

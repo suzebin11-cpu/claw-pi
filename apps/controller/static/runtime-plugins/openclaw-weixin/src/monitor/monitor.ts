@@ -215,22 +215,34 @@ export async function monitorWeixinProvider(
         // authorization pipeline (resolveSenderCommandAuthorizationWithRuntime).
 
         const fromUserId = full.from_user_id ?? "";
-        const cachedConfig = await configManager.getForUser(
-          fromUserId,
-          full.context_token,
+        const configLookupStartedAt = Date.now();
+        const cachedConfig = configManager.getCachedForUser(fromUserId) ?? {
+          typingTicket: "",
+        };
+        aLog.info(
+          `message-preprocess-timing: from=${fromUserId} configCacheHit=${cachedConfig.typingTicket ? "true" : "false"} configLookupMs=${Date.now() - configLookupStartedAt}`,
         );
 
-        await processOneMessage(full, {
-          accountId,
-          config,
-          channelRuntime,
-          baseUrl,
-          cdnBaseUrl,
-          token,
-          typingTicket: cachedConfig.typingTicket,
-          log: opts.runtime?.log ?? (() => {}),
-          errLog,
-        });
+        try {
+          await processOneMessage(full, {
+            accountId,
+            config,
+            channelRuntime,
+            baseUrl,
+            cdnBaseUrl,
+            token,
+            typingTicket: cachedConfig.typingTicket,
+            log: opts.runtime?.log ?? (() => {}),
+            errLog,
+          });
+        } finally {
+          setTimeout(() => {
+            void configManager.refreshForUser(
+              fromUserId,
+              full.context_token,
+            );
+          }, 0);
+        }
       }
     } catch (err) {
       if (abortSignal?.aborted) {

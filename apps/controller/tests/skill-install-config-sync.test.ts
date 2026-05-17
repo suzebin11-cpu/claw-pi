@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+﻿import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -146,7 +146,7 @@ describe("skill install → config sync integration", () => {
     await rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("new install adds skill to compiled agent config", () => {
+  it("new global install does not bloat compiled agent config by default", () => {
     skillDb.recordInstall("taobao-native", "managed");
 
     const slugs = skillDb.getAllInstalled().map((r) => r.slug);
@@ -159,7 +159,7 @@ describe("skill install → config sync integration", () => {
       slugs,
     );
 
-    expect(compiled.agents.list[0].skills).toEqual(["taobao-native"]);
+    expect(compiled.agents.list[0].skills).toEqual([]);
   });
 
   it("empty ledger omits skills field (legacy upgrade path)", () => {
@@ -173,10 +173,10 @@ describe("skill install → config sync integration", () => {
       slugs,
     );
 
-    expect(compiled.agents.list[0]).not.toHaveProperty("skills");
+    expect(compiled.agents.list[0].skills).toEqual([]);
   });
 
-  it("uninstall removes skill from compiled agent config", () => {
+  it("uninstall keeps compiled agent config free of global skills by default", () => {
     skillDb.recordInstall("taobao-native", "managed");
     skillDb.recordInstall("git-helper", "managed");
     skillDb.recordUninstall("git-helper", "managed");
@@ -191,7 +191,7 @@ describe("skill install → config sync integration", () => {
       slugs,
     );
 
-    expect(compiled.agents.list[0].skills).toEqual(["taobao-native"]);
+    expect(compiled.agents.list[0].skills).toEqual([]);
   });
 
   it("multiple agents all receive the same skills", () => {
@@ -225,17 +225,22 @@ describe("skill install → config sync integration", () => {
       ],
     });
 
-    const slugs = skillDb.getAllInstalled().map((r) => r.slug);
-    const compiled = compileOpenClawConfig(
-      config,
-      createEnv(),
-      undefined,
-      slugs,
-    );
+    process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS = "1";
+    try {
+      const slugs = skillDb.getAllInstalled().map((r) => r.slug);
+      const compiled = compileOpenClawConfig(
+        config,
+        createEnv(),
+        undefined,
+        slugs,
+      );
 
-    expect(compiled.agents.list).toHaveLength(2);
-    for (const agent of compiled.agents.list) {
-      expect(agent.skills).toEqual(["calendar"]);
+      expect(compiled.agents.list).toHaveLength(2);
+      for (const agent of compiled.agents.list) {
+        expect(agent.skills).toEqual(["calendar"]);
+      }
+    } finally {
+      delete process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS;
     }
   });
 });

@@ -197,21 +197,19 @@ describe("compileOpenClawConfig", () => {
       bootstrapMaxChars: 3500,
       bootstrapTotalMaxChars: 12000,
       bootstrapPromptTruncationWarning: "off",
-      contextTokens: 64000,
-      contextPruning: {
-        mode: "cache-ttl",
-        keepLastAssistants: 4,
-        minPrunableToolChars: 2000,
-      },
       compaction: {
-        maxHistoryShare: 0.35,
-        keepRecentTokens: 8000,
+        maxHistoryShare: 0.5,
+        keepRecentTokens: 20000,
+        recentTurnsPreserve: 5,
         memoryFlush: {
-          softThresholdTokens: 12000,
-          forceFlushTranscriptBytes: 120000,
+          enabled: true,
         },
       },
     });
+    expect(result.agents.defaults).not.toHaveProperty("contextTokens");
+    expect(result.agents.defaults).not.toHaveProperty("contextPruning");
+    expect(result.agents.defaults).not.toHaveProperty("reserveTokensFloor");
+    expect(result.agents.defaults).not.toHaveProperty("blockStreamingDefault");
   });
 
   it("does not compile token gateway auth when the controller has no gateway token", () => {
@@ -806,31 +804,32 @@ describe("compileOpenClawConfig", () => {
   });
 
   describe("agent skill assignment", () => {
-    it("includes skills on agents when installedSlugs is provided", () => {
+    it("omits global installed skills by default to keep chat prompts lean", () => {
       const config = createConfig();
       const env = createEnv();
       const compiled = compileOpenClawConfig(config, env, undefined, [
         "git",
         "npm",
       ]);
-      expect(compiled.agents.list[0].skills).toEqual(["git", "npm"]);
+      expect(compiled.agents.list[0].skills).toEqual([]);
     });
 
     it("omits skills field when installedSlugs is empty (legacy fallback)", () => {
       const config = createConfig();
       const env = createEnv();
       const compiled = compileOpenClawConfig(config, env, undefined, []);
-      expect(compiled.agents.list[0]).not.toHaveProperty("skills");
+      expect(compiled.agents.list[0].skills).toEqual([]);
     });
 
     it("omits skills field when installedSlugs is undefined", () => {
       const config = createConfig();
       const env = createEnv();
       const compiled = compileOpenClawConfig(config, env);
-      expect(compiled.agents.list[0]).not.toHaveProperty("skills");
+      expect(compiled.agents.list[0].skills).toEqual([]);
     });
 
-    it("assigns same skills to all active agents", () => {
+    it("can assign global skills to all active agents when explicitly enabled", () => {
+      process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS = "1";
       const now = new Date().toISOString();
       const config = createConfig({
         bots: [
@@ -865,11 +864,13 @@ describe("compileOpenClawConfig", () => {
       expect(compiled.agents.list).toHaveLength(2);
       expect(compiled.agents.list[0].skills).toEqual(["calendar"]);
       expect(compiled.agents.list[1].skills).toEqual(["calendar"]);
+      delete process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS;
     });
   });
 
   describe("per-agent workspace skill merge", () => {
     it("merges shared and workspace skills for each agent", () => {
+      process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS = "1";
       const now = new Date().toISOString();
       const config = createConfig({
         bots: [
@@ -916,9 +917,11 @@ describe("compileOpenClawConfig", () => {
 
       const botB = compiled.agents.list.find((a) => a.id === "bot-2");
       expect(botB?.skills).toEqual(["shared-skill"]);
+      delete process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS;
     });
 
     it("deduplicates when same slug in shared and workspace", () => {
+      process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS = "1";
       const config = createConfig();
       const wsMap = new Map<string, readonly string[]>([
         ["bot-1", ["shared-skill"]],
@@ -932,6 +935,7 @@ describe("compileOpenClawConfig", () => {
       );
       const agent = compiled.agents.list[0];
       expect(agent.skills).toEqual(["shared-skill"]);
+      delete process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS;
     });
 
     it("workspace-only skills still activate allowlist", () => {
@@ -959,7 +963,7 @@ describe("compileOpenClawConfig", () => {
         [],
         wsMap,
       );
-      expect(compiled.agents.list[0]).not.toHaveProperty("skills");
+      expect(compiled.agents.list[0].skills).toEqual([]);
     });
   });
 

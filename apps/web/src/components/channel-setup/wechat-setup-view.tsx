@@ -119,6 +119,7 @@ export function WechatSetupView({
   const waitForWechatReady = useCallback(
     async (accountId: string, signal: AbortSignal) => {
       const deadline = Date.now() + CONNECT_READY_MAX_WAIT_MS;
+      let consecutiveReadySamples = 0;
 
       while (!signal.aborted && Date.now() < deadline) {
         const { data } = await getApiV1ChannelsLiveStatus().catch(() => ({
@@ -131,12 +132,21 @@ export function WechatSetupView({
             channel.accountId === accountId,
         );
 
-        if (
+        const freshReady =
+          data?.gatewayConnected === true &&
           data?.system?.runtimeReady &&
           data.system.modelReady &&
           wechat?.ready &&
-          wechat.status === "connected"
-        ) {
+          wechat.status === "connected" &&
+          wechat.stale !== true;
+
+        if (freshReady) {
+          consecutiveReadySamples += 1;
+        } else {
+          consecutiveReadySamples = 0;
+        }
+
+        if (consecutiveReadySamples >= 2) {
           return true;
         }
 
