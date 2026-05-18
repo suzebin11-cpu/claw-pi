@@ -4,6 +4,7 @@ import { Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { AuthLayout } from "./layouts/auth-layout";
 import { InviteGuardLayout } from "./layouts/invite-guard-layout";
 import { WorkspaceLayout } from "./layouts/workspace-layout";
+import { AskPage } from "./pages/ask";
 import { ChannelsPage } from "./pages/channels";
 import { CommunitySkillDetailPage } from "./pages/community-skill-detail";
 import { FeishuBindPage } from "./pages/feishu-bind";
@@ -27,6 +28,7 @@ function DocumentTitleSync() {
       "/claim": t("title.claim"),
       "/workspace": t("title.home"),
       "/workspace/home": t("title.home"),
+      "/workspace/ask": t("title.ask"),
       "/workspace/integrations": t("title.integrations"),
       "/workspace/skills": t("title.skills"),
       "/workspace/settings": t("title.settings"),
@@ -64,6 +66,7 @@ export function App() {
             <Route element={<WorkspaceLayout />}>
               <Route path="/workspace" element={<HomePage />} />
               <Route path="/workspace/home" element={<HomePage />} />
+              <Route path="/workspace/ask" element={<AskPage />} />
               <Route path="/workspace/sessions" element={<SessionsPage />} />
               <Route
                 path="/workspace/sessions/:id"

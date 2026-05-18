@@ -1268,8 +1268,8 @@ function MarketplacePage({
           </Link>
         </div>
 
-        <div className="flex gap-0 overflow-hidden rounded-2xl border border-border bg-surface-1">
-          <aside className="hidden w-56 shrink-0 border-r border-border-subtle bg-surface-0 p-3 md:block">
+        <div className="flex items-start gap-0 rounded-2xl border border-border bg-surface-1">
+          <aside className="sticky top-4 hidden max-h-[calc(100vh-5rem)] w-56 shrink-0 overflow-y-auto rounded-l-2xl border-r border-border-subtle bg-surface-0 p-3 md:block">
             <div className="mb-3 px-2 text-[11px] font-semibold uppercase tracking-wider text-text-tertiary">
               {t("models.marketplace.categories")}
             </div>
@@ -1328,7 +1328,7 @@ function MarketplacePage({
             </div>
           </aside>
 
-          <section className="min-h-[560px] flex-1 p-4 sm:p-5">
+          <section className="min-h-[560px] min-w-0 flex-1 p-4 sm:p-5">
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex flex-col gap-2 md:hidden">
                 <div className="flex gap-2 overflow-x-auto">

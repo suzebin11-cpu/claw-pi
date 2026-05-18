@@ -22,6 +22,7 @@ import {
   getApiInternalActivationTransactions,
   getApiInternalActivationUsageLogs,
   getApiInternalPaymentAlipayPendingOrders,
+  getApiV1Models,
   // postApiInternalActivationRecharge,
   postApiInternalPaymentAlipayCancelOrder,
   postApiInternalPaymentAlipayCreateOrder,
@@ -34,8 +35,11 @@ interface ModelPrice {
   id: string;
   name: string;
   provider: string;
+  matchIds: string[];
   inputPerM: number;
   outputPerM: number;
+  modelRatio: number;
+  completionRatio: number;
   tag?: "cheapest" | "recommended" | "powerful";
 }
 
@@ -46,93 +50,212 @@ interface ProviderGroup {
   models: ModelPrice[];
 }
 
-const PRICING_PROVIDERS: ProviderGroup[] = [
+type ApiModel = {
+  id: string;
+  name: string;
+  provider: string;
+};
+
+const PROVIDER_META: Record<string, { name: string; accent: string }> = {
+  google: { name: "Google Gemini", accent: "#4285F4" },
+  anthropic: { name: "Anthropic Claude", accent: "#D97757" },
+  openai: { name: "OpenAI GPT", accent: "#10A37F" },
+  deepseek: { name: "DeepSeek", accent: "#4D6BFE" },
+  grok: { name: "Grok xAI", accent: "#8B949E" },
+};
+
+const CLOUD_PRICING_MODELS: ModelPrice[] = [
   {
-    key: "google",
-    name: "Google Gemini",
-    accent: "#4285F4",
-    models: [
-      {
-        id: "gemini-3.1-flash-lite",
-        name: "Gemini 3.1 Flash Lite",
-        provider: "google",
-        inputPerM: 0.38,
-        outputPerM: 2.25,
-        tag: "cheapest",
-      },
-      {
-        id: "gemini-3.1-pro",
-        name: "Gemini 3.1 Pro",
-        provider: "google",
-        inputPerM: 3.0,
-        outputPerM: 18.0,
-        tag: "powerful",
-      },
-    ],
+    id: "gemini-3.1-flash-lite-preview",
+    name: "Gemini 3.1 Flash Lite",
+    provider: "google",
+    matchIds: ["gemini-3.1-flash-lite-preview", "gemini-3.1-flash-lite"],
+    modelRatio: 0.125,
+    completionRatio: 6,
+    inputPerM: 0.25,
+    outputPerM: 1.5,
+    tag: "cheapest",
   },
   {
-    key: "openai",
-    name: "OpenAI",
-    accent: "#10A37F",
-    models: [
-      {
-        id: "gpt-5.4-nano",
-        name: "GPT-5.4 Nano",
-        provider: "openai",
-        inputPerM: 0.2,
-        outputPerM: 1.2,
-        tag: "cheapest",
-      },
-      {
-        id: "gpt-5.4-mini",
-        name: "GPT-5.4 Mini",
-        provider: "openai",
-        inputPerM: 0.75,
-        outputPerM: 4.5,
-        tag: "recommended",
-      },
-      {
-        id: "gpt-5.4",
-        name: "GPT-5.4",
-        provider: "openai",
-        inputPerM: 2.5,
-        outputPerM: 15.0,
-        tag: "powerful",
-      },
-    ],
+    id: "gemini-3.1-pro-preview",
+    name: "Gemini 3.1 Pro",
+    provider: "google",
+    matchIds: ["gemini-3.1-pro-preview", "gemini-3.1-pro"],
+    modelRatio: 1,
+    completionRatio: 6,
+    inputPerM: 2,
+    outputPerM: 12,
+    tag: "powerful",
   },
   {
-    key: "anthropic",
-    name: "Anthropic Claude",
-    accent: "#D97757",
-    models: [
-      {
-        id: "claude-haiku-4.5",
-        name: "Claude Haiku 4.5",
-        provider: "anthropic",
-        inputPerM: 4.0,
-        outputPerM: 20.0,
-        tag: "cheapest",
-      },
-      {
-        id: "claude-sonnet-4.6",
-        name: "Claude Sonnet 4.6",
-        provider: "anthropic",
-        inputPerM: 12.0,
-        outputPerM: 60.0,
-        tag: "recommended",
-      },
-      {
-        id: "claude-opus-4.6",
-        name: "Claude Opus 4.6",
-        provider: "anthropic",
-        inputPerM: 20.0,
-        outputPerM: 100.0,
-        tag: "powerful",
-      },
-    ],
+    id: "claude-haiku-4-5",
+    name: "Claude Haiku 4.5",
+    provider: "anthropic",
+    matchIds: ["claude-haiku-4-5", "claude-haiku-4-5-20251001"],
+    modelRatio: 0.5,
+    completionRatio: 5,
+    inputPerM: 1,
+    outputPerM: 5,
+    tag: "cheapest",
+  },
+  {
+    id: "claude-sonnet-4-6",
+    name: "Claude Sonnet 4.6",
+    provider: "anthropic",
+    matchIds: ["claude-sonnet-4-6"],
+    modelRatio: 1.5,
+    completionRatio: 5,
+    inputPerM: 3,
+    outputPerM: 15,
+    tag: "recommended",
+  },
+  {
+    id: "claude-opus-4-6",
+    name: "Claude Opus 4.6",
+    provider: "anthropic",
+    matchIds: ["claude-opus-4-6"],
+    modelRatio: 2.5,
+    completionRatio: 5,
+    inputPerM: 5,
+    outputPerM: 25,
+    tag: "powerful",
+  },
+  {
+    id: "gpt-5.4-nano",
+    name: "GPT-5.4 Nano",
+    provider: "openai",
+    matchIds: ["gpt-5.4-nano"],
+    modelRatio: 0.1,
+    completionRatio: 6.25,
+    inputPerM: 0.2,
+    outputPerM: 1.25,
+    tag: "cheapest",
+  },
+  {
+    id: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini",
+    provider: "openai",
+    matchIds: ["gpt-5.4-mini"],
+    modelRatio: 0.375,
+    completionRatio: 6,
+    inputPerM: 0.75,
+    outputPerM: 4.5,
+    tag: "recommended",
+  },
+  {
+    id: "gpt-5.4",
+    name: "GPT-5.4",
+    provider: "openai",
+    matchIds: ["gpt-5.4"],
+    modelRatio: 1.25,
+    completionRatio: 6,
+    inputPerM: 2.5,
+    outputPerM: 15,
+  },
+  {
+    id: "gpt-5.5",
+    name: "GPT-5.5",
+    provider: "openai",
+    matchIds: ["gpt-5.5"],
+    modelRatio: 2.5,
+    completionRatio: 6,
+    inputPerM: 5,
+    outputPerM: 30,
+    tag: "powerful",
+  },
+  {
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    provider: "deepseek",
+    matchIds: ["deepseek-v4-flash"],
+    modelRatio: 0.5,
+    completionRatio: 2,
+    inputPerM: 1,
+    outputPerM: 2,
+    tag: "cheapest",
+  },
+  {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    provider: "deepseek",
+    matchIds: ["deepseek-v4-pro"],
+    modelRatio: 6,
+    completionRatio: 2,
+    inputPerM: 12,
+    outputPerM: 24,
+    tag: "powerful",
+  },
+  {
+    id: "grok-4.2-fast",
+    name: "Grok 4.2 Fast",
+    provider: "grok",
+    matchIds: ["grok-4.2-fast"],
+    modelRatio: 0.2,
+    completionRatio: 7.5,
+    inputPerM: 0.4,
+    outputPerM: 3,
+    tag: "cheapest",
+  },
+  {
+    id: "grok-4.2",
+    name: "Grok 4.2",
+    provider: "grok",
+    matchIds: ["grok-4.2"],
+    modelRatio: 1.5,
+    completionRatio: 5,
+    inputPerM: 3,
+    outputPerM: 15,
   },
 ];
+
+function canonicalModelId(modelId: string): string {
+  return modelId.includes("/")
+    ? modelId.split("/").slice(1).join("/")
+    : modelId;
+}
+
+function findPricingModel(model: ApiModel): ModelPrice | undefined {
+  const id = canonicalModelId(model.id).toLowerCase();
+  const name = model.name.toLowerCase();
+  return CLOUD_PRICING_MODELS.find((pricing) =>
+    pricing.matchIds.some((candidate) => {
+      const normalized = candidate.toLowerCase();
+      return id === normalized || name === normalized;
+    }),
+  );
+}
+
+function buildPricingProviders(models: ApiModel[] | undefined): ProviderGroup[] {
+  const selected = new Map<string, ModelPrice>();
+  if (models && models.length > 0) {
+    for (const model of models) {
+      const pricing = findPricingModel(model);
+      if (pricing) selected.set(pricing.id, pricing);
+    }
+  }
+
+  const effectiveModels =
+    selected.size > 0 ? Array.from(selected.values()) : CLOUD_PRICING_MODELS;
+  const groups = new Map<string, ProviderGroup>();
+  for (const model of effectiveModels) {
+    const meta = PROVIDER_META[model.provider] ?? {
+      name: model.provider,
+      accent: "#8B949E",
+    };
+    const group =
+      groups.get(model.provider) ??
+      ({
+        key: model.provider,
+        name: meta.name,
+        accent: meta.accent,
+        models: [],
+      } satisfies ProviderGroup);
+    group.models.push(model);
+    groups.set(model.provider, group);
+  }
+
+  return Array.from(groups.values());
+}
 
 function formatTokenCount(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -214,7 +337,7 @@ function PricingModelCard({
           <div className="text-[15px] font-bold text-text-primary tabular-nums">
             {formatYuan(model.inputPerM)}
           </div>
-          <div className="text-[10px] text-text-muted">/ 100万字符</div>
+          <div className="text-[10px] text-text-muted">/ 100万 tokens</div>
         </div>
         <div className="rounded-lg bg-surface-1 px-3 py-2">
           <div className="text-[10px] font-medium text-text-muted uppercase tracking-wider mb-0.5">
@@ -223,7 +346,7 @@ function PricingModelCard({
           <div className="text-[15px] font-bold text-text-primary tabular-nums">
             {formatYuan(model.outputPerM)}
           </div>
-          <div className="text-[10px] text-text-muted">/ 100万字符</div>
+          <div className="text-[10px] text-text-muted">/ 100万 tokens</div>
         </div>
       </div>
 
@@ -232,12 +355,14 @@ function PricingModelCard({
         style={{ backgroundColor: `${accent}10` }}
       >
         <div className="flex items-center justify-between">
-          <span className="text-[11px] text-text-secondary">¥1 约可获得</span>
+          <span className="text-[11px] text-text-secondary">
+            倍率 {model.modelRatio}x / 输出 {model.completionRatio}x
+          </span>
           <span
             className="text-[13px] font-bold tabular-nums"
             style={{ color: accent }}
           >
-            {formatTokenCount(outputPerYuan)} AI回复
+            {formatTokenCount(outputPerYuan)} 输出 tokens
           </span>
         </div>
       </div>
@@ -272,9 +397,9 @@ function PricingProviderSection({ provider }: { provider: ProviderGroup }) {
   );
 }
 
-function ValueComparisonChart() {
+function ValueComparisonChart({ providers }: { providers: ProviderGroup[] }) {
   const allModels = useMemo(() => {
-    const flat = PRICING_PROVIDERS.flatMap((p) =>
+    const flat = providers.flatMap((p) =>
       p.models.map((m) => ({
         ...m,
         accent: p.accent,
@@ -282,7 +407,7 @@ function ValueComparisonChart() {
       })),
     );
     return flat.sort((a, b) => b.outputPerYuan - a.outputPerYuan);
-  }, []);
+  }, [providers]);
 
   const maxValue = allModels[0]?.outputPerYuan ?? 1;
 
@@ -318,7 +443,7 @@ function ValueComparisonChart() {
         );
       })}
       <p className="text-[10px] text-text-muted mt-2 text-right">
-        每 ¥1 约可获得的 AI 回复字符数（平方根比例）
+        每 ¥1 约可获得的输出 tokens（平方根比例）
       </p>
     </div>
   );
@@ -567,6 +692,19 @@ function HistorySection() {
 }
 
 function ModelPricingSection() {
+  const { data: modelsData, isLoading } = useQuery({
+    queryKey: ["models"],
+    queryFn: async () => {
+      const { data } = await getApiV1Models();
+      return data;
+    },
+    refetchInterval: 60_000,
+  });
+  const providers = useMemo(
+    () => buildPricingProviders((modelsData?.models ?? []) as ApiModel[]),
+    [modelsData],
+  );
+
   return (
     <div className="space-y-6">
       <div className="rounded-2xl border border-border bg-surface-0 p-6">
@@ -574,14 +712,16 @@ function ModelPricingSection() {
           <h2 className="text-[16px] font-semibold text-text-primary mb-1">
             模型定价
           </h2>
-          <p className="text-[12px] text-text-muted">
-            按量付费，按实际用量扣费，无隐藏费用。「你发送的」=
-            你输入的内容，「AI 回复的」= AI 生成的回复。
-          </p>
         </div>
-        {PRICING_PROVIDERS.map((p) => (
-          <PricingProviderSection key={p.key} provider={p} />
-        ))}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 size={16} className="animate-spin text-text-muted" />
+          </div>
+        ) : (
+          providers.map((p) => (
+            <PricingProviderSection key={p.key} provider={p} />
+          ))
+        )}
       </div>
 
       <div className="rounded-2xl border border-border bg-surface-0 p-6">
@@ -589,9 +729,9 @@ function ModelPricingSection() {
           性价比对比
         </h2>
         <p className="text-[12px] text-text-muted mb-5">
-          花 ¥1 能让 AI 回复多少内容？条形越长 = 性价比越高。
+          花 ¥1 能得到多少输出 tokens？条形越长 = 输出单价越低。
         </p>
-        <ValueComparisonChart />
+        <ValueComparisonChart providers={providers} />
       </div>
     </div>
   );
@@ -1150,16 +1290,6 @@ export function RechargePage() {
 
       {/* Transaction history & usage logs */}
       <HistorySection />
-
-      {/* Purchase guide */}
-      <div className="rounded-2xl border border-border bg-surface-0 p-6 mb-6">
-        <div className="text-[14px] font-semibold text-text-primary mb-2">
-          {t("recharge.buyTitle")}
-        </div>
-        <p className="text-[12px] text-text-muted leading-relaxed">
-          {t("recharge.buyDescription")}
-        </p>
-      </div>
 
       {/* Model pricing */}
       <ModelPricingSection />

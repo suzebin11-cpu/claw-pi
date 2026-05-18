@@ -182,10 +182,20 @@ function shouldRetryWithoutResponseFormat(message: string): boolean {
   );
 }
 
+function isImageSafetyRejection(message: string): boolean {
+  return /safety system|content policy|content moderation|policy violation|unsafe|安全系统|安全策略|内容审核|风控|违规/u.test(
+    message.toLowerCase(),
+  );
+}
+
 function shouldRetryTransientImageError(
   status: number | null,
   message: string,
 ): boolean {
+  if (isImageSafetyRejection(message)) {
+    return false;
+  }
+
   if (status !== null && [408, 429, 502, 503, 504].includes(status)) {
     return true;
   }
@@ -331,8 +341,9 @@ export class ImageGenerationService {
       | Promise<{ url: string; init: RequestInit & { timeoutMs: number } }>
       | { url: string; init: RequestInit & { timeoutMs: number } };
   }): Promise<OpenAiImageResponse> {
-    let includeResponseFormat = true;
+    let includeResponseFormat = false;
     let retryIndex = 0;
+    let lastUpstreamError: string | null = null;
 
     while (true) {
       const request = await params.buildRequest(includeResponseFormat);
@@ -355,7 +366,11 @@ export class ImageGenerationService {
           await delay(retryDelay);
           continue;
         }
-        throw new Error(message);
+        throw new Error(
+          message === "fetch failed" && lastUpstreamError
+            ? lastUpstreamError
+            : message,
+        );
       }
 
       if (response.ok) {
@@ -363,6 +378,7 @@ export class ImageGenerationService {
       }
 
       const message = await readResponseError(response);
+      lastUpstreamError = message;
       if (includeResponseFormat && shouldRetryWithoutResponseFormat(message)) {
         includeResponseFormat = false;
         logger.warn(
@@ -392,6 +408,14 @@ export class ImageGenerationService {
         continue;
       }
 
+      logger.warn(
+        {
+          label: params.label,
+          status: response.status,
+          errorMessage: message,
+        },
+        "image_generation_failed",
+      );
       throw new Error(message);
     }
   }

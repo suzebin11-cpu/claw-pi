@@ -55,6 +55,7 @@ type ModelPickerDropdownProps = {
   dropdownClassName?: string;
   compact?: boolean;
   dropdownAlign?: "start" | "end" | "stretch";
+  dropdownPlacement?: "top" | "bottom";
   confirmSwitch?: boolean;
 };
 
@@ -69,6 +70,7 @@ export function ModelPickerDropdown({
   dropdownClassName,
   compact = false,
   dropdownAlign = compact ? "start" : "stretch",
+  dropdownPlacement = "bottom",
   confirmSwitch = false,
 }: ModelPickerDropdownProps) {
   const { t } = useTranslation();
@@ -176,13 +178,13 @@ export function ModelPickerDropdown({
         type="button"
         onClick={onOpenSettings}
         className={cn(
-          "flex items-center gap-1 text-[11px] text-text-muted hover:text-text-secondary transition-colors",
+          "relative z-10 inline-flex min-h-8 cursor-pointer select-none items-center gap-1 rounded-lg px-2 text-[11px] text-text-muted transition-colors hover:text-text-secondary",
           className,
         )}
       >
-        <Cpu size={10} />
-        <span>{emptyLabel}</span>
-        <ChevronDown size={9} />
+        <Cpu size={10} className="pointer-events-none" />
+        <span className="pointer-events-none">{emptyLabel}</span>
+        <ChevronDown size={9} className="pointer-events-none" />
       </button>
     ) : (
       <div
@@ -214,9 +216,11 @@ export function ModelPickerDropdown({
       : dropdownAlign === "stretch"
         ? "left-0 right-0"
         : "left-0";
+  const dropdownVerticalClass =
+    dropdownPlacement === "top" ? "bottom-full mb-2" : "top-full mt-2";
 
   return (
-    <div className={cn("relative", className)} ref={ref}>
+    <div className={cn("relative inline-flex", className)} ref={ref}>
       <button
         type="button"
         onClick={() => {
@@ -231,15 +235,15 @@ export function ModelPickerDropdown({
         }}
         className={cn(
           compact
-            ? "inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-border bg-surface-0 hover:border-border-hover hover:bg-surface-1 transition-all text-[12px] text-text-primary"
-            : "inline-flex items-center gap-2 px-3 py-1.5 rounded-lg border border-border bg-surface-0 hover:bg-surface-2 hover:border-border-hover transition-all text-[12px] font-medium text-text-primary",
+            ? "relative z-10 inline-flex min-h-8 cursor-pointer select-none items-center gap-1.5 rounded-lg border border-border bg-surface-0 px-2.5 py-1 text-[12px] text-text-primary transition-all hover:border-border-hover hover:bg-surface-1"
+            : "relative z-10 inline-flex min-h-8 cursor-pointer select-none items-center gap-2 rounded-lg border border-border bg-surface-0 px-3 py-1.5 text-[12px] font-medium text-text-primary transition-all hover:border-border-hover hover:bg-surface-2",
           triggerClassName,
         )}
       >
         <span
           className={cn(
             compact ? "w-4 h-4" : "w-4 h-4",
-            "shrink-0 flex items-center justify-center",
+            "pointer-events-none shrink-0 flex items-center justify-center",
           )}
         >
           {currentGroupKey ? (
@@ -252,13 +256,18 @@ export function ModelPickerDropdown({
             <Cpu size={13} className="text-text-muted" />
           )}
         </span>
-        <span className={cn(compact ? "font-medium" : undefined)}>
+        <span
+          className={cn(
+            "pointer-events-none min-w-0 truncate",
+            compact ? "font-medium" : undefined,
+          )}
+        >
           {currentModelLabel}
         </span>
         <ChevronDown
           size={compact ? 10 : 13}
           className={cn(
-            "text-text-muted transition-transform",
+            "pointer-events-none shrink-0 text-text-muted transition-transform",
             open && "rotate-180",
           )}
         />
@@ -268,7 +277,7 @@ export function ModelPickerDropdown({
         <div
           className={cn(
             compact
-              ? `absolute z-50 mt-2 ${dropdownPositionClass} min-w-[340px] rounded-xl border border-border bg-surface-1 shadow-xl`
+              ? `absolute z-[80] ${dropdownVerticalClass} ${dropdownPositionClass} min-w-[340px] rounded-xl border border-border bg-surface-1 shadow-xl`
               : `absolute top-full ${dropdownPositionClass} z-20 mt-1 rounded-xl border border-border bg-surface-0 shadow-lg overflow-hidden`,
             dropdownClassName,
           )}

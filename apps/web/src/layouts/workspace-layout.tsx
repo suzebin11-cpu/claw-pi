@@ -2,6 +2,7 @@ import { PlatformIcon } from "@/components/platform-icons";
 import { useAutoUpdate } from "@/hooks/use-auto-update";
 import { useCommunitySkills } from "@/hooks/use-community-catalog";
 import { type Locale, useLocale } from "@/hooks/use-locale";
+import { readAskActivity, subscribeAskActivity } from "@/lib/ask-activity";
 import { authClient } from "@/lib/auth-client";
 import { useBootGrace } from "@/lib/runtime-startup";
 import { normalizeChannel, track } from "@/lib/tracking";
@@ -95,6 +96,44 @@ function SidebarPlatformIcon({ platform }: { platform: string }) {
     <span className="flex justify-center items-center w-7 h-7 rounded-xl border border-border bg-surface-1 shrink-0 shadow-[0_1px_2px_rgba(0,0,0,0.03)]">
       <PlatformIcon platform={platform} size={15} />
     </span>
+  );
+}
+
+function AskActivityIndicator({
+  pendingCount,
+  unreadCount,
+  isRuntimeReady,
+}: {
+  pendingCount: number;
+  unreadCount: number;
+  isRuntimeReady: boolean;
+}) {
+  if (pendingCount > 0) {
+    return (
+      <span className="relative ml-auto flex h-2.5 w-2.5 shrink-0">
+        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--color-brand-primary)] opacity-70" />
+        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-[var(--color-brand-primary)]" />
+      </span>
+    );
+  }
+
+  if (unreadCount > 0) {
+    return (
+      <span className="ml-auto inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full bg-[var(--color-brand-primary)] px-1 text-[9px] font-bold leading-none text-white">
+        {unreadCount > 9 ? "9+" : unreadCount}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      className={cn(
+        "ml-auto h-1.5 w-1.5 shrink-0 rounded-full",
+        isRuntimeReady
+          ? "bg-[var(--color-success)]"
+          : "animate-pulse bg-[var(--color-warning)]",
+      )}
+    />
   );
 }
 
@@ -347,6 +386,7 @@ function WorkspaceLayoutInner() {
   const [showLangMenu, setShowLangMenu] = useState(false);
   const update = useAutoUpdate();
   const [updateDismissed, setUpdateDismissed] = useState(false);
+  const [askActivity, setAskActivity] = useState(readAskActivity);
   const hasUpdate =
     update.phase === "available" ||
     update.phase === "downloading" ||
@@ -410,6 +450,8 @@ function WorkspaceLayoutInner() {
   const { data: session } = authClient.useSession();
   const { data: skillsData } = useCommunitySkills();
   const installedSkillsCount = skillsData?.installedSkills?.length ?? 0;
+
+  useEffect(() => subscribeAskActivity(setAskActivity), []);
 
   useEffect(() => {
     if (!isMacDesktop) {
@@ -526,6 +568,17 @@ function WorkspaceLayoutInner() {
     }
   }, [isRuntimeFullyOnline, runtimeStatus, t]);
 
+  const handleOpenAsk = useCallback(() => {
+    track("workspace_ask_click");
+    track("workspace_sidebar_click", { target: "ask" });
+    if (!isRuntimeFullyOnline) {
+      toast.info(t("layout.askNotReady"));
+      return false;
+    }
+    navigate("/workspace/ask");
+    return true;
+  }, [isRuntimeFullyOnline, navigate, t]);
+
   const sessions = sessionsData ?? [];
 
   const sessionMatch = location.pathname.match(/\/workspace\/sessions\/(.+)/);
@@ -537,6 +590,9 @@ function WorkspaceLayoutInner() {
   const isRechargePage = location.pathname.includes("/recharge");
   const isModelsPage = location.pathname.includes("/models");
   const isSettingsPage = location.pathname.includes("/settings");
+  const isAskPage = location.pathname.includes("/ask");
+  const askPendingCount = askActivity.pendingSessionIds.length;
+  const askUnreadCount = askActivity.unreadSessionIds.length;
 
   const handleLogout = async () => {
     setShowLogoutConfirm(false);
@@ -563,6 +619,7 @@ function WorkspaceLayoutInner() {
     !isRechargePage &&
     !isModelsPage &&
     !isSettingsPage &&
+    !isAskPage &&
     !selectedSessionId;
 
   const selectedSession = selectedSessionId
@@ -570,28 +627,34 @@ function WorkspaceLayoutInner() {
     : null;
   const mobileTitle = isHomePage
     ? t("layout.mobile.home")
-    : isSkillsPage
-      ? t("layout.mobile.skills")
-      : isRechargePage
-        ? t("layout.mobile.recharge")
-        : isModelsPage
-          ? t("layout.mobile.models")
-          : isSettingsPage
-            ? t("layout.mobile.settings")
-            : selectedSession?.title || t("layout.mobile.conversations");
+    : isAskPage
+      ? t("layout.mobile.ask")
+      : isSkillsPage
+        ? t("layout.mobile.skills")
+        : isRechargePage
+          ? t("layout.mobile.recharge")
+          : isModelsPage
+            ? t("layout.mobile.models")
+            : isSettingsPage
+              ? t("layout.mobile.settings")
+              : selectedSession?.title || t("layout.mobile.conversations");
   const mobileSubtitle = isHomePage
     ? t("layout.mobile.homeSubtitle")
-    : isSkillsPage
-      ? t("layout.mobile.skillsSubtitle")
-      : isRechargePage
-        ? t("layout.mobile.rechargeSubtitle")
-        : isModelsPage
-          ? t("layout.mobile.modelsSubtitle")
-          : isSettingsPage
-            ? t("layout.mobile.settingsSubtitle")
-            : selectedSession
-              ? `${getPlatformLabel(selectedSession.channelType, t)} · ${formatTime(selectedSession.lastTime, t)}`
-              : t("layout.mobileConversationCount", { count: sessions.length });
+    : isAskPage
+      ? t("layout.mobile.askSubtitle")
+      : isSkillsPage
+        ? t("layout.mobile.skillsSubtitle")
+        : isRechargePage
+          ? t("layout.mobile.rechargeSubtitle")
+          : isModelsPage
+            ? t("layout.mobile.modelsSubtitle")
+            : isSettingsPage
+              ? t("layout.mobile.settingsSubtitle")
+              : selectedSession
+                ? `${getPlatformLabel(selectedSession.channelType, t)} · ${formatTime(selectedSession.lastTime, t)}`
+                : t("layout.mobileConversationCount", {
+                    count: sessions.length,
+                  });
   const desktopGlassTint = isMacDesktop
     ? "rgba(255, 255, 255, 0.08)"
     : "var(--color-surface-0)";
@@ -717,6 +780,26 @@ function WorkspaceLayoutInner() {
                   runtimeStatus?.status === "starting") && (
                   <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] animate-pulse shrink-0" />
                 )}
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenAsk}
+              aria-disabled={!isRuntimeFullyOnline}
+              className={cn(
+                "nav-item flex items-center gap-2.5 w-full rounded-[var(--radius-6)] text-[13px] transition-colors cursor-pointer mt-0.5 px-3 py-2 whitespace-nowrap",
+                isAskPage && "nav-item-active",
+                !isRuntimeFullyOnline &&
+                  !isAskPage &&
+                  "cursor-not-allowed opacity-55",
+              )}
+            >
+              <MessageSquare size={16} className="shrink-0" />
+              {t("layout.nav.ask")}
+              <AskActivityIndicator
+                pendingCount={askPendingCount}
+                unreadCount={askUnreadCount}
+                isRuntimeReady={isRuntimeFullyOnline}
+              />
             </button>
             <Link
               to="/workspace/models"
@@ -1096,6 +1179,30 @@ function WorkspaceLayoutInner() {
                         runtimeStatus?.status === "starting") && (
                         <span className="ml-auto w-1.5 h-1.5 rounded-full bg-[var(--color-warning)] animate-pulse shrink-0" />
                       )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (handleOpenAsk()) setMobileDrawerOpen(false);
+                    }}
+                    aria-disabled={!isRuntimeFullyOnline}
+                    className={cn(
+                      "flex items-center gap-2 w-full rounded-lg text-[12px] font-medium transition-colors cursor-pointer mt-0.5 px-3 py-2",
+                      isAskPage
+                        ? "bg-accent/10 text-accent"
+                        : "text-text-muted hover:text-text-primary hover:bg-surface-3",
+                      !isRuntimeFullyOnline &&
+                        !isAskPage &&
+                        "cursor-not-allowed opacity-55",
+                    )}
+                  >
+                    <MessageSquare size={14} />
+                    {t("layout.nav.ask")}
+                    <AskActivityIndicator
+                      pendingCount={askPendingCount}
+                      unreadCount={askUnreadCount}
+                      isRuntimeReady={isRuntimeFullyOnline}
+                    />
                   </button>
                   <Link
                     to="/workspace/models"
