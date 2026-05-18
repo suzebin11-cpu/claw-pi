@@ -1,4 +1,8 @@
-import type { MinimalSkill, SkillSource, SkillhubCatalogData } from "@/types/desktop";
+import type {
+  MinimalSkill,
+  SkillSource,
+  SkillhubCatalogData,
+} from "@/types/desktop";
 import "@/lib/api";
 import {
   useInfiniteQuery,
@@ -156,7 +160,7 @@ export function useRefreshCatalog() {
 }
 
 const EXPLORE_SEARCH_KEY = ["skillhub", "explore-search"] as const;
-const EXPLORE_PAGE_SIZE = 24;
+const EXPLORE_PAGE_SIZE = 60;
 
 type SearchPage = { skills: MinimalSkill[]; nextMarker: string | null };
 

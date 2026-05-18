@@ -24,6 +24,7 @@ import type {
   CatalogMeta,
   InstalledSkill,
   MinimalSkill,
+  SelectedSkillContext,
   SkillSource,
   SkillhubCatalogData,
 } from "./types.js";
@@ -125,6 +126,207 @@ const noopLog: SkillhubLogFn = () => {};
 const CATALOG_API_PAGE_LIMIT = 100;
 
 const DAILY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_DYNAMIC_SKILL_LIMIT = 3;
+const DEFAULT_DYNAMIC_SKILL_MAX_TOTAL_CHARS = 9_000;
+const DEFAULT_DYNAMIC_SKILL_MAX_CHARS = 4_000;
+const DYNAMIC_SKILL_MIN_SCORE = 3;
+const DYNAMIC_SKILL_INDEX_CACHE_MS = 30_000;
+
+const SKILL_QUERY_STOPWORDS = new Set([
+  "a",
+  "an",
+  "and",
+  "are",
+  "for",
+  "from",
+  "how",
+  "into",
+  "please",
+  "the",
+  "this",
+  "that",
+  "with",
+  "you",
+  "your",
+]);
+
+const SKILL_QUERY_EXPANSIONS: Array<{
+  pattern: RegExp;
+  terms: readonly string[];
+}> = [
+  {
+    pattern: /图片|图像|画图|绘图|生图|图生图|海报|插画|logo|照片|视觉|换色/u,
+    terms: [
+      "image",
+      "images",
+      "picture",
+      "photo",
+      "vision",
+      "generate",
+      "generation",
+      "design",
+      "logo",
+      "drawing",
+    ],
+  },
+  {
+    pattern: /网页|网站|浏览器|联网|搜索|爬取|抓取|资料|新闻/u,
+    terms: [
+      "web",
+      "browser",
+      "search",
+      "internet",
+      "crawl",
+      "scrape",
+      "research",
+    ],
+  },
+  {
+    pattern: /文件|文档|pdf|word|excel|ppt|表格|幻灯片|压缩包/u,
+    terms: [
+      "file",
+      "document",
+      "pdf",
+      "word",
+      "excel",
+      "spreadsheet",
+      "presentation",
+      "slides",
+    ],
+  },
+  {
+    pattern: /代码|程序|开发|报错|bug|测试|前端|后端|接口|脚本/u,
+    terms: [
+      "code",
+      "coding",
+      "debug",
+      "test",
+      "frontend",
+      "backend",
+      "api",
+      "script",
+    ],
+  },
+  {
+    pattern: /数据|分析|图表|统计|csv|数据库|报表/u,
+    terms: [
+      "data",
+      "analysis",
+      "chart",
+      "database",
+      "csv",
+      "report",
+      "analytics",
+    ],
+  },
+  {
+    pattern: /部署|发布|运维|服务器|docker|k8s|日志|监控/u,
+    terms: [
+      "deploy",
+      "deployment",
+      "server",
+      "docker",
+      "kubernetes",
+      "logs",
+      "monitoring",
+      "operations",
+    ],
+  },
+];
+
+type SkillSelectionCandidate = {
+  record: SkillRecord;
+  name: string;
+  description: string;
+  tags: readonly string[];
+  skillMdPath: string;
+};
+
+type SkillSelectionIndexCache = {
+  key: string;
+  expiresAt: number;
+  candidates: SkillSelectionCandidate[];
+};
+
+function normalizeSkillSearchText(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_/|]+/gu, " ")
+    .replace(/[^\p{L}\p{N}\s.-]+/gu, " ")
+    .replace(/\s+/gu, " ")
+    .trim();
+}
+
+function tokenizeSkillQuery(query: string): string[] {
+  const normalized = normalizeSkillSearchText(query);
+  const terms = new Set<string>();
+  const tokens = normalized.match(/[\p{L}\p{N}][\p{L}\p{N}.-]{1,}/gu) ?? [];
+  for (const token of tokens) {
+    if (!SKILL_QUERY_STOPWORDS.has(token)) {
+      terms.add(token);
+    }
+  }
+  for (const expansion of SKILL_QUERY_EXPANSIONS) {
+    if (expansion.pattern.test(query)) {
+      for (const term of expansion.terms) {
+        terms.add(term);
+      }
+    }
+  }
+  return [...terms];
+}
+
+function scoreSkillCandidate(
+  candidate: SkillSelectionCandidate,
+  queryTerms: readonly string[],
+): number {
+  const slug = normalizeSkillSearchText(candidate.record.slug);
+  const name = normalizeSkillSearchText(candidate.name);
+  const description = normalizeSkillSearchText(candidate.description);
+  const tags = candidate.tags.map(normalizeSkillSearchText);
+
+  let score = 0;
+  for (const term of queryTerms) {
+    if (!term) continue;
+    if (slug === term || name === term) {
+      score += 10;
+      continue;
+    }
+    if (slug.includes(term) || name.includes(term)) score += 5;
+    if (tags.some((tag) => tag === term || tag.includes(term))) score += 4;
+    if (description.includes(term)) score += 2;
+  }
+  return score;
+}
+
+function trimSkillContent(
+  content: string,
+  maxChars: number,
+): { content: string; truncated: boolean } {
+  const trimmed = content.trim();
+  if (trimmed.length <= maxChars) {
+    return { content: trimmed, truncated: false };
+  }
+  return {
+    content: `${trimmed.slice(0, Math.max(0, maxChars)).trimEnd()}\n\n[Skill content truncated for this turn.]`,
+    truncated: true,
+  };
+}
+
+function buildSkillSelectionCacheKey(records: readonly SkillRecord[]): string {
+  return records
+    .map((record) =>
+      [
+        record.slug,
+        record.source,
+        record.agentId ?? "",
+        record.version ?? "",
+        record.installedAt ?? "",
+      ].join(":"),
+    )
+    .sort()
+    .join("|");
+}
 
 export type SkillUninstallRequest = {
   slug: string;
@@ -151,6 +353,7 @@ export class CatalogManager {
 
   private readonly clawHubRegistry: string | undefined;
   private readonly clawHubSearchApi: string | undefined;
+  private skillSelectionIndexCache: SkillSelectionIndexCache | null = null;
 
   constructor(
     cacheDir: string,
@@ -262,6 +465,86 @@ export class CatalogManager {
     const meta = this.readMeta();
 
     return { skills, installedSlugs, installedSkills, meta };
+  }
+
+  selectRelevantSkills(input: {
+    query: string;
+    agentId?: string | null;
+    limit?: number;
+    maxTotalChars?: number;
+    maxSkillChars?: number;
+  }): SelectedSkillContext[] {
+    const query = input.query.trim();
+    if (query.length < 2) {
+      return [];
+    }
+
+    const queryTerms = tokenizeSkillQuery(query);
+    if (queryTerms.length === 0) {
+      return [];
+    }
+
+    const limit = Math.max(
+      1,
+      Math.min(input.limit ?? DEFAULT_DYNAMIC_SKILL_LIMIT, 5),
+    );
+    const maxTotalChars =
+      input.maxTotalChars ?? DEFAULT_DYNAMIC_SKILL_MAX_TOTAL_CHARS;
+    const maxSkillChars =
+      input.maxSkillChars ?? DEFAULT_DYNAMIC_SKILL_MAX_CHARS;
+    const installedRecords = this.db.getAllInstalled();
+
+    const candidates = this.getSkillSelectionCandidates(installedRecords)
+      .filter(
+        (candidate) =>
+          candidate.record.source !== "workspace" ||
+          (input.agentId && candidate.record.agentId === input.agentId),
+      )
+      .map((candidate) => ({
+        candidate,
+        score: scoreSkillCandidate(candidate, queryTerms),
+      }))
+      .filter((item) => item.score >= DYNAMIC_SKILL_MIN_SCORE)
+      .sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return a.candidate.name.localeCompare(b.candidate.name);
+      });
+
+    const selected: SelectedSkillContext[] = [];
+    let remainingChars = maxTotalChars;
+    for (const { candidate, score } of candidates) {
+      if (selected.length >= limit || remainingChars <= 0) {
+        break;
+      }
+
+      const contentBudget = Math.min(maxSkillChars, remainingChars);
+      if (contentBudget < 500) {
+        break;
+      }
+
+      try {
+        const { content, truncated } = trimSkillContent(
+          readFileSync(candidate.skillMdPath, "utf8"),
+          contentBudget,
+        );
+        if (!content) continue;
+        selected.push({
+          slug: candidate.record.slug,
+          source: candidate.record.source,
+          agentId: candidate.record.agentId ?? null,
+          name: candidate.name,
+          description: candidate.description,
+          score,
+          content,
+          truncated,
+        });
+        remainingChars -= content.length;
+      } catch {
+        // A skill may disappear between ledger sync and request time.
+      }
+    }
+
+    return selected;
   }
 
   /**
@@ -701,6 +984,52 @@ export class CatalogManager {
       const message = error instanceof Error ? error.message : String(error);
       this.log("warn", `npm deps failed for ${slug}: ${message}`);
     }
+  }
+
+  private getSkillSelectionCandidates(
+    records: readonly SkillRecord[],
+  ): SkillSelectionCandidate[] {
+    const cacheKey = buildSkillSelectionCacheKey(records);
+    const now = Date.now();
+    if (
+      this.skillSelectionIndexCache &&
+      this.skillSelectionIndexCache.key === cacheKey &&
+      this.skillSelectionIndexCache.expiresAt > now
+    ) {
+      return this.skillSelectionIndexCache.candidates;
+    }
+
+    const catalogBySlug = new Map(
+      this.readCachedSkills().map((skill) => [skill.slug, skill]),
+    );
+    const candidates = records.flatMap((record): SkillSelectionCandidate[] => {
+      const skillMdPath = resolve(this.resolveSkillMdDir(record), "SKILL.md");
+      if (!existsSync(skillMdPath)) {
+        return [];
+      }
+
+      const cached = catalogBySlug.get(record.slug);
+      const frontmatter =
+        cached && record.source === "managed"
+          ? { name: "", description: "" }
+          : this.parseFrontmatter(skillMdPath);
+      return [
+        {
+          record,
+          name: frontmatter.name || cached?.name || record.slug,
+          description: frontmatter.description || cached?.description || "",
+          tags: cached?.tags ?? [],
+          skillMdPath,
+        },
+      ];
+    });
+
+    this.skillSelectionIndexCache = {
+      key: cacheKey,
+      expiresAt: now + DYNAMIC_SKILL_INDEX_CACHE_MS,
+      candidates,
+    };
+    return candidates;
   }
 
   /**

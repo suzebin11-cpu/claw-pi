@@ -27,9 +27,14 @@ const tagTranslationsZh: Record<string, string> = {
   search: "搜索",
   safety: "安全",
   cli: "命令行",
-  devops: "运维",
+  devops: "DevOps",
   documentation: "文档",
+  document: "文档",
+  documents: "文档",
+  docs: "文档",
   email: "邮件",
+  office: "办公",
+  "office-collab": "办公协作",
   operations: "运营",
   trading: "交易",
   analysis: "分析",
@@ -47,6 +52,23 @@ const tagTranslationsZh: Record<string, string> = {
   github: "GitHub",
   sales: "销售",
   analytics: "数据分析",
+  statistics: "统计",
+  visualization: "可视化",
+  chart: "图表",
+  report: "报表",
+  reports: "报表",
+  spreadsheet: "表格",
+  spreadsheets: "表格",
+  presentation: "演示文稿",
+  slides: "幻灯片",
+  ppt: "PPT",
+  pdf: "PDF",
+  word: "Word",
+  excel: "Excel",
+  sql: "SQL",
+  csv: "CSV",
+  bi: "BI",
+  "business-intelligence": "商业智能",
   bitcoin: "比特币",
   workflow: "工作流",
   tools: "工具",
@@ -54,7 +76,11 @@ const tagTranslationsZh: Record<string, string> = {
   data: "数据",
   database: "数据库",
   design: "设计",
+  creative: "创意",
   development: "开发",
+  frontend: "前端",
+  backend: "后端",
+  coding: "代码开发",
   education: "教育",
   entertainment: "娱乐",
   file: "文件",
@@ -72,6 +98,13 @@ const tagTranslationsZh: Record<string, string> = {
   science: "科学",
   server: "服务器",
   storage: "存储",
+  deployment: "部署",
+  deploy: "部署",
+  observability: "可观测性",
+  logs: "日志",
+  infrastructure: "基础设施",
+  sre: "SRE",
+  k8s: "Kubernetes",
   testing: "测试",
   text: "文本",
   translation: "翻译",
@@ -85,6 +118,7 @@ const tagTranslationsZh: Record<string, string> = {
   cloud: "云",
   communication: "通讯",
   "customer-support": "客服",
+  "customer-service": "客服",
   ecommerce: "电商",
   kubernetes: "Kubernetes",
   docker: "Docker",
@@ -107,9 +141,79 @@ const tagTranslationsZh: Record<string, string> = {
   embedding: "向量嵌入",
   prompt: "提示词",
   "machine-learning": "机器学习",
+  it_operations: "IT 运维",
+  document_processing: "文档处理",
+  backend_development: "后端开发",
+  frontend_development: "前端开发",
+  data_analysis: "数据分析",
+  product_design: "产品设计",
+  industry_skills: "行业技能",
+  security_testing: "安全测试",
+  code_development: "代码开发",
+  web_research: "网页搜索",
+  automation_workflow: "自动化流程",
+  finance_web3: "金融/Web3",
+  ai_agents: "AI 智能体",
+  others: "其他",
 };
 
+export type SkillTranslation = {
+  name?: string;
+  description?: string;
+};
+
+export type SkillTranslationMap = Record<string, SkillTranslation>;
+
+export function isChineseLocale(locale: string): boolean {
+  return locale.toLowerCase().startsWith("zh");
+}
+
 export function getTagLabel(tag: string, locale: string): string {
-  if (locale !== "zh") return tag;
+  if (!isChineseLocale(locale)) return tag;
   return tagTranslationsZh[tag] ?? tag;
+}
+
+export function getSkillTranslation(
+  slug: string,
+  translations: SkillTranslationMap,
+  locale: string,
+): SkillTranslation | null {
+  if (!isChineseLocale(locale)) return null;
+  return translations[slug] ?? null;
+}
+
+export function localizeSkillText<
+  T extends { slug: string; name: string; description: string },
+>(skill: T, translations: SkillTranslationMap, locale: string): T {
+  const translation = getSkillTranslation(skill.slug, translations, locale);
+  if (!translation) return skill;
+
+  const name = translation.name?.trim();
+  const description = translation.description?.trim();
+
+  if (!name && !description) return skill;
+
+  return {
+    ...skill,
+    ...(name ? { name } : {}),
+    ...(description ? { description } : {}),
+  };
+}
+
+export function composeSkillSearchText(
+  slug: string,
+  name: string,
+  description: string,
+  localizedName?: string | null,
+  localizedDescription?: string | null,
+): string {
+  return [
+    slug,
+    name,
+    description,
+    localizedName ?? "",
+    localizedDescription ?? "",
+  ]
+    .join("\n")
+    .toLowerCase();
 }

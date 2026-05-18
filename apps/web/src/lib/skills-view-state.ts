@@ -25,7 +25,7 @@ type SkillsBackNavigation =
   | { kind: "path"; replace: true; to: string };
 
 const DEFAULT_VIEW_STATE: SkillsViewState = {
-  topTab: "yours",
+  topTab: "explore",
   yoursSubTab: "all",
   activeTag: null,
   searchQuery: "",

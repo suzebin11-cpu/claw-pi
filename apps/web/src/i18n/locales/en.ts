@@ -711,8 +711,9 @@ const en = {
   "skills.retrying": "Retrying...",
   "skills.tryAgain": "Try again",
   "skills.noInstalledSkills":
-    'No installed skills yet. Click "+ Import" to add one.',
+    'No installed skills yet. Install one from Skill Market, or click "+ Import" to add a custom skill.',
   "skills.noMatchingSkills": "No matching skills found",
+  "skills.noTags": "Uncategorized",
   "skills.noAuth": "No auth needed",
   "skills.copied": "Copied",
   "skills.try": "Try",
@@ -738,6 +739,7 @@ const en = {
   "skills.hoursAgo": "{{count}}h ago",
   "skills.daysAgo": "{{count}}d ago",
   "skills.installAction": "Install",
+  "skills.installedAction": "Installed",
   "skills.uninstallAction": "Uninstall",
   "skills.installingAction": "Installing…",
   "skills.uninstallingAction": "Uninstalling…",

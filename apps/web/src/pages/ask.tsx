@@ -206,7 +206,11 @@ const CHAT_MODEL_PRICING: Array<{
   inputPerM: number;
   outputPerM: number;
 }> = [
-  { matchIds: ["gemini-3.1-flash-lite-preview"], inputPerM: 0.25, outputPerM: 1.5 },
+  {
+    matchIds: ["gemini-3.1-flash-lite-preview"],
+    inputPerM: 0.25,
+    outputPerM: 1.5,
+  },
   { matchIds: ["gemini-3.1-pro-preview"], inputPerM: 2, outputPerM: 12 },
   { matchIds: ["claude-haiku-4-5"], inputPerM: 1, outputPerM: 5 },
   { matchIds: ["claude-sonnet-4-6"], inputPerM: 3, outputPerM: 15 },
@@ -308,8 +312,7 @@ function loadStoredSessions(defaultTitle: string): ChatSession[] {
             typeof candidate.title === "string" && candidate.title.trim()
               ? candidate.title
               : defaultTitle,
-          titleSource:
-            candidate.titleSource === "manual" ? "manual" : "auto",
+          titleSource: candidate.titleSource === "manual" ? "manual" : "auto",
           contextSummary:
             typeof candidate.contextSummary === "string"
               ? candidate.contextSummary.slice(0, MAX_CONTEXT_SUMMARY_CHARS)
@@ -384,7 +387,9 @@ function persistKnowledgeItems(items: KnowledgeItem[]) {
   try {
     window.localStorage.setItem(
       ASK_KNOWLEDGE_STORAGE_KEY,
-      JSON.stringify(items.slice(0, MAX_KNOWLEDGE_ITEMS).map(sanitizeKnowledgeItem)),
+      JSON.stringify(
+        items.slice(0, MAX_KNOWLEDGE_ITEMS).map(sanitizeKnowledgeItem),
+      ),
     );
   } catch {
     toast.error("知识库保存失败，内容可能过大");
@@ -447,7 +452,9 @@ function updateAskSessions(
 ): ChatSession[] {
   const next = updater(getAskSessions(defaultTitle));
   askSessionsCache =
-    next.length > 0 ? next.slice(0, MAX_STORED_SESSIONS) : [createSession(defaultTitle)];
+    next.length > 0
+      ? next.slice(0, MAX_STORED_SESSIONS)
+      : [createSession(defaultTitle)];
   persistStoredSessions(askSessionsCache);
   notifyAskSessionListeners();
   return askSessionsCache;
@@ -736,7 +743,9 @@ function estimateTokensFromText(text: string): number {
   return Math.max(1, Math.ceil(cjkChars * 0.65 + otherChars / 4));
 }
 
-function messageContentToText(content: ChatCompletionMessage["content"]): string {
+function messageContentToText(
+  content: ChatCompletionMessage["content"],
+): string {
   if (typeof content === "string") return content;
   return content
     .map((part) => (part.type === "text" ? part.text : "[image]"))
@@ -754,7 +763,9 @@ function estimateTokensFromMessages(messages: ChatCompletionMessage[]): number {
 function tokenizeKnowledgeQuery(text: string): Set<string> {
   const normalized = text.toLowerCase();
   const tokens = new Set<string>();
-  for (const match of normalized.matchAll(/[a-z0-9_\-./]{2,}|[\u3400-\u9fff]{2,}/giu)) {
+  for (const match of normalized.matchAll(
+    /[a-z0-9_\-./]{2,}|[\u3400-\u9fff]{2,}/giu,
+  )) {
     const token = match[0];
     tokens.add(token);
     if (/^[\u3400-\u9fff]+$/u.test(token) && token.length > 2) {
@@ -787,9 +798,10 @@ function buildKnowledgeContextMessage(input: {
     })
     .sort((a, b) => b.score - a.score || b.item.updatedAt - a.item.updatedAt);
 
-  const selected = (scored.some((entry) => entry.score > 0)
-    ? scored.filter((entry) => entry.score > 0)
-    : scored
+  const selected = (
+    scored.some((entry) => entry.score > 0)
+      ? scored.filter((entry) => entry.score > 0)
+      : scored
   )
     .slice(0, MAX_KNOWLEDGE_MATCHES)
     .map((entry) => entry.item);
@@ -842,7 +854,10 @@ function formatMessagesForCompaction(messages: ChatMessage[]): string {
 function getCompactionPlan(input: {
   messages: ChatMessage[];
   summarizedThroughMessageId?: string;
-}): { messagesToCompact: ChatMessage[]; summarizedThroughMessageId: string } | null {
+}): {
+  messagesToCompact: ChatMessage[];
+  summarizedThroughMessageId: string;
+} | null {
   const unsummarizedMessages = getMessagesAfterSummary(
     input.messages,
     input.summarizedThroughMessageId,
@@ -984,20 +999,23 @@ async function generateImage(input: {
     .map((attachment) => attachment.dataUrl as string)
     .slice(0, 4);
 
-  const response = await fetch(getApiUrl("/api/internal/desktop/images/generations"), {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
+  const response = await fetch(
+    getApiUrl("/api/internal/desktop/images/generations"),
+    {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        prompt: input.prompt,
+        modelId: input.modelId || undefined,
+        size: detectImageSize(input.prompt),
+        inputImages: inputImages.length > 0 ? inputImages : undefined,
+      }),
+      signal: input.signal,
     },
-    body: JSON.stringify({
-      prompt: input.prompt,
-      modelId: input.modelId || undefined,
-      size: detectImageSize(input.prompt),
-      inputImages: inputImages.length > 0 ? inputImages : undefined,
-    }),
-    signal: input.signal,
-  });
+  );
 
   const payload = (await response.json().catch(() => null)) as
     | ImageGenerationResult
@@ -1005,9 +1023,7 @@ async function generateImage(input: {
     | null;
   if (!response.ok || !payload?.ok) {
     throw new Error(
-      payload && "error" in payload
-        ? payload.error
-        : "Image generation failed",
+      payload && "error" in payload ? payload.error : "Image generation failed",
     );
   }
   return payload;
@@ -1115,8 +1131,14 @@ async function fetchChatCompletionStream(input: {
     model: input.modelId,
     messages: input.messages,
     stream: true,
+    metadata: {
+      source: "claw-pi-ask",
+      clawpiDynamicSkills: true,
+    },
   };
-  const request = (payload: typeof body & { stream_options?: { include_usage: boolean } }) =>
+  const request = (
+    payload: typeof body & { stream_options?: { include_usage: boolean } },
+  ) =>
     fetch(getApiUrl("/v1/chat/completions"), {
       method: "POST",
       credentials: "include",
@@ -1134,7 +1156,11 @@ async function fetchChatCompletionStream(input: {
   if (response.ok) return response;
 
   const errorText = await response.text();
-  if (/stream_options|include_usage|unsupported|unrecognized|unknown parameter/iu.test(errorText)) {
+  if (
+    /stream_options|include_usage|unsupported|unrecognized|unknown parameter/iu.test(
+      errorText,
+    )
+  ) {
     const fallbackResponse = await request(body);
     if (fallbackResponse.ok) return fallbackResponse;
     throw new Error((await fallbackResponse.text()) || errorText);
@@ -1410,10 +1436,7 @@ function MessageBubble({
             {generatedImageUrls.map((url, index) => {
               const name = `generated-${index + 1}.png`;
               return (
-                <div
-                  key={url}
-                  className="inline-flex items-center gap-1"
-                >
+                <div key={url} className="inline-flex items-center gap-1">
                   <button
                     type="button"
                     onClick={() => onPreviewImage({ src: url, name })}
@@ -1463,7 +1486,8 @@ function MessageBubble({
             <div className="shrink-0 text-right tabular-nums">
               <span>
                 {message.usage.estimated ? t("ask.usage.estimated") : ""}
-                {t("ask.usage.tokens")}: {formatTokenCount(message.usage.totalTokens)} ↑
+                {t("ask.usage.tokens")}:{" "}
+                {formatTokenCount(message.usage.totalTokens)} ↑
                 {formatTokenCount(message.usage.inputTokens)} ↓
                 {formatTokenCount(message.usage.outputTokens)}
               </span>
@@ -1501,9 +1525,8 @@ export function AskPage() {
   const compactingSessionIdsRef = useRef<Set<string>>(new Set());
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
-  const [knowledgeItems, setKnowledgeItems] = useState<KnowledgeItem[]>(
-    loadStoredKnowledge,
-  );
+  const [knowledgeItems, setKnowledgeItems] =
+    useState<KnowledgeItem[]>(loadStoredKnowledge);
   const [knowledgeOpen, setKnowledgeOpen] = useState(false);
   const [knowledgeTitle, setKnowledgeTitle] = useState("");
   const [knowledgeContent, setKnowledgeContent] = useState("");
@@ -1567,10 +1590,8 @@ export function AskPage() {
     },
     refetchInterval: 3_000,
   });
-  const {
-    isFullyOnline: isRuntimeReady,
-    showBootGrace: showRuntimeBootGrace,
-  } = useBootGrace(runtimeStatus);
+  const { isFullyOnline: isRuntimeReady, showBootGrace: showRuntimeBootGrace } =
+    useBootGrace(runtimeStatus);
 
   const { data: modelsData } = useQuery({
     queryKey: ["models"],
@@ -1643,12 +1664,11 @@ export function AskPage() {
     : false;
   const controlsDisabled =
     !isRuntimeReady || activeSessionIsSending || updateModel.isPending;
-  const runtimeNotice =
-    isRuntimeReady
-      ? null
-      : showRuntimeBootGrace || runtimeStatus?.status === "starting"
-        ? t("ask.runtimeStarting")
-        : t("ask.runtimeNotReady");
+  const runtimeNotice = isRuntimeReady
+    ? null
+    : showRuntimeBootGrace || runtimeStatus?.status === "starting"
+      ? t("ask.runtimeStarting")
+      : t("ask.runtimeNotReady");
   const messages = activeSession?.messages ?? [];
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
@@ -1762,7 +1782,10 @@ export function AskPage() {
       contextSummary?: string;
       summarizedThroughMessageId?: string;
     }) => {
-      if (!input.modelId || compactingSessionIdsRef.current.has(input.sessionId)) {
+      if (
+        !input.modelId ||
+        compactingSessionIdsRef.current.has(input.sessionId)
+      ) {
         return;
       }
 
@@ -1789,7 +1812,8 @@ export function AskPage() {
             );
             const currentIndex = session.summarizedThroughMessageId
               ? session.messages.findIndex(
-                  (message) => message.id === session.summarizedThroughMessageId,
+                  (message) =>
+                    message.id === session.summarizedThroughMessageId,
                 )
               : -1;
             if (nextIndex < currentIndex) return session;
@@ -1813,22 +1837,25 @@ export function AskPage() {
     [updateSessions],
   );
 
-  const renameSession = useCallback((sessionId: string, title: string) => {
-    const nextTitle = title.trim().slice(0, 64);
-    if (!nextTitle) return;
-    updateSessions((previous) =>
-      previous.map((session) =>
-        session.id === sessionId
-          ? {
-              ...session,
-              title: nextTitle,
-              titleSource: "manual",
-              updatedAt: Date.now(),
-            }
-        : session,
-      ),
-    );
-  }, [updateSessions]);
+  const renameSession = useCallback(
+    (sessionId: string, title: string) => {
+      const nextTitle = title.trim().slice(0, 64);
+      if (!nextTitle) return;
+      updateSessions((previous) =>
+        previous.map((session) =>
+          session.id === sessionId
+            ? {
+                ...session,
+                title: nextTitle,
+                titleSource: "manual",
+                updatedAt: Date.now(),
+              }
+            : session,
+        ),
+      );
+    },
+    [updateSessions],
+  );
 
   const startRenamingSession = useCallback((session: ChatSession) => {
     setRenamingSessionId(session.id);
@@ -2106,7 +2133,8 @@ export function AskPage() {
     if (!targetSessionId) return;
     if (sendingSessionIds.has(targetSessionId)) return;
     const targetSessionTitle =
-      activeSession?.title ?? getAskSessionTitle(targetSessionId, t("ask.newChat"));
+      activeSession?.title ??
+      getAskSessionTitle(targetSessionId, t("ask.newChat"));
     if (!isRuntimeReady) {
       toast.info(t("ask.toast.runtimeNotReady"));
       return;
@@ -2204,18 +2232,18 @@ export function AskPage() {
           messages: previous.map((message) =>
             message.id === assistantMessageId
               ? {
-                ...message,
-                text: result.markdown,
-                usage: {
-                  inputTokens: inputTokenEstimate,
-                  outputTokens: 0,
-                  totalTokens: inputTokenEstimate,
-                  estimated: true,
-                },
-                durationMs: result.durationMs,
-                streaming: false,
-              }
-            : message,
+                  ...message,
+                  text: result.markdown,
+                  usage: {
+                    inputTokens: inputTokenEstimate,
+                    outputTokens: 0,
+                    totalTokens: inputTokenEstimate,
+                    estimated: true,
+                  },
+                  durationMs: result.durationMs,
+                  streaming: false,
+                }
+              : message,
           ),
         }));
         if (currentModelId) {
@@ -2263,8 +2291,7 @@ export function AskPage() {
 
       const finalAssistantText = completion.text || t("ask.emptyResponse");
       const outputTokenEstimate = estimateTokensFromText(finalAssistantText);
-      const inputTokens =
-        completion.usage?.promptTokens ?? inputTokenEstimate;
+      const inputTokens = completion.usage?.promptTokens ?? inputTokenEstimate;
       const outputTokens =
         completion.usage?.completionTokens ?? outputTokenEstimate;
       const totalTokens =
@@ -2392,12 +2419,15 @@ export function AskPage() {
     >
       {contextMenu && contextMenuSession ? (
         <div
+          role="menu"
+          tabIndex={-1}
           className="fixed z-50 w-36 overflow-hidden rounded-lg border border-border bg-surface-0 py-1 shadow-xl"
           style={{
             left: contextMenu.x,
             top: contextMenu.y,
           }}
           onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
         >
           <button
             type="button"
@@ -2460,7 +2490,9 @@ export function AskPage() {
               </button>
               <button
                 type="button"
-                onClick={() => window.open(previewImage.src, "_blank", "noopener,noreferrer")}
+                onClick={() =>
+                  window.open(previewImage.src, "_blank", "noopener,noreferrer")
+                }
                 className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--color-brand-primary)] px-3 text-[12px] font-medium text-white transition-colors hover:opacity-90"
               >
                 <Maximize2 size={13} />
@@ -2575,7 +2607,9 @@ export function AskPage() {
                             type="button"
                             onClick={() =>
                               setKnowledgeItems((previous) =>
-                                previous.filter((entry) => entry.id !== item.id),
+                                previous.filter(
+                                  (entry) => entry.id !== item.id,
+                                ),
                               )
                             }
                             className="ml-auto inline-flex h-7 w-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-red-500/10 hover:text-red-500"
@@ -2683,106 +2717,108 @@ export function AskPage() {
                 </div>
               </div>
               <div className="min-h-0 flex-1 space-y-1 overflow-y-auto">
-            {sortedSessions.map((session) => {
-              const sessionIsSending = sendingSessionIds.has(session.id);
-              const sessionIsUnread = unreadSessionIds.has(session.id);
-              const isRenaming = renamingSessionId === session.id;
-              return (
-                <div
-                  key={session.id}
-                  onContextMenu={(event) =>
-                    openSessionMenu(event, session.id)
-                  }
-                  className={cn(
-                    "group flex items-center gap-1 rounded-lg p-1 transition-colors",
-                    session.id === activeSession?.id
-                      ? "bg-[#1b1f27] text-text-primary"
-                      : "text-text-secondary hover:bg-[#151820] hover:text-text-primary",
-                  )}
-                >
-                  {isRenaming ? (
-                    <form
-                      onSubmit={handleRenameSubmit}
-                      className="min-w-0 flex-1"
+                {sortedSessions.map((session) => {
+                  const sessionIsSending = sendingSessionIds.has(session.id);
+                  const sessionIsUnread = unreadSessionIds.has(session.id);
+                  const isRenaming = renamingSessionId === session.id;
+                  return (
+                    <div
+                      key={session.id}
+                      onContextMenu={(event) =>
+                        openSessionMenu(event, session.id)
+                      }
+                      className={cn(
+                        "group flex items-center gap-1 rounded-lg p-1 transition-colors",
+                        session.id === activeSession?.id
+                          ? "bg-[#1b1f27] text-text-primary"
+                          : "text-text-secondary hover:bg-[#151820] hover:text-text-primary",
+                      )}
                     >
-                      <input
-                        ref={renameInputRef}
-                        value={renameValue}
-                        onChange={(event) => setRenameValue(event.target.value)}
-                        onBlur={finishRenamingSession}
-                        onKeyDown={(event) => {
-                          if (event.key === "Escape") {
-                            event.preventDefault();
-                            setRenamingSessionId(null);
-                            setRenameValue("");
-                          }
-                        }}
-                        className="h-9 w-full rounded-md border border-[var(--color-brand-primary)]/35 bg-surface-0 px-2 text-[12px] font-medium text-text-primary outline-none"
-                      />
-                    </form>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={() => setActiveSessionId(session.id)}
-                      className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
-                    >
-                      <span className="relative shrink-0">
-                        {sessionIsSending ? (
-                          <Loader2
-                            size={14}
-                            className="animate-spin text-[var(--color-brand-primary)]"
+                      {isRenaming ? (
+                        <form
+                          onSubmit={handleRenameSubmit}
+                          className="min-w-0 flex-1"
+                        >
+                          <input
+                            ref={renameInputRef}
+                            value={renameValue}
+                            onChange={(event) =>
+                              setRenameValue(event.target.value)
+                            }
+                            onBlur={finishRenamingSession}
+                            onKeyDown={(event) => {
+                              if (event.key === "Escape") {
+                                event.preventDefault();
+                                setRenamingSessionId(null);
+                                setRenameValue("");
+                              }
+                            }}
+                            className="h-9 w-full rounded-md border border-[var(--color-brand-primary)]/35 bg-surface-0 px-2 text-[12px] font-medium text-text-primary outline-none"
                           />
-                        ) : (
-                          <MessageCircle
-                            size={14}
-                            className={cn(
-                              "text-text-muted",
-                              sessionIsUnread &&
-                                "text-[var(--color-brand-primary)]",
+                        </form>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => setActiveSessionId(session.id)}
+                          className="flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left"
+                        >
+                          <span className="relative shrink-0">
+                            {sessionIsSending ? (
+                              <Loader2
+                                size={14}
+                                className="animate-spin text-[var(--color-brand-primary)]"
+                              />
+                            ) : (
+                              <MessageCircle
+                                size={14}
+                                className={cn(
+                                  "text-text-muted",
+                                  sessionIsUnread &&
+                                    "text-[var(--color-brand-primary)]",
+                                )}
+                              />
                             )}
-                          />
-                        )}
-                        {sessionIsUnread && !sessionIsSending ? (
-                          <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-brand-primary)]" />
-                        ) : null}
-                      </span>
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[12px] font-medium">
-                          {session.title}
-                        </span>
-                        <span className="mt-0.5 block text-[10px] text-text-muted">
-                          {sessionIsSending
-                            ? t("ask.running")
-                            : formatSessionTime(session.updatedAt)}
-                        </span>
-                      </span>
-                    </button>
-                  )}
-                  {!isRenaming && (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => startRenamingSession(session)}
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-surface-0 hover:text-text-primary group-hover:opacity-100"
-                        aria-label={t("ask.renameChat")}
-                        title={t("ask.renameChat")}
-                      >
-                        <Pencil size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => deleteSession(session.id)}
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-surface-0 hover:text-text-primary group-hover:opacity-100"
-                        aria-label={t("ask.deleteChat")}
-                        title={t("ask.deleteChat")}
-                      >
-                        <Trash2 size={12} />
-                      </button>
-                    </>
-                  )}
-                </div>
-              );
-            })}
+                            {sessionIsUnread && !sessionIsSending ? (
+                              <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-[var(--color-brand-primary)]" />
+                            ) : null}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="block truncate text-[12px] font-medium">
+                              {session.title}
+                            </span>
+                            <span className="mt-0.5 block text-[10px] text-text-muted">
+                              {sessionIsSending
+                                ? t("ask.running")
+                                : formatSessionTime(session.updatedAt)}
+                            </span>
+                          </span>
+                        </button>
+                      )}
+                      {!isRenaming && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => startRenamingSession(session)}
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-surface-0 hover:text-text-primary group-hover:opacity-100"
+                            aria-label={t("ask.renameChat")}
+                            title={t("ask.renameChat")}
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => deleteSession(session.id)}
+                            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-text-muted opacity-0 transition-all hover:bg-surface-0 hover:text-text-primary group-hover:opacity-100"
+                            aria-label={t("ask.deleteChat")}
+                            title={t("ask.deleteChat")}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </>
           )}
@@ -2913,7 +2949,9 @@ export function AskPage() {
                     <button
                       type="button"
                       onClick={() => setConfirmAction("clearContext")}
-                      disabled={!activeSession || activeSession.messages.length === 0}
+                      disabled={
+                        !activeSession || activeSession.messages.length === 0
+                      }
                       className="inline-flex h-8 items-center gap-1.5 rounded-md px-2 text-[12px] text-text-muted transition-colors hover:bg-[#25262a] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-45"
                       aria-label={t("ask.clearContext")}
                       title={t("ask.clearContext")}

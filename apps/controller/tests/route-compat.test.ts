@@ -132,6 +132,7 @@ async function createTestContainer(
     { getLocale: async () => "en" as const },
   );
   const skillhubService = {
+    selectRelevantSkills: vi.fn(() => []),
     catalog: {
       getCatalog: () => ({
         skills: [],
@@ -430,6 +431,120 @@ describe("controller route compatibility", () => {
     expect(payload.appId).toBe("123456");
   });
 
+  it("injects dynamic skill context for explicit compat chat requests", async () => {
+    await mkdir(path.dirname(container.env.openclawConfigPath), {
+      recursive: true,
+    });
+    await writeFile(
+      container.env.openclawConfigPath,
+      JSON.stringify({
+        gateway: {
+          port: 18789,
+          mode: "local",
+          bind: "lan",
+          auth: { mode: "none" },
+          reload: { mode: "hybrid" },
+        },
+        models: {
+          providers: {
+            link: {
+              baseUrl: "https://upstream.example/v1",
+              apiKey: "test-key",
+              api: "openai-completions",
+              models: [{ id: "gpt-test" }],
+            },
+          },
+        },
+        agents: {
+          defaults: { model: "link/gpt-test" },
+          list: [{ id: "main", default: true, model: "link/gpt-test" }],
+        },
+        channels: {},
+        bindings: [],
+      }),
+      "utf8",
+    );
+
+    const selectRelevantSkills = vi.fn(() => [
+      {
+        slug: "image-maker",
+        source: "managed",
+        agentId: null,
+        name: "Image Maker",
+        description: "Generate images",
+        score: 8,
+        content: "Use this skill when the user asks to generate images.",
+        truncated: false,
+      },
+    ]);
+    (
+      container.skillhubService as unknown as {
+        selectRelevantSkills: typeof selectRelevantSkills;
+      }
+    ).selectRelevantSkills = selectRelevantSkills;
+
+    let upstreamPayload: {
+      messages?: Array<{ role: string; content: string }>;
+    } | null = null;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = input.toString();
+        if (url === "https://upstream.example/v1/chat/completions") {
+          upstreamPayload = JSON.parse(
+            String(init?.body ?? "{}"),
+          ) as typeof upstreamPayload;
+          const encoder = new TextEncoder();
+          const stream = new ReadableStream({
+            start(controller) {
+              controller.enqueue(
+                encoder.encode(
+                  'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+                ),
+              );
+              controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+              controller.close();
+            },
+          });
+          return new Response(stream, {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          });
+        }
+        return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      }),
+    );
+
+    const app = createApp(container);
+    const response = await app.request("/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "帮我生成图片" }],
+        stream: true,
+        metadata: { clawpiDynamicSkills: true },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(selectRelevantSkills).toHaveBeenCalledWith(
+      expect.objectContaining({
+        query: "帮我生成图片",
+        agentId: "main",
+        limit: 3,
+      }),
+    );
+    expect(upstreamPayload?.messages?.[0]?.role).toBe("system");
+    expect(upstreamPayload?.messages?.[0]?.content).toContain("Image Maker");
+    expect(upstreamPayload?.messages?.at(-1)).toMatchObject({
+      role: "user",
+      content: "帮我生成图片",
+    });
+  });
+
   it("rejects default model switches that OpenClaw cannot resolve", async () => {
     const app = createApp(container);
 
@@ -548,7 +663,7 @@ describe("controller route compatibility", () => {
     expect(runtimeModelState.selectedModelRef).toBe("link/gpt-5.5");
   });
 
-  it("rejects image model switches while image models are paused", async () => {
+  it("rejects image model switches until the Link provider is connected", async () => {
     const app = createApp(container);
 
     const response = await app.request(
@@ -570,7 +685,7 @@ describe("controller route compatibility", () => {
       ok: false,
       modelId: "clawpi-image/gpt-image-2",
     });
-    expect(payload.error).toContain("当前不支持生图模型");
+    expect(payload.error).toContain("生图模型需要先登录或刷新");
 
     const config = await container.configStore.getConfig();
     expect(config.runtime.defaultImageGenerationModelId).not.toBe(
@@ -578,7 +693,7 @@ describe("controller route compatibility", () => {
     );
   });
 
-  it("still rejects image model switches after Link provider credentials exist while image models are paused", async () => {
+  it("accepts image model switches after Link provider credentials exist", async () => {
     await container.configStore.applyActivationCloudState({
       connected: true,
       polling: false,
@@ -599,12 +714,12 @@ describe("controller route compatibility", () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      ok: false,
-      modelId: "gpt-image-2",
+      ok: true,
+      modelId: "clawpi-image/gpt-image-2",
     });
 
     const config = await container.configStore.getConfig();
-    expect(config.runtime.defaultImageGenerationModelId).not.toBe(
+    expect(config.runtime.defaultImageGenerationModelId).toBe(
       "clawpi-image/gpt-image-2",
     );
   });

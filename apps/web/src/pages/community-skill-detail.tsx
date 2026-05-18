@@ -3,8 +3,9 @@ import {
   useUninstallSkill,
 } from "@/hooks/use-community-catalog";
 import { useLocale } from "@/hooks/use-locale";
+import { useSkillTranslationMap } from "@/hooks/use-skill-translations";
 import "@/lib/api";
-import { getTagLabel } from "@/lib/skill-translations";
+import { getTagLabel, localizeSkillText } from "@/lib/skill-translations";
 import { getSkillsBackNavigation } from "@/lib/skills-view-state";
 import { cn } from "@/lib/utils";
 import type { SkillSource } from "@/types/desktop";
@@ -19,7 +20,7 @@ import {
   Trash2,
 } from "lucide-react";
 import type React from "react";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getApiV1SkillhubSkillsBySlug } from "../../lib/api/sdk.gen";
 
@@ -307,6 +308,7 @@ export function CommunitySkillDetailPage() {
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
   const { t, locale } = useLocale();
+  const skillTranslations = useSkillTranslationMap(locale);
   const selectedSource = toUninstallSource(
     searchParams.get("skillSource") ??
       (typeof location.state === "object" &&
@@ -357,6 +359,10 @@ export function CommunitySkillDetailPage() {
     },
     enabled: !!slug,
   });
+  const displayData = useMemo(
+    () => (data ? localizeSkillText(data, skillTranslations, locale) : null),
+    [data, skillTranslations, locale],
+  );
 
   const isBusy = pendingAction !== null;
 
@@ -394,7 +400,7 @@ export function CommunitySkillDetailPage() {
     );
   }
 
-  if (error || !data) {
+  if (error || !data || !displayData) {
     return (
       <div className="min-h-full bg-surface-0">
         <div className="max-w-3xl mx-auto px-6 py-8">
@@ -431,30 +437,30 @@ export function CommunitySkillDetailPage() {
         <div className="flex items-start justify-between gap-4 mb-6">
           <div className="min-w-0">
             <h1 className="text-[20px] font-semibold text-text-primary mb-1">
-              {data.name}
+              {displayData.name}
             </h1>
             <p className="text-[13px] text-text-muted font-mono mb-2">
-              {data.slug}
-              {data.version && (
+              {displayData.slug}
+              {displayData.version && (
                 <span className="ml-2 text-[11px] px-1.5 py-0.5 rounded bg-surface-3">
-                  v{data.version}
+                  v{displayData.version}
                 </span>
               )}
             </p>
             <p className="text-[13px] text-text-secondary leading-relaxed">
-              {data.description}
+              {displayData.description}
             </p>
           </div>
 
           {/* Install/Uninstall button */}
-          {data.installed ? (
+          {displayData.installed ? (
             <button
               type="button"
-              disabled={isBusy || !data.uninstallable}
+              disabled={isBusy || !displayData.uninstallable}
               onClick={() => void handleUninstall()}
               className={cn(
                 "shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-lg text-[13px] font-medium transition-colors",
-                isBusy || !data.uninstallable
+                isBusy || !displayData.uninstallable
                   ? "bg-surface-3 text-text-muted cursor-not-allowed"
                   : "bg-red-500/10 text-red-500 hover:bg-red-500/20",
               )}
@@ -496,17 +502,17 @@ export function CommunitySkillDetailPage() {
         <div className="flex items-center gap-4 mb-6 pb-6 border-b border-border">
           <span className="flex items-center gap-1 text-[12px] text-text-muted">
             <Download size={12} />
-            {formatCount(data.downloads)} {t("skillDetail.downloads")}
+            {formatCount(displayData.downloads)} {t("skillDetail.downloads")}
           </span>
-          {data.stars > 0 && (
+          {displayData.stars > 0 && (
             <span className="flex items-center gap-1 text-[12px] text-text-muted">
               <Star size={12} />
-              {formatCount(data.stars)} {t("skillDetail.stars")}
+              {formatCount(displayData.stars)} {t("skillDetail.stars")}
             </span>
           )}
-          {data.homepage && (
+          {displayData.homepage && (
             <a
-              href={data.homepage}
+              href={displayData.homepage}
               target="_blank"
               rel="noopener noreferrer"
               className="flex items-center gap-1 text-[12px] text-accent hover:underline"
@@ -515,9 +521,9 @@ export function CommunitySkillDetailPage() {
               {t("skillDetail.homepage")}
             </a>
           )}
-          {data.tags.length > 0 && (
+          {displayData.tags.length > 0 && (
             <div className="flex items-center gap-1.5 ml-auto">
-              {data.tags.map((tag) => (
+              {displayData.tags.map((tag) => (
                 <span
                   key={tag}
                   className="text-[10px] px-1.5 py-0.5 rounded bg-surface-3 text-text-muted font-medium"
@@ -530,20 +536,20 @@ export function CommunitySkillDetailPage() {
         </div>
 
         {/* SKILL.md content (only shown when installed) */}
-        {data.skillContent && (
+        {displayData.skillContent && (
           <div className="mb-6">
-            <SkillMdPreview content={data.skillContent} />
+            <SkillMdPreview content={displayData.skillContent} />
           </div>
         )}
 
         {/* Files list */}
-        {data.files.length > 0 && (
+        {displayData.files.length > 0 && (
           <div className="mb-6">
             <h3 className="text-[13px] font-semibold text-text-primary mb-2">
               {t("skillDetail.files")}
             </h3>
             <div className="rounded-lg bg-surface-1 border border-border p-3 space-y-1">
-              {data.files.map((file) => (
+              {displayData.files.map((file) => (
                 <div
                   key={file}
                   className="flex items-center gap-2 text-[12px] text-text-muted font-mono"

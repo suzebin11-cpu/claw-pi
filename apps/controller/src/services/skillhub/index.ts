@@ -18,6 +18,7 @@ export type {
   MinimalSkill,
   CatalogMeta,
   InstalledSkill,
+  SelectedSkillContext,
   SkillSource,
   QueueErrorCode,
   QueueItem,

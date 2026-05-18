@@ -12,6 +12,7 @@ import {
 import type { ControllerContainer } from "../app/container.js";
 import { logger } from "../lib/logger.js";
 import { proxyFetch } from "../lib/proxy-fetch.js";
+import type { SelectedSkillContext } from "../services/skillhub/types.js";
 import type { ControllerBindings } from "../types.js";
 
 const desktopAuthorizeBodySchema = z.object({ deviceId: z.string() });
@@ -36,11 +37,21 @@ const openAiChatCompletionBodySchema = z.object({
   ),
   stream: z.boolean().optional(),
   user: z.string().optional(),
+  metadata: z
+    .object({
+      clawpiDynamicSkills: z.boolean().optional(),
+    })
+    .passthrough()
+    .optional(),
 });
 
 type OpenAiCompatMessage = z.infer<
   typeof openAiChatCompletionBodySchema
 >["messages"][number];
+
+const DYNAMIC_SKILLS_HEADER = "x-clawpi-dynamic-skills";
+const DYNAMIC_SKILLS_LIMIT = 3;
+const DYNAMIC_SKILLS_MAX_TOTAL_CHARS = 9_000;
 type DingTalkSessionContext = {
   channel: "dingtalk-connector";
   accountId: string;
@@ -171,6 +182,67 @@ function extractLatestUserText(messages: OpenAiCompatMessage[]): string {
     return [];
   });
   return textParts.join("\n").trim();
+}
+
+function isDynamicSkillsRequested(
+  headerValue: string | undefined,
+  metadata: { clawpiDynamicSkills?: boolean } | undefined,
+): boolean {
+  if (metadata?.clawpiDynamicSkills === true) {
+    return true;
+  }
+  const value = headerValue?.trim().toLowerCase();
+  return value === "1" || value === "true";
+}
+
+function escapeXmlAttribute(value: string): string {
+  return value
+    .replace(/&/gu, "&amp;")
+    .replace(/"/gu, "&quot;")
+    .replace(/</gu, "&lt;")
+    .replace(/>/gu, "&gt;");
+}
+
+function buildDynamicSkillSystemMessage(
+  skills: readonly SelectedSkillContext[],
+): OpenAiCompatMessage | null {
+  if (skills.length === 0) {
+    return null;
+  }
+
+  const blocks = skills.map((skill) =>
+    [
+      `<skill slug="${escapeXmlAttribute(skill.slug)}" name="${escapeXmlAttribute(skill.name)}">`,
+      skill.description ? `description: ${skill.description}` : "",
+      skill.content,
+      "</skill>",
+    ]
+      .filter(Boolean)
+      .join("\n"),
+  );
+
+  return {
+    role: "system",
+    content: [
+      "下面是本轮按用户最新消息匹配到的已安装技能说明。",
+      "只在确实相关时参考这些技能；如果和当前问题无关，请忽略。",
+      "不要主动告诉用户你加载了技能，也不要把技能说明原文复述给用户。",
+      ...blocks,
+    ].join("\n\n"),
+  };
+}
+
+function insertEphemeralSystemMessage(
+  messages: readonly OpenAiCompatMessage[],
+  systemMessage: OpenAiCompatMessage,
+): OpenAiCompatMessage[] {
+  const result = [...messages];
+  let insertAt = 0;
+  while (insertAt < result.length && result[insertAt]?.role === "system") {
+    insertAt += 1;
+  }
+  result.splice(insertAt, 0, systemMessage);
+  return result;
 }
 
 function extractCompatMessageText(content: unknown): string {
@@ -341,6 +413,53 @@ export function registerMiscCompatRoutes(
           content: bot.systemPrompt,
         });
       }
+      const userText = extractLatestUserText(messages);
+      let upstreamMessages = messages;
+      if (
+        isDynamicSkillsRequested(
+          c.req.header(DYNAMIC_SKILLS_HEADER),
+          body.metadata,
+        ) &&
+        userText.length > 0
+      ) {
+        try {
+          const selectedSkills = container.skillhubService.selectRelevantSkills(
+            {
+              query: userText,
+              agentId: resolvedBotId,
+              limit: DYNAMIC_SKILLS_LIMIT,
+              maxTotalChars: DYNAMIC_SKILLS_MAX_TOTAL_CHARS,
+            },
+          );
+          const skillSystemMessage =
+            buildDynamicSkillSystemMessage(selectedSkills);
+          if (skillSystemMessage) {
+            upstreamMessages = insertEphemeralSystemMessage(
+              messages,
+              skillSystemMessage,
+            );
+            logger.info(
+              {
+                route: "compat.chatCompletions",
+                agentId,
+                resolvedBotId,
+                selectedSkills: selectedSkills.map((skill) => skill.slug),
+              },
+              "compat dynamic skills injected",
+            );
+          }
+        } catch (error) {
+          logger.warn(
+            {
+              route: "compat.chatCompletions",
+              agentId,
+              resolvedBotId,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "compat dynamic skill selection failed",
+          );
+        }
+      }
 
       const response = await proxyFetch(
         buildOpenAiCompatUrl(provider.baseUrl),
@@ -352,7 +471,7 @@ export function registerMiscCompatRoutes(
           }),
           body: JSON.stringify({
             model: modelId,
-            messages,
+            messages: upstreamMessages,
             stream: body.stream ?? true,
             user: body.user,
           }),
@@ -370,7 +489,6 @@ export function registerMiscCompatRoutes(
       const decoder = new TextDecoder();
       let sseBuffer = "";
       let assistantText = "";
-      const userText = extractLatestUserText(messages);
       const stream = new ReadableStream<Uint8Array>({
         start: async (controller) => {
           const reader = response.body?.getReader();

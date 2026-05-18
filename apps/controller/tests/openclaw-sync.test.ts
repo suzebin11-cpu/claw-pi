@@ -140,7 +140,7 @@ describe("OpenClawSyncService", () => {
     expect(snapshot.config).toBeTruthy();
   });
 
-  it("includes installed skill slugs in compiled agent config", async () => {
+  it("omits global installed skill slugs from compiled agent config by default", async () => {
     const configStore = new NexuConfigStore(env);
     const compiledStore = new CompiledOpenClawStore(env);
     const authProfilesStore = new OpenClawAuthProfilesStore(env);
@@ -175,9 +175,6 @@ describe("OpenClawSyncService", () => {
     ) as ReturnType<typeof compileOpenClawConfig>;
 
     expect(config.agents.list).toHaveLength(1);
-    expect(config.agents.list[0].skills).toEqual(
-      expect.arrayContaining(["web-search", "image-gen"]),
-    );
-    expect(config.agents.list[0].skills).toHaveLength(2);
+    expect(config.agents.list[0].skills).toEqual([]);
   });
 });

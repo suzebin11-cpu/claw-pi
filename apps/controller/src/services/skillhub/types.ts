@@ -26,6 +26,17 @@ export type InstalledSkill = {
   agentId: string | null;
 };
 
+export type SelectedSkillContext = {
+  slug: string;
+  source: SkillSource;
+  agentId: string | null;
+  name: string;
+  description: string;
+  score: number;
+  content: string;
+  truncated: boolean;
+};
+
 export type SkillhubCatalogData = {
   skills: MinimalSkill[];
   installedSlugs: string[];

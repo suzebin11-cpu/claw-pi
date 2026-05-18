@@ -11,7 +11,7 @@ import {
 describe("skills-view-state", () => {
   it("parses default skills view state when params are missing", () => {
     expect(parseSkillsViewState(new URLSearchParams())).toEqual({
-      topTab: "yours",
+      topTab: "explore",
       yoursSubTab: "all",
       activeTag: null,
       searchQuery: "",
@@ -24,7 +24,7 @@ describe("skills-view-state", () => {
         new URLSearchParams("tab=invalid&source=nope&tag=latest&q=tavily"),
       ),
     ).toEqual({
-      topTab: "yours",
+      topTab: "explore",
       yoursSubTab: "all",
       activeTag: "latest",
       searchQuery: "tavily",
@@ -39,7 +39,7 @@ describe("skills-view-state", () => {
       },
     );
 
-    expect(next.toString()).toBe("tab=explore&tag=automation&q=tavily");
+    expect(next.toString()).toBe("tag=automation&q=tavily");
   });
 
   it("preserves the current query string on detail links", () => {

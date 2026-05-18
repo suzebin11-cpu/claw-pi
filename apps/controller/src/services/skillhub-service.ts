@@ -9,7 +9,11 @@ import {
 import { InstallQueue } from "./skillhub/install-queue.js";
 import { SkillDb } from "./skillhub/skill-db.js";
 import { SkillDirWatcher } from "./skillhub/skill-dir-watcher.js";
-import type { QueueItem, SkillSource } from "./skillhub/types.js";
+import type {
+  QueueItem,
+  SelectedSkillContext,
+  SkillSource,
+} from "./skillhub/types.js";
 import { WorkspaceSkillScanner } from "./skillhub/workspace-skill-scanner.js";
 
 export interface SkillhubServiceOptions {
@@ -26,8 +30,8 @@ export type SkillUninstallRequest = {
 const DEFAULT_SKILLS_DISABLED_MARKER = "default-auto-skills-disabled-v1.json";
 
 function isDefaultSkillAutoInstallEnabled(): boolean {
-  const raw = process.env.SKILLHUB_AUTO_INSTALL_DEFAULT_SKILLS?.trim()
-    .toLowerCase();
+  const raw =
+    process.env.SKILLHUB_AUTO_INSTALL_DEFAULT_SKILLS?.trim().toLowerCase();
   return raw === "1" || raw === "true";
 }
 
@@ -283,6 +287,16 @@ export class SkillhubService {
 
   get queue(): InstallQueue {
     return this.installQueue;
+  }
+
+  selectRelevantSkills(input: {
+    query: string;
+    agentId?: string | null;
+    limit?: number;
+    maxTotalChars?: number;
+    maxSkillChars?: number;
+  }): SelectedSkillContext[] {
+    return this.catalogManager.selectRelevantSkills(input);
   }
 
   enqueueInstall(slug: string): QueueItem {

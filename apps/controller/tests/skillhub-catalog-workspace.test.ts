@@ -169,4 +169,107 @@ describe("CatalogManager.getCatalog() workspace skills", () => {
     expect(managed?.agentId).toBeNull();
     expect(workspace?.agentId).toBe("bot-1");
   });
+
+  it("selects relevant installed skill content without loading unrelated skills", () => {
+    const imageDir = path.join(skillsDir, "image-maker");
+    mkdirSync(imageDir, { recursive: true });
+    writeFileSync(
+      path.join(imageDir, "SKILL.md"),
+      [
+        "---",
+        "name: Image Maker",
+        "description: Generate and edit images",
+        "---",
+        "Use this skill when the user asks to create an image.",
+      ].join("\n"),
+    );
+    const webDir = path.join(skillsDir, "web-search");
+    mkdirSync(webDir, { recursive: true });
+    writeFileSync(
+      path.join(webDir, "SKILL.md"),
+      [
+        "---",
+        "name: Web Search",
+        "description: Search web pages",
+        "---",
+        "Use this skill for browser research.",
+      ].join("\n"),
+    );
+    skillDb.recordInstall("image-maker", "managed");
+    skillDb.recordInstall("web-search", "managed");
+
+    const catalog = new CatalogManager(cacheDir, {
+      skillsDir,
+      skillDb,
+    });
+
+    const selected = catalog.selectRelevantSkills({
+      query: "帮我生成一张图片",
+      limit: 3,
+    });
+
+    expect(selected.map((skill) => skill.slug)).toContain("image-maker");
+    expect(selected.map((skill) => skill.slug)).not.toContain("web-search");
+    expect(selected[0]?.content).toContain("Use this skill");
+  });
+
+  it("limits workspace skill selection to the active agent", () => {
+    const botOneSkillDir = path.join(
+      stateDir,
+      "agents",
+      "bot-1",
+      "skills",
+      "deploy-helper",
+    );
+    mkdirSync(botOneSkillDir, { recursive: true });
+    writeFileSync(
+      path.join(botOneSkillDir, "SKILL.md"),
+      "---\nname: Deploy Helper\ndescription: Deploy production services\n---\n",
+    );
+    const botTwoSkillDir = path.join(
+      stateDir,
+      "agents",
+      "bot-2",
+      "skills",
+      "deploy-helper",
+    );
+    mkdirSync(botTwoSkillDir, { recursive: true });
+    writeFileSync(
+      path.join(botTwoSkillDir, "SKILL.md"),
+      "---\nname: Other Deploy Helper\ndescription: Deploy another service\n---\n",
+    );
+    skillDb.recordInstall("deploy-helper", "workspace", undefined, "bot-1");
+    skillDb.recordInstall("deploy-helper", "workspace", undefined, "bot-2");
+
+    const catalog = new CatalogManager(cacheDir, {
+      skillsDir,
+      skillDb,
+    });
+
+    const selected = catalog.selectRelevantSkills({
+      query: "deploy production",
+      agentId: "bot-1",
+    });
+
+    expect(selected).toHaveLength(1);
+    expect(selected[0]?.agentId).toBe("bot-1");
+    expect(selected[0]?.name).toBe("Deploy Helper");
+  });
+
+  it("does not select skills for weak unmatched chat", () => {
+    const skillDir = path.join(skillsDir, "web-search");
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      path.join(skillDir, "SKILL.md"),
+      "---\nname: Web Search\ndescription: Search web pages\n---\n",
+    );
+    skillDb.recordInstall("web-search", "managed");
+
+    const catalog = new CatalogManager(cacheDir, {
+      skillsDir,
+      skillDb,
+    });
+
+    expect(catalog.selectRelevantSkills({ query: "你好" })).toEqual([]);
+  });
 });

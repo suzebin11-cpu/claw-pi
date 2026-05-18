@@ -131,6 +131,10 @@ const mocks = vi.hoisted(() => {
     skipped: [] as string[],
     failed: [] as Array<{ slug: string; error: string }>,
   }));
+  const mockRemoveDefaultAutoSkills = vi.fn(() => ({
+    removed: [] as string[],
+    failed: [] as Array<{ slug: string; error: string }>,
+  }));
 
   return {
     mockSkillDbCreate,
@@ -141,6 +145,7 @@ const mocks = vi.hoisted(() => {
     dirWatcherInstances,
     MockSkillDirWatcher,
     mockCopyStaticSkills,
+    mockRemoveDefaultAutoSkills,
   };
 });
 
@@ -164,6 +169,7 @@ vi.mock("../src/services/skillhub/skill-dir-watcher.js", () => ({
 
 vi.mock("../src/services/skillhub/curated-skills.js", () => ({
   copyStaticSkills: mocks.mockCopyStaticSkills,
+  removeDefaultAutoSkills: mocks.mockRemoveDefaultAutoSkills,
 }));
 
 import { SkillhubService } from "../src/services/skillhub-service.js";
@@ -224,7 +230,13 @@ describe("SkillhubService", () => {
       skipped: [],
       failed: [],
     });
+    mocks.mockRemoveDefaultAutoSkills.mockReset();
+    mocks.mockRemoveDefaultAutoSkills.mockReturnValue({
+      removed: [],
+      failed: [],
+    });
     vi.stubEnv("CI", "");
+    vi.stubEnv("SKILLHUB_AUTO_INSTALL_DEFAULT_SKILLS", "true");
   });
 
   afterEach(async () => {
