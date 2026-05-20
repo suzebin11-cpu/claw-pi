@@ -243,6 +243,28 @@ const en = {
   "ask.knowledgeEmpty": "No knowledge items yet",
   "ask.knowledgeUntitled": "Untitled knowledge",
   "ask.knowledgeDelete": "Delete knowledge",
+  "ask.local.permissions": "Local computer access",
+  "ask.local.title": "Local computer access",
+  "ask.local.desc":
+    "Choose how much of this computer Lobster Workbench can touch. Webpages, files, and model replies cannot elevate permissions for you.",
+  "ask.local.mode.basic": "Basic",
+  "ask.local.mode.basicDesc":
+    "Default. Chat, analyze uploads, generate images, and open webpage links.",
+  "ask.local.mode.confirm": "Confirm actions",
+  "ask.local.mode.confirmDesc":
+    "Ask before touching the computer, then run after confirmation.",
+  "ask.local.mode.full": "Full access",
+  "ask.local.mode.fullDesc":
+    "No per-action confirmation. For long-running local task control.",
+  "ask.local.capability.upload": "Analyze uploads",
+  "ask.local.capability.web": "Open webpage links",
+  "ask.local.capability.workspace": "Workspace results",
+  "ask.local.confirmTitle": "Run this local action?",
+  "ask.local.confirmHint": "Delete, overwrite, and arbitrary commands are not allowed.",
+  "ask.local.toast.enableFirst":
+    "Basic mode is active. Switch to Confirm actions or Full access first.",
+  "ask.local.toast.actionDisabled":
+    "This local action is not allowed by the current permission mode",
   "ask.usage.estimated": "Est. ",
   "ask.usage.tokens": "Tokens",
   "ask.usage.cost": "Cost",
@@ -608,7 +630,8 @@ const en = {
   "channels.pageTitle": "Lobster Hangouts",
   "channels.pageSubtitle":
     "Drop your lobster into your chat platforms and let it do the work",
-  "channels.comingSoon": "Microsoft Teams, Line and more coming soon",
+  "channels.comingSoon":
+    "WeChat, QQ and Feishu are supported; Microsoft Teams, Line and more are coming soon",
   "channels.backToConfig": "Back to configuration",
   "channels.statusConnected": "{{platform}} Assistant Connected",
   "channels.statusConnecting": "Connecting...",

@@ -550,6 +550,7 @@ function compileAgentList(
   env: ControllerEnv,
   oauthState: OAuthConnectionState,
   defaultResolvedModelId: string,
+  availableRuntimeModels: Array<{ id: string; name: string }>,
   installedSkillSlugs?: readonly string[],
   workspaceSkillsByAgent?: ReadonlyMap<string, readonly string[]>,
 ): OpenClawConfig["agents"]["list"] {
@@ -572,6 +573,11 @@ function compileAgentList(
       const botResolvedModelId = bot.modelId
         ? resolveModelId(config, env, bot.modelId, oauthState)
         : null;
+      const botModelIsAvailable =
+        botResolvedModelId !== null &&
+        (availableRuntimeModels.some((model) => model.id === botResolvedModelId) ||
+          (availableRuntimeModels.length === 0 &&
+            !botResolvedModelId.startsWith("link/")));
 
       // Skip the per-agent `model` field when it would resolve to the
       // gateway-wide default. Without this normalization, every call to
@@ -581,8 +587,15 @@ function compileAgentList(
       // unchanged. That bump alters the openclaw.json hash on the next
       // syncAll() and forces the gateway to restart every channel monitor
       // — leaving Feishu / WeChat stuck in "数据同步中" for many seconds.
+      //
+      // Also skip stale per-agent model refs that are no longer in the current
+      // runtime allowlist. This can happen after a cloud account switches to a
+      // package whose model group does not include the previously selected
+      // Link model. Keeping the stale override makes OpenClaw fail the turn
+      // before replying with `Unknown model: link/...`; omitting it lets the
+      // agent inherit the already-validated gateway default instead.
       const isExplicitOverride =
-        botResolvedModelId !== null &&
+        botModelIsAvailable &&
         botResolvedModelId !== defaultResolvedModelId;
 
       return {
@@ -605,6 +618,9 @@ function compilePlugins(
   config: NexuConfig,
   env: ControllerEnv,
 ): OpenClawConfig["plugins"] {
+  // Keep WeChat plugin shape stable from first boot to avoid a full gateway
+  // restart when the very first real WeChat account is connected.
+  const ALWAYS_PRELOADED_PLUGIN_IDS = ["openclaw-weixin"] as const;
   const imageGenerationPluginId = "clawpi-image-generation";
   const hasMiniMaxOauth = config.providers.some(
     (provider) =>
@@ -630,27 +646,30 @@ function compilePlugins(
   // across the channel's normal up/down lifecycle.
   const configuredPluginIds = [
     ...new Set(
-      config.channels
-        .map((channel) => resolveManagedChannelPluginId(channel.channelType))
-        .filter((pluginId): pluginId is string => pluginId !== null),
+      [
+        ...config.channels
+          .map((channel) => resolveManagedChannelPluginId(channel.channelType))
+          .filter((pluginId): pluginId is string => pluginId !== null),
+        ...ALWAYS_PRELOADED_PLUGIN_IDS,
+      ],
     ),
   ];
 
-  // Channel-plugin loading must follow the user's actual configuration.
-  // Loading `feishu` / `openclaw-weixin` whenever the desktop is alive (the
-  // legacy unconditional `enabled: true`) causes the sidecar to keep the
-  // weixin/feishu runtime initialized and re-trigger
-  // `setWeixinRuntime` / register bursts every 3-5s for a channel the user
-  // never set up. By gating on whether ANY channel of that type exists in
-  // config (regardless of `connected` status), we still pre-warm the
-  // plugin once the user adds their first account but stay completely
-  // silent before that.
+  // Keep plugin-entry presence stable so channel config changes can use
+  // channel-level hot reload rules instead of falling back to a full gateway
+  // restart. We keep the WeChat plugin entry enabled at boot (rule
+  // registration), while the actual channel activation remains controlled by
+  // `channels.openclaw-weixin.enabled` in compileChannelsConfig().
+  //
+  // Feishu remains configuration-gated to avoid unnecessary background work
+  // on installs that never use Feishu.
   const hasFeishuChannelConfigured = config.channels.some(
     (channel) => channel.channelType === "feishu",
   );
-  const hasWechatChannelConfigured = config.channels.some(
-    (channel) => channel.channelType === "wechat",
-  );
+  // Deliberately always true: keep `plugins.entries.openclaw-weixin.enabled`
+  // stable across first-connect so `channels.openclaw-weixin.*` changes can
+  // be handled as hot channel reloads.
+  const hasWechatChannelConfigured = true;
   return {
     load: {
       paths: [env.openclawExtensionsDir],
@@ -740,13 +759,14 @@ export function compileOpenClawConfig(
 
   const modelsConfig = compileModelsConfig(config, env);
   const modelAllowlist = compileModelAllowlist(modelsConfig, config);
+  const availableRuntimeModels = collectAvailableRuntimeModelRefs(
+    { models: modelsConfig } as OpenClawConfig,
+    config,
+    oauthState,
+  );
   const defaultModelRef = resolveOpenClawDefaultModelRef(
     defaultModelId,
-    collectAvailableRuntimeModelRefs(
-      { models: modelsConfig } as OpenClawConfig,
-      config,
-      oauthState,
-    ),
+    availableRuntimeModels,
   );
 
   const openClawConfig: OpenClawConfig = {
@@ -811,6 +831,7 @@ export function compileOpenClawConfig(
         env,
         oauthState,
         defaultModelRef,
+        availableRuntimeModels,
         installedSkillSlugs,
         workspaceSkillsByAgent,
       ),

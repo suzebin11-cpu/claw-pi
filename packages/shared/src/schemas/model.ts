@@ -17,8 +17,8 @@ export type Model = z.infer<typeof modelSchema>;
 export type ModelListResponse = z.infer<typeof modelListResponseSchema>;
 
 const PREFERRED_MODEL_ALIASES: string[][] = [
-  ["gpt 5 4 mini", "gpt 5.4 mini"],
   ["gpt 5 5", "gpt 5.5"],
+  ["gpt 5 4 mini", "gpt 5.4 mini"],
   ["gpt 5 4", "gpt 5.4"],
   [
     "gemini 3 flash preview",

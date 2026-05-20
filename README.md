@@ -10,8 +10,8 @@ The app is designed for a simple first-run flow: open the desktop client, connec
 - Provides a built-in web chat interface for direct conversations.
 - Lets users choose models from the model marketplace.
 - Keeps the selected model consistent across WeChat and the desktop chat.
-- Uses `gpt-5.4-mini` as the default model for new users.
-- Supports switching to other configured cloud models, including `gpt-5.5`.
+- Uses `gpt-5.5` as the default chat model for new users.
+- Uses `gpt-image-2` as the default image generation model.
 - Keeps user data and runtime state local to the machine.
 
 ## Current Focus

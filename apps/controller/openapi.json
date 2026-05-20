@@ -1159,6 +1159,14 @@
                   },
                   "user": {
                     "type": "string"
+                  },
+                  "metadata": {
+                    "type": "object",
+                    "properties": {
+                      "clawpiDynamicSkills": {
+                        "type": "boolean"
+                      }
+                    }
                   }
                 },
                 "required": [
@@ -1496,6 +1504,101 @@
                   },
                   "required": [
                     "ok"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/internal/desktop/local-actions": {
+      "post": {
+        "tags": [
+          "Desktop"
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "openUrl",
+                      "openPath",
+                      "createFolder",
+                      "createTextFile",
+                      "createSpreadsheet"
+                    ]
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "target": {
+                    "type": "string",
+                    "enum": [
+                      "desktop",
+                      "documents",
+                      "downloads",
+                      "home"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "rows": {
+                    "type": "array",
+                    "items": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "action"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Local desktop action result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean"
+                    },
+                    "action": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "action",
+                    "message"
                   ]
                 }
               }
@@ -8022,6 +8125,185 @@
         }
       }
     },
+    "/api/internal/desktop/images/generations": {
+      "post": {
+        "tags": [
+          "Desktop",
+          "Images",
+          "Internal"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  },
+                  "modelId": {
+                    "type": "string"
+                  },
+                  "size": {
+                    "type": "string"
+                  },
+                  "aspectRatio": {
+                    "type": "string"
+                  },
+                  "inputImages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    "maxItems": 4
+                  }
+                },
+                "required": [
+                  "prompt"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Generated image",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        true
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "modelId": {
+                      "type": "string"
+                    },
+                    "prompt": {
+                      "type": "string"
+                    },
+                    "fileName": {
+                      "type": "string"
+                    },
+                    "filePath": {
+                      "type": "string"
+                    },
+                    "mimeType": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "markdown": {
+                      "type": "string"
+                    },
+                    "durationMs": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "id",
+                    "modelId",
+                    "prompt",
+                    "fileName",
+                    "filePath",
+                    "mimeType",
+                    "url",
+                    "markdown",
+                    "durationMs"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Image generation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "enum": [
+                        false
+                      ]
+                    },
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "ok",
+                    "error"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/internal/desktop/generated-images/{fileName}": {
+      "get": {
+        "tags": [
+          "Desktop",
+          "Images",
+          "Internal"
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string"
+            },
+            "required": true,
+            "name": "fileName",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Generated image file",
+            "content": {
+              "image/png": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Generated image not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "message"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/internal/artifacts": {
       "post": {
         "tags": [
@@ -9975,11 +10257,11 @@
                         },
                         "defaultModelId": {
                           "type": "string",
-                          "default": "link/gpt-5.4-mini"
+                          "default": "link/gpt-5.5"
                         },
                         "defaultImageGenerationModelId": {
                           "type": "string",
-                          "default": ""
+                          "default": "clawpi-image/gpt-image-2"
                         }
                       }
                     }
@@ -10038,11 +10320,11 @@
                   },
                   "defaultModelId": {
                     "type": "string",
-                    "default": "link/gpt-5.4-mini"
+                    "default": "link/gpt-5.5"
                   },
                   "defaultImageGenerationModelId": {
                     "type": "string",
-                    "default": ""
+                    "default": "clawpi-image/gpt-image-2"
                   }
                 }
               }
@@ -10095,11 +10377,11 @@
                         },
                         "defaultModelId": {
                           "type": "string",
-                          "default": "link/gpt-5.4-mini"
+                          "default": "link/gpt-5.5"
                         },
                         "defaultImageGenerationModelId": {
                           "type": "string",
-                          "default": ""
+                          "default": "clawpi-image/gpt-image-2"
                         }
                       }
                     }

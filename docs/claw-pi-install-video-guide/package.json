@@ -1,0 +1,11 @@
+{
+  "name": "claw-pi-install-video-guide",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "npx --yes hyperframes@0.6.25 preview",
+    "check": "npx --yes hyperframes@0.6.25 lint && npx --yes hyperframes@0.6.25 validate && npx --yes hyperframes@0.6.25 inspect",
+    "render": "npx --yes hyperframes@0.6.25 render",
+    "publish": "npx --yes hyperframes@0.6.25 publish"
+  }
+}

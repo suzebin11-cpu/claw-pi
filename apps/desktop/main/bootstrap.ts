@@ -1,4 +1,5 @@
 import {
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -87,6 +88,58 @@ function configureLocalDevPaths(): void {
   );
 }
 
+function getWindowsLocalAppDataPath(): string {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (localAppData && localAppData.trim().length > 0) {
+    return resolve(localAppData);
+  }
+
+  return join(app.getPath("home"), "AppData", "Local");
+}
+
+function migratePackagedUserDataPath(
+  userDataPath: string,
+  legacyPaths: string[],
+): void {
+  if (existsSync(userDataPath)) {
+    return;
+  }
+
+  for (const oldPath of legacyPaths) {
+    if (!existsSync(oldPath)) {
+      continue;
+    }
+
+    try {
+      mkdirSync(dirname(userDataPath), { recursive: true });
+      renameSync(oldPath, userDataPath);
+      safeWrite(
+        process.stdout,
+        `[desktop:paths] migrated userData ${oldPath} -> ${userDataPath}\n`,
+      );
+      return;
+    } catch (renameError) {
+      const stagingPath = `${userDataPath}.migrating-${process.pid}-${Date.now()}`;
+
+      try {
+        cpSync(oldPath, stagingPath, { recursive: true, force: true });
+        renameSync(stagingPath, userDataPath);
+        safeWrite(
+          process.stdout,
+          `[desktop:paths] copied userData ${oldPath} -> ${userDataPath}\n`,
+        );
+        return;
+      } catch (copyError) {
+        rmSync(stagingPath, { recursive: true, force: true });
+        safeWrite(
+          process.stderr,
+          `[desktop:paths] userData migration failed old=${oldPath} target=${userDataPath} renameError=${String(renameError)} copyError=${String(copyError)}\n`,
+        );
+      }
+    }
+  }
+}
+
 function configurePackagedPaths(): void {
   if (!app.isPackaged) {
     return;
@@ -102,12 +155,15 @@ function configurePackagedPaths(): void {
   }
 
   const appDataPath = app.getPath("appData");
+  const localAppDataPath =
+    process.platform === "win32" ? getWindowsLocalAppDataPath() : appDataPath;
   const overrideUserDataPath = process.env.NEXU_DESKTOP_USER_DATA_ROOT;
   const defaultUserDataPath = app.getPath("userData");
 
   const legacyPath = join(appDataPath, "@clawpi", "desktop");
   const legacyWindowsPath = join(appDataPath, "nexu-desktop");
-  const windowsPath = join(appDataPath, "claw-pi-desktop");
+  const roamingWindowsPath = join(appDataPath, "claw-pi-desktop");
+  const windowsPath = join(localAppDataPath, "claw-pi-desktop");
 
   const userDataPath = overrideUserDataPath
     ? resolve(overrideUserDataPath)
@@ -115,16 +171,15 @@ function configurePackagedPaths(): void {
       ? windowsPath
       : legacyPath;
 
-  // Windows migration: rename legacy directories to the current name so
-  // existing data is preserved across upgrades.
+  // Windows migration: move mutable runtime/config data out of Roaming AppData.
+  // Roaming profile sync and endpoint security often hold files open briefly,
+  // which can turn atomic config writes into EPERM failures.
   if (process.platform === "win32" && !overrideUserDataPath) {
-    const legacyPaths = [legacyWindowsPath, legacyPath];
-    for (const oldPath of legacyPaths) {
-      if (!existsSync(userDataPath) && existsSync(oldPath)) {
-        renameSync(oldPath, userDataPath);
-        break;
-      }
-    }
+    migratePackagedUserDataPath(userDataPath, [
+      roamingWindowsPath,
+      legacyWindowsPath,
+      legacyPath,
+    ]);
   }
 
   const sessionDataPath = join(userDataPath, "session");
@@ -143,7 +198,7 @@ function configurePackagedPaths(): void {
 
   safeWrite(
     process.stdout,
-    `[desktop:paths] appData=${appDataPath} defaultUserData=${defaultUserDataPath} overrideUserData=${overrideUserDataPath ?? "<unset>"} userData=${userDataPath} sessionData=${sessionDataPath} logs=${logsPath} nexuHome=${nexuHomePath}\n`,
+    `[desktop:paths] appData=${appDataPath} localAppData=${localAppDataPath} defaultUserData=${defaultUserDataPath} overrideUserData=${overrideUserDataPath ?? "<unset>"} userData=${userDataPath} sessionData=${sessionDataPath} logs=${logsPath} nexuHome=${nexuHomePath}\n`,
   );
 }
 

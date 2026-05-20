@@ -19,6 +19,7 @@ const INTERNAL_WECHAT_PREWARM_ACCOUNT_ID = `${NEXU_INTERNAL_ACCOUNT_PREFIX}wecha
 export const MANAGED_CHANNEL_PLUGIN_IDS: Partial<Record<ChannelType, string>> =
   {
     dingtalk: "dingtalk-connector",
+    feishu: "feishu",
     wecom: "wecom",
     qqbot: "openclaw-qqbot",
     wechat: "openclaw-weixin",
@@ -234,15 +235,11 @@ export function compileChannelsConfig(params: {
     }
   }
 
-  // Track whether the only account in each channel subtree is the internal
-  // prewarm placeholder. We still want to keep the subtree shape stable
-  // from the first cold start (so the first real connect can hot-reload
-  // instead of triggering a full ~20-45s gateway restart), but the channel
-  // itself MUST stay disabled when no user account exists. Otherwise the
-  // sidecar treats the channel as configured-but-not-ready and runs the
-  // plugin init / runtime registration loop every few seconds — which is
-  // exactly what the diagnostic bundle showed for `openclaw-weixin` /
-  // `openclaw-qqbot` (every 3-5s `setWeixinRuntime` / register bursts).
+  // Keep the channel subtrees stable from the first cold start so the first
+  // real connect can hot-reload instead of triggering a full gateway restart.
+  // WeChat is intentionally kept enabled even before a user account exists:
+  // the desktop app should prepare the WeChat runtime on open, then swap the
+  // internal placeholder for the user's previous or newly scanned account.
   const feishuHasRealAccount = Object.keys(feishuAccounts).length > 0;
   if (!feishuHasRealAccount) {
     feishuAccounts[INTERNAL_FEISHU_PREWARM_ACCOUNT_ID] = {
@@ -334,7 +331,7 @@ export function compileChannelsConfig(params: {
     ...(wecomChannel ? { wecom: wecomChannel } : {}),
     ...(qqbotChannel ? { qqbot: qqbotChannel } : {}),
     "openclaw-weixin": {
-      enabled: wechatHasRealAccount,
+      enabled: true,
       accounts: wechatAccounts,
     },
   };

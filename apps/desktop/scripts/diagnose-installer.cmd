@@ -371,15 +371,21 @@ REM =====================================================================
 ::PS::}
 ::PS::
 ::PS::Wln ''
-::PS::$appdata = Join-Path $env:APPDATA 'claw-pi-desktop'
-::PS::Wln ('userData (%APPDATA%\claw-pi-desktop) exists : ' + (Test-Path $appdata))
-::PS::if (Test-Path $appdata) {
-::PS::    $sz2 = (Get-ChildItem $appdata -Recurse -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
-::PS::    if ($sz2) { Wln ('  Size: ' + [math]::Round($sz2 / 1MB, 2) + ' MB') }
-::PS::    $runtime = Join-Path $appdata 'runtime'
-::PS::    if (Test-Path $runtime) {
-::PS::        $children = Get-ChildItem $runtime -Directory -EA SilentlyContinue | Select-Object -First 20 -ExpandProperty Name
-::PS::        if ($children) { Wln ('  runtime/ subdirs: ' + ($children -join ', ')) }
+::PS::$localUserData = Join-Path $env:LOCALAPPDATA 'claw-pi-desktop'
+::PS::$roamingUserData = Join-Path $env:APPDATA 'claw-pi-desktop'
+::PS::foreach ($dataRoot in @(
+::PS::    @{Label='userData (%LOCALAPPDATA%\claw-pi-desktop)'; Path=$localUserData},
+::PS::    @{Label='legacy userData (%APPDATA%\claw-pi-desktop)'; Path=$roamingUserData}
+::PS::)) {
+::PS::    Wln ($dataRoot.Label + ' exists : ' + (Test-Path $dataRoot.Path))
+::PS::    if (Test-Path $dataRoot.Path) {
+::PS::        $sz2 = (Get-ChildItem $dataRoot.Path -Recurse -File -EA SilentlyContinue | Measure-Object Length -Sum).Sum
+::PS::        if ($sz2) { Wln ('  Size: ' + [math]::Round($sz2 / 1MB, 2) + ' MB') }
+::PS::        $runtime = Join-Path $dataRoot.Path 'runtime'
+::PS::        if (Test-Path $runtime) {
+::PS::            $children = Get-ChildItem $runtime -Directory -EA SilentlyContinue | Select-Object -First 20 -ExpandProperty Name
+::PS::            if ($children) { Wln ('  runtime/ subdirs: ' + ($children -join ', ')) }
+::PS::        }
 ::PS::    }
 ::PS::}
 ::PS::

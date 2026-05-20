@@ -187,6 +187,10 @@ describe("compileOpenClawConfig", () => {
       verificationToken: "verify-token",
     });
     expect(result.plugins?.entries?.feishu?.enabled).toBe(true);
+    expect(result.plugins?.allow).toContain("feishu");
+    expect(result.plugins?.allow).toContain("openclaw-weixin");
+    expect(result.plugins?.entries?.["openclaw-weixin"]?.enabled).toBe(true);
+    expect(result.channels?.["openclaw-weixin"]?.enabled).toBe(true);
     expect(result.skills?.load?.extraDirs).toEqual([
       "/tmp/openclaw/skills",
       "/tmp/.agents/skills",
@@ -210,6 +214,43 @@ describe("compileOpenClawConfig", () => {
     expect(result.agents.defaults).not.toHaveProperty("contextPruning");
     expect(result.agents.defaults).not.toHaveProperty("reserveTokensFloor");
     expect(result.agents.defaults).not.toHaveProperty("blockStreamingDefault");
+  });
+
+  it("keeps WeChat plugin entry stable before and after first account connect", () => {
+    const now = new Date().toISOString();
+    const withoutWechat = compileOpenClawConfig(createConfig(), createEnv());
+
+    const withWechat = compileOpenClawConfig(
+      createConfig({
+        channels: [
+          ...createConfig().channels,
+          {
+            id: "wechat-channel-1",
+            botId: "bot-1",
+            channelType: "wechat",
+            accountId: "abc123-im-bot",
+            status: "connected",
+            teamName: null,
+            appId: null,
+            botUserId: null,
+            createdAt: now,
+            updatedAt: now,
+          },
+        ],
+      }),
+      createEnv(),
+    );
+
+    expect(withoutWechat.plugins?.allow).toContain("openclaw-weixin");
+    expect(withWechat.plugins?.allow).toContain("openclaw-weixin");
+    expect(withoutWechat.plugins?.entries?.["openclaw-weixin"]?.enabled).toBe(
+      true,
+    );
+    expect(withWechat.plugins?.entries?.["openclaw-weixin"]?.enabled).toBe(
+      true,
+    );
+    expect(withoutWechat.channels?.["openclaw-weixin"]?.enabled).toBe(true);
+    expect(withWechat.channels?.["openclaw-weixin"]?.enabled).toBe(true);
   });
 
   it("does not compile token gateway auth when the controller has no gateway token", () => {
@@ -307,6 +348,49 @@ describe("compileOpenClawConfig", () => {
     expect(result.agents.defaults?.model).not.toEqual({
       primary: "link/gpt-5.5",
     });
+    expect(result.agents.list[0]?.model).toBeUndefined();
+  });
+
+  it("omits stale per-agent Link model overrides that are not in the runtime allowlist", () => {
+    const result = compileOpenClawConfig(
+      createConfig({
+        runtime: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+            authMode: "token",
+          },
+          defaultModelId: "link/gpt-5.4-mini",
+        },
+        bots: [
+          {
+            ...createConfig().bots[0],
+            modelId: "link/gemini-3.1-pro-preview",
+          },
+        ],
+        providers: [],
+        desktop: {
+          selectedModelId: "link/gemini-3.1-pro-preview",
+          cloud: {
+            linkUrl: "https://link.example.com",
+            apiKey: "link-key",
+            models: [
+              {
+                id: "gpt-5.4-mini",
+                name: "GPT-5.4 Mini",
+                provider: "openai",
+              },
+            ],
+          },
+        },
+      }),
+      createEnv(),
+    );
+
+    expect(result.agents.defaults?.model).toEqual({
+      primary: "link/gpt-5.4-mini",
+    });
+    expect(result.agents.list[0]?.model).toBeUndefined();
   });
 
   it("compiles qqbot channels and enables the canonical qq plugin id", () => {

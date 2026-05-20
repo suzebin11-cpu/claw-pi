@@ -671,7 +671,7 @@ describe("controller route compatibility", () => {
       {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ modelId: "clawpi-image/gpt-image-2" }),
+        body: JSON.stringify({ modelId: "clawpi-image/gpt-image-1.5" }),
       },
     );
 
@@ -683,13 +683,13 @@ describe("controller route compatibility", () => {
     };
     expect(payload).toMatchObject({
       ok: false,
-      modelId: "clawpi-image/gpt-image-2",
+      modelId: "clawpi-image/gpt-image-1.5",
     });
     expect(payload.error).toContain("生图模型需要先登录或刷新");
 
     const config = await container.configStore.getConfig();
     expect(config.runtime.defaultImageGenerationModelId).not.toBe(
-      "clawpi-image/gpt-image-2",
+      "clawpi-image/gpt-image-1.5",
     );
   });
 

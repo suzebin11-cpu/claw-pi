@@ -1,15 +1,96 @@
-import { access, cp, mkdir, readdir, rm } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, cp, mkdir, readdir, rename, rm } from "node:fs/promises";
 import path, { basename } from "node:path";
 import type { ChannelType } from "@nexu/shared";
 import type { ControllerEnv } from "../app/env.js";
 import { MANAGED_CHANNEL_PLUGIN_IDS } from "../lib/channel-binding-compiler.js";
 import { logger } from "../lib/logger.js";
 
+const PLUGIN_COPY_MAX_ATTEMPTS = 6;
+const PLUGIN_COPY_RETRY_BASE_DELAY_MS = 100;
+const PLUGIN_COPY_RETRY_MAX_DELAY_MS = 1000;
+const TRANSIENT_PLUGIN_FS_ERROR_CODES = new Set([
+  "EACCES",
+  "EBUSY",
+  "EMFILE",
+  "ENFILE",
+  "ENOTEMPTY",
+  "EPERM",
+]);
+
 const ALL_BUNDLED_PLUGIN_IDS = new Set([
   "dingtalk-connector",
   "wecom",
   "openclaw-qqbot",
 ]);
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorCode(error: unknown): string | null {
+  return error instanceof Error && "code" in error
+    ? String((error as NodeJS.ErrnoException).code)
+    : null;
+}
+
+function isTransientPluginFsError(error: unknown): boolean {
+  const code = getErrorCode(error);
+  return code !== null && TRANSIENT_PLUGIN_FS_ERROR_CODES.has(code);
+}
+
+async function withTransientPluginFsRetry<T>(
+  operation: () => Promise<T>,
+): Promise<T> {
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= PLUGIN_COPY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      if (
+        !isTransientPluginFsError(error) ||
+        attempt === PLUGIN_COPY_MAX_ATTEMPTS
+      ) {
+        throw error;
+      }
+
+      await sleep(
+        Math.min(
+          PLUGIN_COPY_RETRY_BASE_DELAY_MS * attempt,
+          PLUGIN_COPY_RETRY_MAX_DELAY_MS,
+        ),
+      );
+    }
+  }
+
+  throw lastError;
+}
+
+function shouldCopyPluginPath(sourcePath: string): boolean {
+  const name = basename(sourcePath);
+  if (name === ".bin" || name === ".cache" || name === ".git") {
+    return false;
+  }
+
+  const normalizedParts = sourcePath
+    .split(/[\\/]+/)
+    .map((part) => part.toLowerCase());
+  if (
+    normalizedParts.some(
+      (part) =>
+        part === "__tests__" ||
+        part === "coverage" ||
+        part === "test" ||
+        part === "tests",
+    )
+  ) {
+    return false;
+  }
+
+  return !/\.(spec|test)\.[cm]?[jt]sx?$/i.test(name);
+}
 
 export interface EnsurePluginsOptions {
   /**
@@ -156,18 +237,38 @@ export class OpenClawRuntimePluginWriter {
     targetDir: string,
     pluginId: string,
   ): Promise<void> {
+    const stagingDir = `${targetDir}.staging-${process.pid}-${Date.now()}-${randomUUID()}`;
     try {
-      await cp(sourceDir, targetDir, {
-        recursive: true,
-        force: true,
-        dereference: true,
-        filter: (source) => basename(source) !== ".bin",
+      await withTransientPluginFsRetry(async () => {
+        await this.rmForCopy(stagingDir);
+        await mkdir(path.dirname(targetDir), { recursive: true });
+        await cp(sourceDir, stagingDir, {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          dereference: true,
+          filter: (source) =>
+            shouldCopyPluginPath(path.relative(sourceDir, source)),
+        });
+        await this.rmForCopy(targetDir);
+        await rename(stagingDir, targetDir);
       });
     } catch (err) {
-      logger.warn(
-        { pluginId, error: (err as Error).message },
-        "plugin_copy_skipped_fs_error",
+      await this.rmForCopy(stagingDir).catch(() => undefined);
+
+      if (await this.hasUsablePlugin(targetDir)) {
+        logger.warn(
+          { pluginId, targetDir, error: (err as Error).message },
+          "plugin_copy_failed_using_existing",
+        );
+        return;
+      }
+
+      logger.error(
+        { pluginId, sourceDir, targetDir, error: (err as Error).message },
+        "plugin_copy_failed_no_usable_target",
       );
+      throw err;
     }
   }
 
@@ -195,6 +296,32 @@ export class OpenClawRuntimePluginWriter {
   private async exists(targetPath: string): Promise<boolean> {
     try {
       await access(targetPath);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async rmForCopy(targetDir: string): Promise<void> {
+    try {
+      await withTransientPluginFsRetry(() =>
+        rm(targetDir, { recursive: true, force: true }),
+      );
+    } catch (err) {
+      if (getErrorCode(err) === "ENOENT") {
+        return;
+      }
+      throw err;
+    }
+  }
+
+  private async hasUsablePlugin(targetDir: string): Promise<boolean> {
+    try {
+      await access(path.join(targetDir, "openclaw.plugin.json"));
+      await Promise.any([
+        access(path.join(targetDir, "index.js")),
+        access(path.join(targetDir, "index.ts")),
+      ]);
       return true;
     } catch {
       return false;

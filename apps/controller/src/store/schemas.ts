@@ -16,7 +16,7 @@ export const controllerRuntimeConfigSchema = z
         authMode: z.enum(["none", "token"]).default("none"),
       })
       .default({ port: 18789, bind: "loopback", authMode: "none" }),
-    defaultModelId: z.string().default("link/gpt-5.4-mini"),
+    defaultModelId: z.string().default("link/gpt-5.5"),
     defaultImageGenerationModelId: z
       .string()
       .default(DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID),

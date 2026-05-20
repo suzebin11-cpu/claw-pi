@@ -60,7 +60,7 @@ const envSchema = z.object({
   RUNTIME_GATEWAY_PROBE_ENABLED: booleanSchema.default("true"),
   RUNTIME_SYNC_INTERVAL_MS: z.coerce.number().int().positive().default(2000),
   RUNTIME_HEALTH_INTERVAL_MS: z.coerce.number().int().positive().default(5000),
-  DEFAULT_MODEL_ID: z.string().default("link/gpt-5.4-mini"),
+  DEFAULT_MODEL_ID: z.string().default("link/gpt-5.5"),
   WEB_URL: z.string().default("http://localhost:5173"),
   AMPLITUDE_API_KEY: z.string().optional(),
   VITE_AMPLITUDE_API_KEY: z.string().optional(),

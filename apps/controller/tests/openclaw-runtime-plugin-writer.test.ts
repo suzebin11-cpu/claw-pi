@@ -96,6 +96,58 @@ describe("OpenClawRuntimePluginWriter", () => {
     );
   });
 
+  it("excludes non-runtime test files while copying plugin dependencies", async () => {
+    const pluginDir = path.join(env.runtimePluginTemplatesDir, "plugin-a");
+    const packageDir = path.join(pluginDir, "node_modules", "package-a");
+
+    await mkdir(path.join(packageDir, "dist"), { recursive: true });
+    await mkdir(path.join(packageDir, "tests"), { recursive: true });
+    await writeFile(path.join(pluginDir, "index.js"), "export {};\n");
+    await writeFile(path.join(pluginDir, "openclaw.plugin.json"), "{}\n");
+    await writeFile(path.join(packageDir, "dist", "index.js"), "ok\n");
+    await writeFile(path.join(packageDir, "tests", "literal.test.ts"), "skip\n");
+    await writeFile(path.join(packageDir, "unit.spec.ts"), "skip\n");
+
+    const writer = new OpenClawRuntimePluginWriter(env);
+    await writer.ensurePlugins();
+
+    await expect(
+      access(
+        path.join(
+          env.openclawExtensionsDir,
+          "plugin-a",
+          "node_modules",
+          "package-a",
+          "dist",
+          "index.js",
+        ),
+      ),
+    ).resolves.toBeUndefined();
+    await expect(
+      access(
+        path.join(
+          env.openclawExtensionsDir,
+          "plugin-a",
+          "node_modules",
+          "package-a",
+          "tests",
+          "literal.test.ts",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      access(
+        path.join(
+          env.openclawExtensionsDir,
+          "plugin-a",
+          "node_modules",
+          "package-a",
+          "unit.spec.ts",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("skips runtime plugins that already exist in builtin OpenClaw extensions", async () => {
     env = {
       ...env,

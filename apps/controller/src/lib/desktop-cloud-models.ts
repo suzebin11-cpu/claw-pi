@@ -9,7 +9,7 @@ export type DesktopCloudImageModel = DesktopCloudModel & {
 };
 
 export const DESKTOP_CLOUD_IMAGE_PROVIDER_ID = "clawpi-image";
-export const DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID = `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/gpt-image-1-mini`;
+export const DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID = `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/gpt-image-2`;
 
 export const BUILT_IN_DESKTOP_CLOUD_IMAGE_MODELS: readonly DesktopCloudImageModel[] =
   [

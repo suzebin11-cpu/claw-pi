@@ -180,6 +180,12 @@ const CONTROL_UI_TOOL_OUTPUT_DETAILS_SEARCH =
   '<details class="chat-tool-msg-collapse">';
 const CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT =
   '<details class="chat-tool-msg-collapse" ?open=${f||m}>';
+const CONTROL_UI_TOOL_MEDIA_RENDER_SEARCH =
+  "if(!b&&u&&c)return vy(l,n);let T=u&&(t.showToolCalls??!0);if(!b&&!T&&!f&&!m)return g;let ee=o===`tool`||c,E=[...new Set(l.map(e=>e.name))],te=E.length<=3?E.join(`, `):`${E.slice(0,2).join(`, `)} +${E.length-2} more`,D=b&&!te?b.trim().replace(/\\s+/g,` `).slice(0,120):``;";
+const CONTROL_UI_TOOL_MEDIA_RENDER_REPLACEMENT =
+  "let T=u&&(t.showToolCalls??!0),ee=o===`tool`||c;if(ee&&(f||m))return i`<div class=\"${w}\">${gy(d)} ${_y(p)}</div>`;if(!b&&u&&c)return T?vy(l,n):g;if(ee&&!T)return g;if(!b&&!T&&!f&&!m)return g;let E=[...new Set(l.map(e=>e.name))],te=E.length<=3?E.join(`, `):`${E.slice(0,2).join(`, `)} +${E.length-2} more`,D=b&&!te?b.trim().replace(/\\s+/g,` `).slice(0,120):``;";
+const CONTROL_UI_TOOL_CALLS_DEFAULT_SEARCH = "chatShowToolCalls:!0";
+const CONTROL_UI_TOOL_CALLS_DEFAULT_REPLACEMENT = "chatShowToolCalls:!1";
 const CONTROL_UI_NODE_LIST_POLL_SEARCH =
   "function Ir(e){e.nodesPollInterval??=window.setInterval(()=>void Fr(e,{quiet:!0}),5e3)}";
 const CONTROL_UI_NODE_LIST_POLL_60S_SEARCH =
@@ -1911,6 +1917,30 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
         CONTROL_UI_IMAGE_EXTRACTOR_SEARCH,
         CONTROL_UI_IMAGE_EXTRACTOR_REPLACEMENT,
         `${entry}: generated image media extraction`,
+      );
+      patchCount += 1;
+    }
+    if (
+      source.includes(CONTROL_UI_TOOL_MEDIA_RENDER_SEARCH) &&
+      !source.includes(CONTROL_UI_TOOL_MEDIA_RENDER_REPLACEMENT)
+    ) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_TOOL_MEDIA_RENDER_SEARCH,
+        CONTROL_UI_TOOL_MEDIA_RENDER_REPLACEMENT,
+        `${entry}: render media tool outputs without tool wrapper`,
+      );
+      patchCount += 1;
+    }
+    if (
+      source.includes(CONTROL_UI_TOOL_CALLS_DEFAULT_SEARCH) &&
+      !source.includes(CONTROL_UI_TOOL_CALLS_DEFAULT_REPLACEMENT)
+    ) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_TOOL_CALLS_DEFAULT_SEARCH,
+        CONTROL_UI_TOOL_CALLS_DEFAULT_REPLACEMENT,
+        `${entry}: hide tool calls by default`,
       );
       patchCount += 1;
     }

@@ -7,9 +7,9 @@ import {
 } from "#controller/lib/desktop-cloud-models";
 
 describe("desktop cloud image models", () => {
-  it("uses gpt-image-1-mini as the low-cost default image model", () => {
+  it("uses GPT Image 2 as the default image model", () => {
     expect(DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID).toBe(
-      "clawpi-image/gpt-image-1-mini",
+      "clawpi-image/gpt-image-2",
     );
     expect(isBuiltInDesktopCloudImageModel(DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID))
       .toBe(true);

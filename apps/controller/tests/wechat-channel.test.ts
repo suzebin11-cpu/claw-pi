@@ -74,21 +74,18 @@ function makeChannel(
 // ---------------------------------------------------------------------------
 
 describe("WeChat prewarm config compilation", () => {
-  it("includes openclaw-weixin with prewarm account but channel disabled when no WeChat channels exist", () => {
+  it("includes enabled openclaw-weixin with prewarm account when no WeChat channels exist", () => {
     const result = compileChannelsConfig({
       channels: [],
       secrets: {},
       controllerBaseUrl: "http://127.0.0.1:3010",
     });
 
-    // The subtree must still exist so that adding the first real WeChat
-    // account triggers a hot-reload (channels.openclaw-weixin.accounts.<id>)
-    // rather than a section-add restart. But the channel itself must be
-    // disabled — a `true` here causes the sidecar to keep the weixin
-    // runtime initialized and re-trigger `setWeixinRuntime` every 3-5s
-    // for a channel the user never set up.
+    // The subtree must exist and stay enabled so the desktop app prepares the
+    // WeChat runtime on open. Adding the first real account then becomes a
+    // hot account swap instead of a section-add restart.
     expect(result["openclaw-weixin"]).toBeDefined();
-    expect(result["openclaw-weixin"]?.enabled).toBe(false);
+    expect(result["openclaw-weixin"]?.enabled).toBe(true);
     expect(
       result["openclaw-weixin"]?.accounts.__nexu_internal_wechat_prewarm__,
     ).toEqual({ enabled: false });
@@ -123,16 +120,16 @@ describe("WeChat prewarm config compilation", () => {
     expect(result["openclaw-weixin"]?.enabled).toBe(true);
   });
 
-  it("ignores disconnected WeChat channels and falls back to prewarm", () => {
+  it("ignores disconnected WeChat channels and keeps enabled prewarm", () => {
     const result = compileChannelsConfig({
       channels: [makeChannel({ status: "disconnected" })],
       secrets: {},
       controllerBaseUrl: "http://127.0.0.1:3010",
     });
 
-    // Disconnected channel should still NOT push the channel to enabled —
-    // there are no real *connected* accounts in the compiled output.
-    expect(result["openclaw-weixin"]?.enabled).toBe(false);
+    // Disconnected channel should not become an active account, but WeChat
+    // runtime remains prepared for a reconnect.
+    expect(result["openclaw-weixin"]?.enabled).toBe(true);
     expect(
       result["openclaw-weixin"]?.accounts.__nexu_internal_wechat_prewarm__,
     ).toEqual({ enabled: false });
@@ -442,6 +439,53 @@ describe("WeChat connect/disconnect lifecycle", () => {
       connected: false,
       message: "等待扫码中，请继续在手机微信确认。",
       pending: true,
+    });
+    expect(statusCalls).toBe(2);
+  });
+
+  it("QR wait retries transient poll failures instead of failing the login flow", async () => {
+    let statusCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.includes("get_bot_qrcode")) {
+          return new Response(
+            JSON.stringify({
+              qrcode: "qr-token",
+              qrcode_img_content: "data:image/png;base64,abc",
+            }),
+            { status: 200 },
+          );
+        }
+        if (url.includes("get_qrcode_status")) {
+          statusCalls += 1;
+          if (statusCalls === 1) {
+            const error = new Error("network unstable");
+            error.name = "TimeoutError";
+            throw error;
+          }
+          return new Response(
+            JSON.stringify({
+              status: "confirmed",
+              bot_token: "new-token",
+              ilink_bot_id: "new-account",
+              baseurl: "https://ilinkai.weixin.qq.com",
+              ilink_user_id: "user-1",
+            }),
+            { status: 200 },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    const started = await service.wechatQrStart();
+    const result = await service.wechatQrWait(started.sessionKey ?? "");
+
+    expect(result).toMatchObject({
+      connected: true,
+      accountId: "new-account",
     });
     expect(statusCalls).toBe(2);
   });

@@ -148,10 +148,7 @@ const plugin = {
             return textResult(`生图失败：${message}`);
           }
 
-          const resultText = [
-            "图片已生成，生成的图片已经作为媒体附件附加到本次工具结果。",
-            "不要把图片地址、本地文件路径或 markdown 图片链接发给用户；直接让客户端展示附件即可。",
-          ].join("\n");
+          const resultText = "图片已生成。";
 
           const mediaUrls = [data.url].filter(
             (value) => typeof value === "string" && value.trim(),

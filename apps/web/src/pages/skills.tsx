@@ -74,6 +74,26 @@ const MARKETPLACE_CATEGORY_TABS: readonly SkillCategoryId[] = [
   "code_development",
   "web_research",
 ] as const;
+const MARKETPLACE_CATEGORY_SEARCH_QUERIES: Record<SkillCategoryId, string> = {
+  document_processing:
+    "document pdf office word excel spreadsheet slides notion docs file",
+  data_analysis:
+    "data analysis csv sql database dashboard chart visualization statistics report",
+  industry_skills:
+    "business marketing sales customer legal healthcare education ecommerce industry",
+  it_operations:
+    "devops operations server docker kubernetes deployment monitoring logs cloud",
+  code_development:
+    "code development github api frontend backend python javascript typescript testing",
+  web_research: "web search browser research crawler scraper news internet",
+  product_design: "design image video media logo poster creative product",
+  automation_workflow:
+    "automation workflow productivity calendar task communication tools",
+  security_testing: "security audit compliance password vault safety testing",
+  finance_web3: "crypto blockchain trading web3 wallet payment finance",
+  ai_agents: "agent ai llm rag embedding prompt multi-agent",
+  others: "utility assistant productivity tools",
+};
 const MARKETPLACE_CATEGORY_DISPLAY_RATIO: Record<SkillCategoryId, number> = {
   document_processing: 0.16,
   data_analysis: 0.13,
@@ -133,6 +153,13 @@ function getMarketplaceCategoryDisplayCount(
   return Math.max(
     1,
     Math.round(total * MARKETPLACE_CATEGORY_DISPLAY_RATIO[categoryId]),
+  );
+}
+
+function isSkillCategoryId(value: string | null): value is SkillCategoryId {
+  return (
+    value !== null &&
+    (SKILL_CATEGORY_ORDER as readonly string[]).includes(value)
   );
 }
 
@@ -486,10 +513,22 @@ export function SkillsPage() {
   const debouncedQuery = useDebounce(localSearch, 300);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const sentinelRef = useRef<HTMLDivElement | null>(null);
+  const userExploreQuery = debouncedQuery.trim();
+  const activeMarketplaceCategory =
+    topTab === "explore" &&
+    userExploreQuery.length === 0 &&
+    isSkillCategoryId(activeTag)
+      ? activeTag
+      : null;
+  const exploreQueryText =
+    topTab === "explore"
+      ? userExploreQuery ||
+        (activeMarketplaceCategory
+          ? MARKETPLACE_CATEGORY_SEARCH_QUERIES[activeMarketplaceCategory]
+          : "")
+      : "";
 
-  const exploreQuery = useExploreSearch(
-    topTab === "explore" ? debouncedQuery : "",
-  );
+  const exploreQuery = useExploreSearch(exploreQueryText);
 
   const updateViewState = useCallback(
     (
@@ -580,7 +619,7 @@ export function SkillsPage() {
 
   // Build skill lists based on tabs
   // Explore: server-side search results (may include already-installed skills)
-  const isExploreSearchActive = debouncedQuery.trim().length > 0;
+  const isExploreSearchActive = userExploreQuery.length > 0;
   const remoteExploreSkills = useMemo(
     () =>
       exploreQuery.skills.map((skill) =>
@@ -598,9 +637,26 @@ export function SkillsPage() {
     }
     return [...bySlug.values()].sort(compareSkillsForMarketplace);
   }, [allSkills, remoteExploreSkills]);
+  const categoryExploreSkills = useMemo(() => {
+    if (!activeMarketplaceCategory) return [];
+    const bySlug = new Map<string, MinimalSkill>();
+    for (const skill of allSkills) {
+      if (skillMatchesCategory(skill, activeMarketplaceCategory)) {
+        bySlug.set(skill.slug, skill);
+      }
+    }
+    for (const skill of remoteExploreSkills) {
+      if (skillMatchesCategory(skill, activeMarketplaceCategory)) {
+        bySlug.set(skill.slug, skill);
+      }
+    }
+    return [...bySlug.values()].sort(compareSkillsForMarketplace);
+  }, [activeMarketplaceCategory, allSkills, remoteExploreSkills]);
   const exploreSkills = isExploreSearchActive
     ? remoteExploreSkills
-    : defaultExploreSkills;
+    : activeMarketplaceCategory
+      ? categoryExploreSkills
+      : defaultExploreSkills;
   const yourSkillsList = useMemo(() => {
     const installed = installedSkills.map((is) => {
       const catalogEntry = allSkills.find((s) => s.slug === is.slug);
@@ -715,9 +771,17 @@ export function SkillsPage() {
   ]);
 
   const filteredExploreSkills = useMemo(() => {
+    if (activeMarketplaceCategory && !isExploreSearchActive) {
+      return exploreSkills;
+    }
     if (!activeTag) return exploreSkills;
     return exploreSkills.filter((s) => skillMatchesCategory(s, activeTag));
-  }, [exploreSkills, activeTag]);
+  }, [
+    activeMarketplaceCategory,
+    exploreSkills,
+    activeTag,
+    isExploreSearchActive,
+  ]);
 
   const filteredSkills =
     topTab === "explore" ? filteredExploreSkills : filteredYoursSkills;
@@ -849,11 +913,14 @@ export function SkillsPage() {
           id,
           label: getTagLabel(id, locale),
           count,
-          displayCount: count,
+          displayCount:
+            topTab === "explore" && !isExploreSearchActive
+              ? getMarketplaceCategoryDisplayCount(id, marketplaceDisplayTotal)
+              : count,
           icon: style.icon,
         };
       })
-      .filter((tab) => tab.count > 0);
+      .filter((tab) => topTab === "explore" || tab.count > 0);
 
     return [...base, ...categoryFilters];
   }, [

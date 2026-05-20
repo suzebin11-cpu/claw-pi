@@ -752,13 +752,40 @@ async function pollWechatQrStatus(
     }
     return JSON.parse(rawText) as WechatQrStatusResponse;
   } catch (error) {
-    if (error instanceof Error && error.name === "AbortError") {
+    if (
+      error instanceof Error &&
+      (error.name === "AbortError" || error.name === "TimeoutError")
+    ) {
       return { status: "wait" };
     }
     throw error;
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isRetryableWechatQrPollError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const message = error.message.toLowerCase();
+  if (
+    error.name === "AbortError" ||
+    error.name === "TimeoutError" ||
+    message.includes("fetch failed") ||
+    message.includes("network") ||
+    message.includes("socket hang up") ||
+    message.includes("econnreset") ||
+    message.includes("enotfound")
+  ) {
+    return true;
+  }
+  const httpMatch = message.match(/failed to poll qr status:\s*(\d{3})/i);
+  if (!httpMatch) {
+    return false;
+  }
+  const status = Number(httpMatch[1]);
+  return Number.isFinite(status) && status >= 500;
 }
 
 export class ChannelService {
@@ -1021,6 +1048,21 @@ export class ChannelService {
           Math.min(WECHAT_QR_POLL_TIMEOUT_MS, remainingMs),
         );
       } catch (error) {
+        if (isRetryableWechatQrPollError(error)) {
+          logger.warn(
+            {
+              sessionKey: redactIdentifier(sessionKey),
+              qrcode: redactIdentifier(activeLogin.qrcode),
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "wechat_qr_wait_poll_retryable",
+          );
+          const remainingMs = deadline - Date.now();
+          if (remainingMs > 0) {
+            await sleep(Math.min(WECHAT_QR_POLL_BACKOFF_MS, remainingMs));
+          }
+          continue;
+        }
         logger.warn(
           {
             sessionKey: redactIdentifier(sessionKey),

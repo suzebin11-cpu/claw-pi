@@ -2,6 +2,15 @@ import { selectPreferredModel } from "@nexu/shared";
 import { describe, expect, it } from "vitest";
 
 describe("selectPreferredModel", () => {
+  it("prefers GPT-5.5 when available", () => {
+    const models = [
+      { id: "link/gpt-5.4-mini", name: "GPT-5.4 Mini" },
+      { id: "link/gpt-5.5", name: "GPT-5.5" },
+    ];
+
+    expect(selectPreferredModel(models)?.id).toBe("link/gpt-5.5");
+  });
+
   it("prefers GPT-5.4 Mini when available", () => {
     const models = [
       { id: "google/gemini-2.5-pro", name: "Gemini 2.5 Pro" },

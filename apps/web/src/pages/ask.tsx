@@ -16,6 +16,9 @@ import {
   Copy,
   Download,
   FileText,
+  FileSpreadsheet,
+  FolderPlus,
+  Globe2,
   ImageIcon,
   Loader2,
   Maximize2,
@@ -27,6 +30,7 @@ import {
   Plus,
   RotateCcw,
   Send,
+  ShieldCheck,
   Square,
   Trash2,
   UserRound,
@@ -149,6 +153,37 @@ type ImageGenerationError = {
   error: string;
 };
 
+type LocalDesktopPermissionMode = "basic" | "confirm" | "full";
+
+type LocalDesktopPermissionSettings = {
+  mode: LocalDesktopPermissionMode;
+};
+
+type LocalDesktopActionType =
+  | "openUrl"
+  | "openPath"
+  | "createFolder"
+  | "createTextFile"
+  | "createSpreadsheet";
+
+type LocalDesktopAction = {
+  action: LocalDesktopActionType;
+  label: string;
+  url?: string;
+  target?: "desktop" | "documents" | "downloads" | "home";
+  name?: string;
+  content?: string;
+  rows?: string[][];
+};
+
+type LocalDesktopActionResponse = {
+  ok: boolean;
+  action: string;
+  message: string;
+  path?: string;
+  url?: string;
+};
+
 type StreamedCompletionResult = {
   text: string;
   usage?: {
@@ -176,6 +211,11 @@ const MAX_KNOWLEDGE_MATCHES = 4;
 const ASK_SESSIONS_STORAGE_KEY = "claw-pi.ask.sessions.v1";
 const ASK_ACTIVE_SESSION_STORAGE_KEY = "claw-pi.ask.activeSessionId.v1";
 const ASK_KNOWLEDGE_STORAGE_KEY = "claw-pi.ask.knowledge.v1";
+const ASK_LOCAL_PERMISSIONS_STORAGE_KEY = "claw-pi.ask.localPermissions.v1";
+
+const DEFAULT_LOCAL_PERMISSIONS: LocalDesktopPermissionSettings = {
+  mode: "basic",
+};
 
 const TEXT_EXTENSIONS = new Set([
   "c",
@@ -394,6 +434,43 @@ function persistKnowledgeItems(items: KnowledgeItem[]) {
   } catch {
     toast.error("知识库保存失败，内容可能过大");
   }
+}
+
+function loadLocalPermissions(): LocalDesktopPermissionSettings {
+  if (typeof window === "undefined") return DEFAULT_LOCAL_PERMISSIONS;
+  try {
+    const raw = window.localStorage.getItem(ASK_LOCAL_PERMISSIONS_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : null;
+    if (!parsed || typeof parsed !== "object") {
+      return DEFAULT_LOCAL_PERMISSIONS;
+    }
+    const candidate = parsed as Partial<LocalDesktopPermissionSettings>;
+    const legacy = parsed as Partial<{
+      enabled: boolean;
+      mode: string;
+    }>;
+    let mode: LocalDesktopPermissionMode = "basic";
+    if (candidate.mode === "basic" || candidate.mode === "confirm") {
+      mode = candidate.mode;
+    } else if (candidate.mode === "full") {
+      mode = "full";
+    } else if (legacy.mode === "controlled" || legacy.enabled === true) {
+      mode = "confirm";
+    }
+    return {
+      mode,
+    };
+  } catch {
+    return DEFAULT_LOCAL_PERMISSIONS;
+  }
+}
+
+function persistLocalPermissions(settings: LocalDesktopPermissionSettings) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(
+    ASK_LOCAL_PERMISSIONS_STORAGE_KEY,
+    JSON.stringify(settings),
+  );
 }
 
 let askSessionsCache: ChatSession[] | null = null;
@@ -695,6 +772,167 @@ function buildDisplayText(
   if (trimmed.length > 0) return trimmed;
   if (attachments.length > 0) return fallbackPrompt;
   return "";
+}
+
+function extractQuotedName(text: string): string | undefined {
+  const quoted = text.match(/[“"「『《](.*?)[”"」』》]/u)?.[1]?.trim();
+  if (quoted) return quoted;
+  return text.match(/(?:叫做|叫|命名为|名为|名称是|named)\s*([^\n，。,.]{1,60})/iu)?.[1]?.trim();
+}
+
+function detectLocalTarget(text: string): LocalDesktopAction["target"] {
+  if (/(?:下载|downloads?)/iu.test(text)) return "downloads";
+  if (/(?:文档|documents?)/iu.test(text)) return "documents";
+  if (/(?:主目录|home)/iu.test(text)) return "home";
+  return "desktop";
+}
+
+function hasLocalPlaceIntent(text: string): boolean {
+  return /(?:本机|电脑|桌面|下载|文档|主目录|本地|desktop|downloads?|documents?|home)/iu.test(
+    text,
+  );
+}
+
+function extractActionContent(text: string): string {
+  const matched = text.match(/(?:内容是|写入|填入|填写|包含)\s*([\s\S]+)$/iu)?.[1];
+  return (matched ?? "").trim();
+}
+
+function rowsFromText(content: string): string[][] | undefined {
+  if (!content.trim()) return undefined;
+  const rows = content
+    .split(/\r?\n/u)
+    .map((line) =>
+      line
+        .split(/\t|,|，/u)
+        .map((cell) => cell.trim())
+        .filter(Boolean),
+    )
+    .filter((row) => row.length > 0)
+    .slice(0, 200);
+  return rows.length > 0 ? rows : undefined;
+}
+
+function ensureUrlProtocol(rawUrl: string): string {
+  const trimmed = rawUrl.trim();
+  if (/^https?:\/\//iu.test(trimmed)) return trimmed;
+  return `https://${trimmed}`;
+}
+
+function detectLocalDesktopAction(text: string): LocalDesktopAction | null {
+  const normalized = text.trim();
+  if (!normalized) return null;
+
+  const urlMatch = normalized.match(
+    /\bhttps?:\/\/[^\s"'<>，。]+|\b(?:www\.)[^\s"'<>，。]+/iu,
+  );
+  if (
+    urlMatch &&
+    /(?:打开|访问|浏览|open|visit|launch).{0,12}(?:网页|网站|链接|网址|url|browser|website|page)?/iu.test(
+      normalized,
+    )
+  ) {
+    return {
+      action: "openUrl",
+      label: `打开网页：${urlMatch[0]}`,
+      url: ensureUrlProtocol(urlMatch[0]),
+    };
+  }
+
+  if (/(?:打开|open).{0,8}(?:桌面|下载|文档|文件夹|folder|downloads?|documents?)/iu.test(normalized)) {
+    return {
+      action: "openPath",
+      label: "打开本机位置",
+      target: detectLocalTarget(normalized),
+    };
+  }
+
+  if (
+    hasLocalPlaceIntent(normalized) &&
+    /(?:创建|新建|生成|建立|create|make).{0,16}(?:文件夹|folder)/iu.test(
+      normalized,
+    )
+  ) {
+    return {
+      action: "createFolder",
+      label: "创建文件夹",
+      target: detectLocalTarget(normalized),
+      name: extractQuotedName(normalized) ?? "Claw-Pi 文件夹",
+    };
+  }
+
+  if (
+    hasLocalPlaceIntent(normalized) &&
+    /(?:创建|新建|生成|建立|create|make).{0,16}(?:excel|xlsx|xls|表格|电子表格|spreadsheet)/iu.test(
+      normalized,
+    )
+  ) {
+    const content = extractActionContent(normalized);
+    return {
+      action: "createSpreadsheet",
+      label: "创建 Excel 表格",
+      target: detectLocalTarget(normalized),
+      name: extractQuotedName(normalized) ?? "Claw-Pi 表格.xls",
+      content,
+      rows: rowsFromText(content),
+    };
+  }
+
+  if (
+    hasLocalPlaceIntent(normalized) &&
+    /(?:创建|新建|生成|建立|create|make).{0,16}(?:txt|文本|文档|文件|markdown|md)/iu.test(
+      normalized,
+    )
+  ) {
+    return {
+      action: "createTextFile",
+      label: "创建文本文件",
+      target: detectLocalTarget(normalized),
+      name: extractQuotedName(normalized) ?? "Claw-Pi 文档.txt",
+      content: extractActionContent(normalized),
+    };
+  }
+
+  return null;
+}
+
+function isLocalActionAllowed(
+  action: LocalDesktopAction,
+  permissions: LocalDesktopPermissionSettings,
+): boolean {
+  if (permissions.mode === "basic") {
+    return action.action === "openUrl";
+  }
+  if (permissions.mode === "confirm") {
+    return [
+      "openUrl",
+      "openPath",
+      "createFolder",
+      "createTextFile",
+      "createSpreadsheet",
+    ].includes(action.action);
+  }
+  return true;
+}
+
+async function executeLocalDesktopAction(
+  action: LocalDesktopAction,
+): Promise<LocalDesktopActionResponse> {
+  const response = await fetch(getApiUrl("/api/internal/desktop/local-actions"), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(action),
+  });
+  const payload = (await response.json().catch(() => null)) as
+    | LocalDesktopActionResponse
+    | null;
+  if (!response.ok || !payload) {
+    throw new Error("本机操作执行失败");
+  }
+  return payload;
 }
 
 function buildPlainHistoryText(message: ChatMessage): string {
@@ -1562,6 +1800,16 @@ export function AskPage() {
   const [confirmAction, setConfirmAction] = useState<
     "clearContext" | "clearChat" | null
   >(null);
+  const [localPermissions, setLocalPermissions] =
+    useState<LocalDesktopPermissionSettings>(loadLocalPermissions);
+  const [localPermissionsOpen, setLocalPermissionsOpen] = useState(false);
+  const [pendingLocalAction, setPendingLocalAction] = useState<{
+    action: LocalDesktopAction;
+    text: string;
+    attachments: ChatAttachment[];
+    sessionId: string;
+    sessionTitle: string;
+  } | null>(null);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
 
   const { data: defaultModelData } = useQuery({
@@ -1712,6 +1960,10 @@ export function AskPage() {
   }, [knowledgeItems]);
 
   useEffect(() => {
+    persistLocalPermissions(localPermissions);
+  }, [localPermissions]);
+
+  useEffect(() => {
     setVisibleAskSessionId(activeSessionId || null);
     if (activeSessionId) {
       clearAskUnread(activeSessionId);
@@ -1772,6 +2024,92 @@ export function AskPage() {
       setAskSessionSending(sessionId, isSending);
     },
     [],
+  );
+
+  const runLocalDesktopAction = useCallback(
+    async (input: {
+      action: LocalDesktopAction;
+      text: string;
+      attachments: ChatAttachment[];
+      sessionId: string;
+      sessionTitle: string;
+    }) => {
+      const userMessage: ChatMessage = {
+        id: createId("user"),
+        role: "user",
+        text: input.text,
+        createdAt: Date.now(),
+        attachments: input.attachments,
+      };
+      const assistantMessageId = createId("assistant");
+      const assistantMessage: ChatMessage = {
+        id: assistantMessageId,
+        role: "assistant",
+        text: "",
+        createdAt: Date.now(),
+        modelLabel: "本机操作 | Claw-Pi",
+        streaming: true,
+      };
+
+      updateSessionMessages(input.sessionId, (previous, session) => ({
+        title:
+          previous.length === 0 && session.titleSource !== "manual"
+            ? buildSessionTitle(input.text, input.attachments, session.title)
+            : session.title,
+        titleSource:
+          previous.length === 0 && session.titleSource !== "manual"
+            ? "auto"
+            : session.titleSource,
+        messages: [...previous, userMessage, assistantMessage],
+      }));
+      setInput("");
+      setAttachments([]);
+      setSessionSending(input.sessionId, true);
+      markAskReplyStarted(input.sessionId, input.sessionTitle);
+      const startedAt = Date.now();
+
+      try {
+        const result = await executeLocalDesktopAction(input.action);
+        const detail = result.path || result.url;
+        updateSessionMessages(input.sessionId, (previous) => ({
+          messages: previous.map((message) =>
+            message.id === assistantMessageId
+              ? {
+                  ...message,
+                  text: result.ok
+                    ? `${result.message}${detail ? `\n${detail}` : ""}`
+                    : `本机操作失败：${result.message}`,
+                  durationMs: Date.now() - startedAt,
+                  streaming: false,
+                }
+              : message,
+          ),
+        }));
+      } catch (error) {
+        updateSessionMessages(input.sessionId, (previous) => ({
+          messages: previous.map((message) =>
+            message.id === assistantMessageId
+              ? {
+                  ...message,
+                  text: `本机操作失败：${
+                    error instanceof Error ? error.message : "未知错误"
+                  }`,
+                  durationMs: Date.now() - startedAt,
+                  streaming: false,
+                }
+              : message,
+          ),
+        }));
+      } finally {
+        setSessionSending(input.sessionId, false);
+        markAskReplyFinished({
+          sessionId: input.sessionId,
+          title: input.sessionTitle,
+          markUnread: !isAskSessionVisible(input.sessionId),
+        });
+      }
+    },
+    [setSessionSending, updateSessionMessages],
   );
 
   const compactSessionIfNeeded = useCallback(
@@ -2151,6 +2489,33 @@ export function AskPage() {
     );
     if (!text.trim()) return;
 
+    const localAction = detectLocalDesktopAction(text);
+    if (localAction) {
+      if (!isLocalActionAllowed(localAction, localPermissions)) {
+        setLocalPermissionsOpen(true);
+        toast.info(
+          localPermissions.mode === "basic"
+            ? t("ask.local.toast.enableFirst")
+            : t("ask.local.toast.actionDisabled"),
+        );
+        return;
+      }
+      const actionInput = {
+        action: localAction,
+        text,
+        attachments,
+        sessionId: targetSessionId,
+        sessionTitle: targetSessionTitle,
+      };
+      setLocalPermissionsOpen(false);
+      if (localPermissions.mode === "confirm") {
+        setPendingLocalAction(actionInput);
+        return;
+      }
+      await runLocalDesktopAction(actionInput);
+      return;
+    }
+
     const imageGenerationRequested = shouldGenerateImage(text, attachments);
     if (!currentModelId && !imageGenerationRequested) {
       toast.error(t("ask.toast.noModel"));
@@ -2383,8 +2748,10 @@ export function AskPage() {
     input,
     isRuntimeReady,
     knowledgeItems,
+    localPermissions,
     messages,
     navigate,
+    runLocalDesktopAction,
     sendingSessionIds,
     setSessionSending,
     t,
@@ -2921,6 +3288,24 @@ export function AskPage() {
                     />
                     <button
                       type="button"
+                      onClick={() => {
+                        setConfirmAction(null);
+                        setLocalPermissionsOpen((open) => !open);
+                      }}
+                      className={cn(
+                        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[#25262a] hover:text-text-primary",
+                        localPermissions.mode !== "basic"
+                          ? "text-[var(--color-brand-primary)]"
+                          : "text-text-muted",
+                      )}
+                      aria-label={t("ask.local.permissions")}
+                      title={t("ask.local.permissions")}
+                      aria-pressed={localPermissions.mode !== "basic"}
+                    >
+                      <ShieldCheck size={15} />
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={controlsDisabled}
                       className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-[#25262a] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -2973,6 +3358,134 @@ export function AskPage() {
                       </button>
                     ) : null}
                   </div>
+                  {localPermissionsOpen ? (
+                    <div className="absolute bottom-12 left-2 z-50 w-[360px] rounded-xl border border-[#303642] bg-[#171a20] p-3 shadow-2xl">
+                      <div className="flex items-start gap-2">
+                        <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-primary)]/15 text-[var(--color-brand-primary)]">
+                          <ShieldCheck size={15} />
+                        </span>
+                        <div className="min-w-0">
+                          <div className="text-[13px] font-semibold text-text-primary">
+                            {t("ask.local.title")}
+                          </div>
+                          <p className="mt-1 text-[11px] leading-5 text-text-muted">
+                            {t("ask.local.desc")}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-3 gap-1.5">
+                        {[
+                          {
+                            key: "basic",
+                            label: t("ask.local.mode.basic"),
+                            desc: t("ask.local.mode.basicDesc"),
+                            icon: ShieldCheck,
+                          },
+                          {
+                            key: "confirm",
+                            label: t("ask.local.mode.confirm"),
+                            desc: t("ask.local.mode.confirmDesc"),
+                            icon: FolderPlus,
+                          },
+                          {
+                            key: "full",
+                            label: t("ask.local.mode.full"),
+                            desc: t("ask.local.mode.fullDesc"),
+                            icon: Globe2,
+                          },
+                        ].map((item) => {
+                          const Icon = item.icon;
+                          const mode = item.key as LocalDesktopPermissionMode;
+                          const selected = localPermissions.mode === mode;
+                          return (
+                            <button
+                              key={item.key}
+                              type="button"
+                              onClick={() =>
+                                setLocalPermissions((previous) => ({
+                                  ...previous,
+                                  mode,
+                                }))
+                              }
+                              className={cn(
+                                "flex min-h-[92px] flex-col items-start rounded-lg border p-2 text-left transition-colors hover:bg-[#242933]",
+                                selected
+                                  ? "border-[var(--color-brand-primary)]/70 bg-[var(--color-brand-primary)]/10 text-text-primary"
+                                  : "border-white/10 bg-white/[0.02] text-text-secondary",
+                              )}
+                            >
+                              <span className="flex items-center gap-1.5 text-[12px] font-semibold">
+                                <Icon size={14} />
+                                <span>{item.label}</span>
+                              </span>
+                              <span className="mt-1 text-[10px] leading-4 text-text-muted">
+                                {item.desc}
+                              </span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-text-muted">
+                        {[
+                          {
+                            icon: Globe2,
+                            label: t("ask.local.capability.upload"),
+                          },
+                          {
+                            icon: FolderPlus,
+                            label: t("ask.local.capability.web"),
+                          },
+                          {
+                            icon: FileSpreadsheet,
+                            label: t("ask.local.capability.workspace"),
+                          },
+                        ].map(({ icon: CapabilityIcon, label }) => {
+                          return (
+                            <span
+                              key={label}
+                              className="inline-flex items-center gap-1 rounded-md border border-white/10 px-1.5 py-1"
+                            >
+                              <CapabilityIcon size={11} />
+                              {label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ) : null}
+                  {pendingLocalAction ? (
+                    <div className="absolute bottom-12 left-2 z-50 w-[260px] rounded-lg border border-[#303642] bg-[#1a1e26] p-3 shadow-2xl">
+                      <div className="text-[12px] font-medium text-text-primary">
+                        {t("ask.local.confirmTitle")}
+                      </div>
+                      <div className="mt-1 truncate text-[12px] text-text-secondary">
+                        {pendingLocalAction.action.label}
+                      </div>
+                      <div className="mt-1 text-[11px] text-text-muted">
+                        {t("ask.local.confirmHint")}
+                      </div>
+                      <div className="mt-3 flex items-center justify-end gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setPendingLocalAction(null)}
+                          className="h-7 rounded-md px-2.5 text-[12px] text-text-muted transition-colors hover:bg-[#252b35] hover:text-text-primary"
+                        >
+                          {t("ask.confirm.cancel")}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const action = pendingLocalAction;
+                            setPendingLocalAction(null);
+                            void runLocalDesktopAction(action);
+                          }}
+                          className="h-7 rounded-md bg-[var(--color-brand-primary)]/20 px-2.5 text-[12px] font-medium text-[var(--color-brand-primary)] transition-colors hover:bg-[var(--color-brand-primary)]/30"
+                        >
+                          {t("ask.confirm.confirm")}
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
                   {confirmAction ? (
                     <div className="absolute bottom-12 left-2 z-50 w-[220px] rounded-lg border border-[#303642] bg-[#1a1e26] p-3 shadow-2xl">
                       <div className="text-[12px] font-medium text-text-primary">

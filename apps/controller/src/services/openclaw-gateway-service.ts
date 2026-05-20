@@ -714,8 +714,10 @@ export class OpenClawGatewayService {
         };
       }
 
-      // WebSocket-based channels (Slack, Discord): connected === true
-      // Webhook-based channels (Feishu): running && configured && probe.ok
+      // WebSocket-based channels (Slack, Discord): connected === true.
+      // Channels like Feishu can keep `connected=false` while still being
+      // operational; mirror getAllChannelsLiveStatus so per-channel readiness
+      // does not contradict the global status pill.
       const isEnabled = snapshot.enabled !== false;
       if (!isEnabled) {
         return {
@@ -742,11 +744,19 @@ export class OpenClawGatewayService {
         snapshot.running === true &&
         snapshot.configured === true &&
         snapshot.probe?.ok === true;
+      const isOperationalWithoutProbe =
+        snapshot.running === true &&
+        snapshot.configured === true &&
+        !friendlyError;
       const isConfiguredReady =
         isConfiguredAsConnectedChannelType(channelType) &&
         snapshot.configured === true &&
         !friendlyError;
-      const ready = isConnected || isWebhookReady || isConfiguredReady;
+      const ready =
+        isConnected ||
+        isWebhookReady ||
+        isOperationalWithoutProbe ||
+        isConfiguredReady;
 
       return {
         ready,

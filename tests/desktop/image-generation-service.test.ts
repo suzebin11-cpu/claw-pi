@@ -87,8 +87,8 @@ describe("ImageGenerationService", () => {
       model: "gpt-image-1-mini",
       prompt: "a small green robot",
       size: "1024x1024",
-      response_format: "b64_json",
     });
+    expect(requests[0]?.body).not.toHaveProperty("response_format");
     expect(result.modelId).toBe("clawpi-image/gpt-image-1-mini");
     expect(result.url).toContain(
       "http://127.0.0.1:50800/api/internal/desktop/generated-images/",
@@ -99,7 +99,7 @@ describe("ImageGenerationService", () => {
     );
   });
 
-  it("retries without response_format when the upstream image endpoint rejects it", async () => {
+  it("omits response_format for OpenAI-compatible image endpoint compatibility", async () => {
     tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
     const requests: Array<{ body: Record<string, unknown> }> = [];
 
@@ -114,14 +114,6 @@ describe("ImageGenerationService", () => {
               unknown
             >,
           });
-          if (requests.length === 1) {
-            return new Response(
-              JSON.stringify({
-                error: { message: "Unknown parameter: response_format" },
-              }),
-              { status: 400, headers: { "Content-Type": "application/json" } },
-            );
-          }
           return new Response(
             JSON.stringify({ data: [{ b64_json: ONE_PIXEL_PNG }] }),
             { status: 200, headers: { "Content-Type": "application/json" } },
@@ -134,11 +126,8 @@ describe("ImageGenerationService", () => {
       prompt: "a small green robot",
     });
 
-    expect(requests).toHaveLength(2);
-    expect(requests[0]?.body).toMatchObject({
-      response_format: "b64_json",
-    });
-    expect(requests[1]?.body).not.toHaveProperty("response_format");
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).not.toHaveProperty("response_format");
     expect(result.filePath).toMatch(/generated-images[\\/].+\.png$/u);
   });
 });

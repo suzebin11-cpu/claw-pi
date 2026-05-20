@@ -575,7 +575,9 @@ export class ModelProviderService {
       .some((provider) => provider.models.length > 0);
 
     return {
-      hasKnownInventory: desktopCloud.hasCloudInventory || hasByokInventory,
+      hasKnownInventory:
+        (desktopCloud.connected && desktopCloud.hasCloudInventory) ||
+        hasByokInventory,
     };
   }
 
