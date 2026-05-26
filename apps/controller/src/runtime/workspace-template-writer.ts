@@ -16,6 +16,8 @@ interface BotInfo {
   status: string;
 }
 
+const DEFAULT_AGENT_ID = "main";
+
 const LEGACY_AGENTS_EVERY_SESSION_BLOCK = `Before doing anything else:
 
 1. Read \`SOUL.md\` — this is who you are
@@ -35,11 +37,23 @@ recent context, or long-term memory:
 - \`memory/YYYY-MM-DD.md\` — recent context
 - \`MEMORY.md\` — long-term memory, main sessions only`;
 
+const TASK_EXECUTION_BLOCK = `## Claw Pi Task Execution
+
+- For desktop, file, browser, app, image, or local-machine tasks, actually use the available tools. A plan or status sentence is not a final answer.
+- Continue until the task has a concrete result, a produced artifact/path/link, or a real blocker with the exact missing input.
+- Treat read, search, extract, summarize, and analyze requests as read-only by default. Do not create, save, export, or modify files unless the user explicitly asks for that.
+- If the user provides uploaded attachment paths, read those exact paths first. Do not ignore them and search the desktop for same-named files.
+- If a model or API error says quota, balance, credits, or billing is insufficient, reply exactly: \`余额不足，请及时充值\``;
+
 export class WorkspaceTemplateWriter {
   constructor(private readonly env: ControllerEnv) {}
 
   async write(bots: BotInfo[]): Promise<void> {
     const activeBots = bots.filter((bot) => bot.status === "active");
+    const targetBotIds = new Set([
+      DEFAULT_AGENT_ID,
+      ...activeBots.map((bot) => bot.id).filter(Boolean),
+    ]);
     const sourceDir = this.env.platformTemplatesDir;
 
     if (!sourceDir) {
@@ -53,8 +67,8 @@ export class WorkspaceTemplateWriter {
       return;
     }
 
-    for (const bot of activeBots) {
-      await this.seedPlatformTemplates(bot.id, sourceDir);
+    for (const botId of targetBotIds) {
+      await this.seedPlatformTemplates(botId, sourceDir);
     }
   }
 
@@ -82,11 +96,16 @@ export class WorkspaceTemplateWriter {
         if (existsSync(targetPath)) {
           if (entry.name === "AGENTS.md") {
             await this.migrateLegacyAgentsTemplate(targetPath, botId);
+            await this.ensureTaskExecutionBlock(targetPath, botId);
           }
           continue;
         }
 
         await cp(sourcePath, targetPath, { recursive: true });
+        if (entry.name === "AGENTS.md") {
+          await this.migrateLegacyAgentsTemplate(targetPath, botId);
+          await this.ensureTaskExecutionBlock(targetPath, botId);
+        }
         seeded++;
       }
 
@@ -131,6 +150,30 @@ export class WorkspaceTemplateWriter {
       logger.warn(
         { botId, targetPath, error: err instanceof Error ? err.message : err },
         "failed to migrate legacy AGENTS.md startup instructions",
+      );
+    }
+  }
+
+  private async ensureTaskExecutionBlock(
+    targetPath: string,
+    botId: string,
+  ): Promise<void> {
+    try {
+      const content = await readFile(targetPath, "utf8");
+      if (content.includes("## Claw Pi Task Execution")) {
+        return;
+      }
+
+      const nextContent = `${content.trimEnd()}\n\n${TASK_EXECUTION_BLOCK}\n`;
+      await writeFile(targetPath, nextContent, "utf8");
+      logger.info(
+        { botId, targetPath },
+        "added task execution instructions to AGENTS.md",
+      );
+    } catch (err) {
+      logger.warn(
+        { botId, targetPath, error: err instanceof Error ? err.message : err },
+        "failed to add task execution instructions to AGENTS.md",
       );
     }
   }

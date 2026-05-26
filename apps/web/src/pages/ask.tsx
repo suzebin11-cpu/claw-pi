@@ -15,8 +15,8 @@ import {
   BookOpen,
   Copy,
   Download,
-  FileText,
   FileSpreadsheet,
+  FileText,
   FolderPlus,
   Globe2,
   ImageIcon,
@@ -54,7 +54,6 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
-  getApiInternalDesktopDefaultImageModel,
   getApiInternalDesktopDefaultModel,
   getApiInternalDesktopReady,
   getApiV1Models,
@@ -138,50 +137,16 @@ type ChatCompletionMessage = {
       >;
 };
 
-type ImageGenerationResult = {
-  ok: true;
-  id: string;
-  modelId: string;
-  prompt: string;
-  url: string;
-  markdown: string;
-  durationMs: number;
-};
-
-type ImageGenerationError = {
-  ok: false;
-  error: string;
-};
-
 type LocalDesktopPermissionMode = "basic" | "confirm" | "full";
+type WorkbenchRequestRoute =
+  | "chat"
+  | "image_generation"
+  | "read_only_agent"
+  | "write_agent";
+type AgentExecutionMode = "read_only" | "write";
 
 type LocalDesktopPermissionSettings = {
   mode: LocalDesktopPermissionMode;
-};
-
-type LocalDesktopActionType =
-  | "openUrl"
-  | "openPath"
-  | "createFolder"
-  | "createTextFile"
-  | "createSpreadsheet";
-
-type LocalDesktopAction = {
-  action: LocalDesktopActionType;
-  label: string;
-  url?: string;
-  target?: "desktop" | "documents" | "downloads" | "home";
-  name?: string;
-  content?: string;
-  rows?: string[][];
-};
-
-type LocalDesktopActionResponse = {
-  ok: boolean;
-  action: string;
-  message: string;
-  path?: string;
-  url?: string;
 };
 
 type StreamedCompletionResult = {
@@ -201,6 +166,7 @@ const MAX_CONTEXT_SUMMARY_CHARS = 4_000;
 const MAX_ATTACHMENTS = 6;
 const MAX_IMAGE_BYTES = 6 * 1024 * 1024;
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
+const MAX_FILE_BYTES = 15 * 1024 * 1024;
 const MAX_TEXT_CHARS = 12_000;
 const MAX_STORED_SESSIONS = 40;
 const MAX_PERSISTED_IMAGE_CHARS = 1_500_000;
@@ -212,9 +178,12 @@ const ASK_SESSIONS_STORAGE_KEY = "claw-pi.ask.sessions.v1";
 const ASK_ACTIVE_SESSION_STORAGE_KEY = "claw-pi.ask.activeSessionId.v1";
 const ASK_KNOWLEDGE_STORAGE_KEY = "claw-pi.ask.knowledge.v1";
 const ASK_LOCAL_PERMISSIONS_STORAGE_KEY = "claw-pi.ask.localPermissions.v1";
+const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
+const AGENT_HISTORY_CONTEXT_CHARS = 5_000;
+const AGENT_HISTORY_CONTEXT_MESSAGES = 8;
 
 const DEFAULT_LOCAL_PERMISSIONS: LocalDesktopPermissionSettings = {
-  mode: "basic",
+  mode: "full",
 };
 
 const TEXT_EXTENSIONS = new Set([
@@ -449,7 +418,7 @@ function loadLocalPermissions(): LocalDesktopPermissionSettings {
       enabled: boolean;
       mode: string;
     }>;
-    let mode: LocalDesktopPermissionMode = "basic";
+    let mode: LocalDesktopPermissionMode = DEFAULT_LOCAL_PERMISSIONS.mode;
     if (candidate.mode === "basic" || candidate.mode === "confirm") {
       mode = candidate.mode;
     } else if (candidate.mode === "full") {
@@ -727,19 +696,31 @@ async function readAttachment(
       toast.error(t("ask.toast.textTooLarge", { name: file.name }));
       return null;
     }
-    const rawText = await file.text();
+    const [rawText, dataUrl] = await Promise.all([
+      file.text(),
+      readAsDataUrl(file),
+    ]);
     const truncated = rawText.length > MAX_TEXT_CHARS;
     if (truncated) {
       toast.info(t("ask.toast.textTrimmed", { name: file.name }));
     }
     return {
       ...attachment,
+      dataUrl,
       text: truncated ? rawText.slice(0, MAX_TEXT_CHARS) : rawText,
       truncated,
     };
   }
 
-  return attachment;
+  if (file.size > MAX_FILE_BYTES) {
+    toast.error(t("ask.toast.fileTooLarge", { name: file.name }));
+    return null;
+  }
+
+  return {
+    ...attachment,
+    dataUrl: await readAsDataUrl(file),
+  };
 }
 
 function getClipboardFiles(dataTransfer: DataTransfer): File[] {
@@ -765,174 +746,10 @@ function attachmentSummary(attachment: ChatAttachment): string {
 
 function buildDisplayText(
   input: string,
-  attachments: ChatAttachment[],
-  fallbackPrompt: string,
 ): string {
   const trimmed = input.trim();
   if (trimmed.length > 0) return trimmed;
-  if (attachments.length > 0) return fallbackPrompt;
   return "";
-}
-
-function extractQuotedName(text: string): string | undefined {
-  const quoted = text.match(/[“"「『《](.*?)[”"」』》]/u)?.[1]?.trim();
-  if (quoted) return quoted;
-  return text.match(/(?:叫做|叫|命名为|名为|名称是|named)\s*([^\n，。,.]{1,60})/iu)?.[1]?.trim();
-}
-
-function detectLocalTarget(text: string): LocalDesktopAction["target"] {
-  if (/(?:下载|downloads?)/iu.test(text)) return "downloads";
-  if (/(?:文档|documents?)/iu.test(text)) return "documents";
-  if (/(?:主目录|home)/iu.test(text)) return "home";
-  return "desktop";
-}
-
-function hasLocalPlaceIntent(text: string): boolean {
-  return /(?:本机|电脑|桌面|下载|文档|主目录|本地|desktop|downloads?|documents?|home)/iu.test(
-    text,
-  );
-}
-
-function extractActionContent(text: string): string {
-  const matched = text.match(/(?:内容是|写入|填入|填写|包含)\s*([\s\S]+)$/iu)?.[1];
-  return (matched ?? "").trim();
-}
-
-function rowsFromText(content: string): string[][] | undefined {
-  if (!content.trim()) return undefined;
-  const rows = content
-    .split(/\r?\n/u)
-    .map((line) =>
-      line
-        .split(/\t|,|，/u)
-        .map((cell) => cell.trim())
-        .filter(Boolean),
-    )
-    .filter((row) => row.length > 0)
-    .slice(0, 200);
-  return rows.length > 0 ? rows : undefined;
-}
-
-function ensureUrlProtocol(rawUrl: string): string {
-  const trimmed = rawUrl.trim();
-  if (/^https?:\/\//iu.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
-}
-
-function detectLocalDesktopAction(text: string): LocalDesktopAction | null {
-  const normalized = text.trim();
-  if (!normalized) return null;
-
-  const urlMatch = normalized.match(
-    /\bhttps?:\/\/[^\s"'<>，。]+|\b(?:www\.)[^\s"'<>，。]+/iu,
-  );
-  if (
-    urlMatch &&
-    /(?:打开|访问|浏览|open|visit|launch).{0,12}(?:网页|网站|链接|网址|url|browser|website|page)?/iu.test(
-      normalized,
-    )
-  ) {
-    return {
-      action: "openUrl",
-      label: `打开网页：${urlMatch[0]}`,
-      url: ensureUrlProtocol(urlMatch[0]),
-    };
-  }
-
-  if (/(?:打开|open).{0,8}(?:桌面|下载|文档|文件夹|folder|downloads?|documents?)/iu.test(normalized)) {
-    return {
-      action: "openPath",
-      label: "打开本机位置",
-      target: detectLocalTarget(normalized),
-    };
-  }
-
-  if (
-    hasLocalPlaceIntent(normalized) &&
-    /(?:创建|新建|生成|建立|create|make).{0,16}(?:文件夹|folder)/iu.test(
-      normalized,
-    )
-  ) {
-    return {
-      action: "createFolder",
-      label: "创建文件夹",
-      target: detectLocalTarget(normalized),
-      name: extractQuotedName(normalized) ?? "Claw-Pi 文件夹",
-    };
-  }
-
-  if (
-    hasLocalPlaceIntent(normalized) &&
-    /(?:创建|新建|生成|建立|create|make).{0,16}(?:excel|xlsx|xls|表格|电子表格|spreadsheet)/iu.test(
-      normalized,
-    )
-  ) {
-    const content = extractActionContent(normalized);
-    return {
-      action: "createSpreadsheet",
-      label: "创建 Excel 表格",
-      target: detectLocalTarget(normalized),
-      name: extractQuotedName(normalized) ?? "Claw-Pi 表格.xls",
-      content,
-      rows: rowsFromText(content),
-    };
-  }
-
-  if (
-    hasLocalPlaceIntent(normalized) &&
-    /(?:创建|新建|生成|建立|create|make).{0,16}(?:txt|文本|文档|文件|markdown|md)/iu.test(
-      normalized,
-    )
-  ) {
-    return {
-      action: "createTextFile",
-      label: "创建文本文件",
-      target: detectLocalTarget(normalized),
-      name: extractQuotedName(normalized) ?? "Claw-Pi 文档.txt",
-      content: extractActionContent(normalized),
-    };
-  }
-
-  return null;
-}
-
-function isLocalActionAllowed(
-  action: LocalDesktopAction,
-  permissions: LocalDesktopPermissionSettings,
-): boolean {
-  if (permissions.mode === "basic") {
-    return action.action === "openUrl";
-  }
-  if (permissions.mode === "confirm") {
-    return [
-      "openUrl",
-      "openPath",
-      "createFolder",
-      "createTextFile",
-      "createSpreadsheet",
-    ].includes(action.action);
-  }
-  return true;
-}
-
-async function executeLocalDesktopAction(
-  action: LocalDesktopAction,
-): Promise<LocalDesktopActionResponse> {
-  const response = await fetch(getApiUrl("/api/internal/desktop/local-actions"), {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(action),
-  });
-  const payload = (await response.json().catch(() => null)) as
-    | LocalDesktopActionResponse
-    | null;
-  if (!response.ok || !payload) {
-    throw new Error("本机操作执行失败");
-  }
-  return payload;
 }
 
 function buildPlainHistoryText(message: ChatMessage): string {
@@ -1165,106 +982,195 @@ function buildCurrentUserPayload(input: {
   };
 }
 
-function shouldGenerateImage(
-  text: string,
-  attachments: ChatAttachment[],
-): boolean {
-  const normalized = text.trim().toLowerCase();
-  if (!normalized) return false;
+function extractChatContentText(
+  content: ChatCompletionMessage["content"],
+): string {
+  if (typeof content === "string") return content;
+  return content
+    .flatMap((part) => (part.type === "text" ? [part.text] : []))
+    .join("\n")
+    .trim();
+}
 
-  const analysisOnly =
-    /(?:分析|识别|看看|解释|总结|描述|读一下|提取|ocr|看一下|评价).{0,12}(?:图|图片|照片|image|picture|photo)/iu.test(
-      normalized,
-    ) ||
-    /(?:图|图片|照片|image|picture|photo).{0,12}(?:分析|识别|解释|总结|描述|ocr)/iu.test(
-      normalized,
-    );
-  if (analysisOnly) return false;
+function isInsufficientBalanceError(message: string): boolean {
+  return /(?:token quota is not enough|need quota|insufficient (?:balance|quota|credits?)|quota.+not enough|余额不足|额度不足|余额不够|充值)/iu.test(
+    message,
+  );
+}
 
-  if (
-    /(?:生图|生成(?:一张|个|张)?(?:图片|图|照片|海报|插画|壁纸)|画(?:一张|个|一下)?|做(?:一张|个)?(?:图片|图|海报|封面|壁纸)|出图|文生图|图生图|改图|修图|重绘|重新画|生成.*(?:png|jpg|jpeg|webp))/iu.test(
-      normalized,
+function normalizeWorkbenchErrorMessage(message: string): string {
+  return isInsufficientBalanceError(message)
+    ? INSUFFICIENT_BALANCE_MESSAGE
+    : message;
+}
+
+function getMessageContentForIntent(message: ChatMessage): string {
+  const attachmentText = (message.attachments ?? [])
+    .map(
+      (attachment) =>
+        `${attachment.name} ${attachment.type} ${attachment.kind}`,
     )
-  ) {
-    return true;
-  }
+    .join(" ");
+  return `${message.text} ${attachmentText}`.trim();
+}
 
-  if (
-    /(?:generate|create|draw|render|make)\s+(?:an?\s+)?(?:image|picture|photo|poster|illustration|wallpaper)/iu.test(
-      normalized,
+function buildRecentHistoryContext(messages: ChatMessage[]): string {
+  const blocks = messages
+    .filter((message) => !message.streaming)
+    .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
+    .map((message) => {
+      const label = message.role === "user" ? "用户" : "助手";
+      const text =
+        message.role === "user" ? buildPlainHistoryText(message) : message.text;
+      return `${label}：${text.trim()}`;
+    })
+    .filter((block) => !/：\s*$/u.test(block));
+  const context = blocks.join("\n\n");
+  if (context.length <= AGENT_HISTORY_CONTEXT_CHARS) return context;
+  return context.slice(context.length - AGENT_HISTORY_CONTEXT_CHARS);
+}
+
+function isContinuationText(text: string): boolean {
+  return /^(?:继续|接着|继续处理|继续执行|好的继续|然后呢|然后|是的|好的|ok|嗯|行)$/iu.test(
+    text.trim(),
+  );
+}
+
+function hasRecentAgentTaskContext(messages: ChatMessage[]): boolean {
+  const recent = messages
+    .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
+    .map(getMessageContentForIntent)
+    .join("\n");
+  return /(?:桌面|onedrive|本机|电脑|文件|目录|路径|pdf|excel|word|ppt|简历|安装包|应用|网页|浏览器|截图|图片|生图|改图|图生图|读取|查找|搜索|定位|提取|总结|分析|运行|执行|重启|安装|下载|生成|处理|修复|验证|测试)/iu.test(
+    recent,
+  );
+}
+
+function hasRecentImageGenerationContext(messages: ChatMessage[]): boolean {
+  const recent = messages
+    .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
+    .map(getMessageContentForIntent)
+    .join("\n");
+  return /(?:生图|生成图片|画一张|画个|改图|修图|图生图|换背景|生成.*海报|image_generate|generate (?:an? )?image|create (?:an? )?image|edit (?:the )?image)/iu.test(
+    recent,
+  );
+}
+
+function classifyWorkbenchRequest(input: {
+  text: string;
+  attachments: ChatAttachment[];
+  permissionMode: LocalDesktopPermissionMode;
+  recentMessages: ChatMessage[];
+}): WorkbenchRequestRoute {
+  const normalized = input.text.replace(/\s+/gu, " ").trim();
+  const attachmentSummary = input.attachments
+    .map(
+      (attachment) =>
+        `${attachment.name} ${attachment.type} ${attachment.kind}`,
     )
-  ) {
-    return true;
-  }
-
-  const hasImageAttachment = attachments.some(
+    .join(" ");
+  const haystack = `${normalized} ${attachmentSummary}`;
+  const hasAttachment = input.attachments.length > 0;
+  const hasImageAttachment = input.attachments.some(
     (attachment) => attachment.kind === "image",
   );
-  return (
-    hasImageAttachment &&
-    /(?:修改|改成|换成|去掉|加上|变成|重绘|修一下|edit|remake|replace|remove|add)/iu.test(
-      normalized,
-    )
-  );
-}
 
-function detectImageSize(text: string): string | undefined {
-  const normalized = text.trim();
-  const explicitSize = normalized.match(
-    /\b(1024x1024|1024x1536|1536x1024|2048x1152|1152x2048)\b/iu,
-  )?.[1];
-  if (explicitSize) return explicitSize;
-  if (/\b(?:16:9|3:2|landscape|横版|横屏|宽屏)\b/iu.test(normalized)) {
-    return "1536x1024";
-  }
-  if (/\b(?:9:16|2:3|portrait|竖版|竖屏|手机壁纸)\b/iu.test(normalized)) {
-    return "1024x1536";
-  }
-  if (/\b(?:1:1|square|方图|方形)\b/iu.test(normalized)) {
-    return "1024x1024";
-  }
-  return undefined;
-}
-
-async function generateImage(input: {
-  prompt: string;
-  attachments: ChatAttachment[];
-  modelId?: string | null;
-  signal: AbortSignal;
-}): Promise<ImageGenerationResult> {
-  const inputImages = input.attachments
-    .filter((attachment) => attachment.kind === "image" && attachment.dataUrl)
-    .map((attachment) => attachment.dataUrl as string)
-    .slice(0, 4);
-
-  const response = await fetch(
-    getApiUrl("/api/internal/desktop/images/generations"),
-    {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        prompt: input.prompt,
-        modelId: input.modelId || undefined,
-        size: detectImageSize(input.prompt),
-        inputImages: inputImages.length > 0 ? inputImages : undefined,
-      }),
-      signal: input.signal,
-    },
-  );
-
-  const payload = (await response.json().catch(() => null)) as
-    | ImageGenerationResult
-    | ImageGenerationError
-    | null;
-  if (!response.ok || !payload?.ok) {
-    throw new Error(
-      payload && "error" in payload ? payload.error : "Image generation failed",
+  const imageGenerationRequest =
+    /(?:生图|生成图片|画一张|画个|改图|修图|图生图|换背景|生成.*海报|generate (?:an? )?image|create (?:an? )?image|edit (?:the )?image)/iu.test(
+      haystack,
     );
+  if (
+    imageGenerationRequest ||
+    (hasImageAttachment && hasRecentImageGenerationContext(input.recentMessages))
+  ) {
+    return "image_generation";
   }
-  return payload;
+
+  const writeRequest =
+    /(?:创建|新建|写入|保存|另存|导出|生成(?:一个|一份|成)?(?:文件|文档|docx|excel|表格|ppt|pdf)|修改|编辑|删除|移动|复制|重命名|运行|执行|重启|安装|下载|打包|发布|提交|替换|覆盖|添加|新增|插入|追加|补充|填入|录入|登记|更新|改成|加(?:上|入|到|一行|一列|一条))/iu.test(
+      haystack,
+    ) ||
+    /\b(?:create|write|save|export|modify|edit|delete|move|copy|rename|run|execute|restart|install|download|package|publish|add|insert|append|update)\b/iu.test(
+      haystack,
+    );
+  if (writeRequest) {
+    return "write_agent";
+  }
+
+  const explicitLocalContext =
+    /(?:桌面|onedrive|本机|电脑|本地|下载目录|文档目录|文件夹|目录|路径|浏览器|网页|应用|程序|安装包|desktop|downloads?|documents?|folder|path|browser|app|installer)/iu.test(
+      normalized,
+    );
+  if (hasAttachment && !explicitLocalContext) {
+    return "chat";
+  }
+
+  const readOnlyRequest =
+    /(?:桌面|onedrive|本机|电脑|文件|目录|路径|pdf|excel|word|ppt|简历|安装包|网页|浏览器|截图)/iu.test(
+      haystack,
+    ) ||
+    /(?:查找|搜索|定位|读取|打开看看|提取|总结|分析|查看)(?:[^。！？.!?\n]{0,50})(?:文件|目录|路径|桌面|电脑|本机|网页|简历|pdf|excel|word|ppt)/iu.test(
+      haystack,
+    ) ||
+    /\b(?:find|search|locate|read|extract|summarize|analyze|inspect)\b(?:[^.!?\n]{0,60})\b(?:file|folder|path|desktop|computer|pdf|excel|word|ppt|resume|webpage)\b/iu.test(
+      haystack,
+    );
+  if (readOnlyRequest) {
+    return "read_only_agent";
+  }
+
+  if (
+    isContinuationText(normalized) &&
+    hasRecentAgentTaskContext(input.recentMessages)
+  ) {
+    return "read_only_agent";
+  }
+
+  return "chat";
+}
+
+function buildAgentWorkbenchMessage(input: {
+  text: string;
+  attachments: ChatAttachment[];
+  summaryMessage: ChatCompletionMessage | null;
+  knowledgeMessage: ChatCompletionMessage | null;
+  recentHistoryContext: string;
+}): string {
+  const contextBlocks = [
+    input.summaryMessage
+      ? `历史摘要：\n${extractChatContentText(input.summaryMessage.content)}`
+      : "",
+    input.knowledgeMessage
+      ? `知识库资料：\n${extractChatContentText(input.knowledgeMessage.content)}`
+      : "",
+    input.recentHistoryContext
+      ? `最近对话：\n${input.recentHistoryContext}`
+      : "",
+  ].filter(Boolean);
+  const currentUserText = extractChatContentText(
+    buildCurrentUserPayload({
+      text: input.text,
+      attachments: input.attachments,
+    }).content,
+  );
+  const attachmentOnlyPrompt =
+    currentUserText || input.attachments.length === 0
+      ? ""
+      : [
+          "用户刚上传了附件但没有输入文字说明。请结合最近对话判断用户意图，然后直接替用户完成对应任务。",
+          "如果最近上下文无法判断具体需求，请简要说明你已经看到附件，并询问用户希望如何处理；不要把本段内部说明复述成用户原文。",
+          `附件：${input.attachments.map(attachmentSummary).join("；")}`,
+        ].join("\n");
+
+  if (contextBlocks.length === 0) {
+    return currentUserText || attachmentOnlyPrompt || input.text;
+  }
+
+  return [
+    "以下是龙虾工作台传入的上下文，只用于理解当前问题；真正要回答的是最后的用户当前消息。",
+    contextBlocks.join("\n\n---\n\n"),
+    `用户当前消息：\n${currentUserText || attachmentOnlyPrompt || input.text}`,
+  ].join("\n\n");
 }
 
 async function readStreamedCompletion(
@@ -1360,51 +1266,44 @@ async function readStreamedCompletion(
   return { text: assistantText, usage };
 }
 
-async function fetchChatCompletionStream(input: {
+async function fetchAgentChatStream(input: {
+  sessionId: string;
   modelId: string;
-  messages: ChatCompletionMessage[];
+  message: string;
+  attachments: ChatAttachment[];
+  permissionMode: LocalDesktopPermissionMode;
+  executionMode: AgentExecutionMode;
   signal: AbortSignal;
 }): Promise<Response> {
-  const body = {
-    model: input.modelId,
-    messages: input.messages,
-    stream: true,
-    metadata: {
-      source: "claw-pi-ask",
-      clawpiDynamicSkills: true,
+  const response = await fetch(getApiUrl("/api/internal/agent-chat/stream"), {
+    method: "POST",
+    credentials: "include",
+    headers: {
+      "Content-Type": "application/json",
     },
-  };
-  const request = (
-    payload: typeof body & { stream_options?: { include_usage: boolean } },
-  ) =>
-    fetch(getApiUrl("/v1/chat/completions"), {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-      signal: input.signal,
-    });
-
-  const response = await request({
-    ...body,
-    stream_options: { include_usage: true },
+    body: JSON.stringify({
+      sessionId: input.sessionId,
+      modelId: input.modelId || undefined,
+      message: input.message,
+      permissionMode: input.permissionMode,
+      executionMode: input.executionMode,
+      attachments: input.attachments.map((attachment) => ({
+        name: attachment.name,
+        type: attachment.type,
+        kind: attachment.kind,
+        size: attachment.size,
+        dataUrl: attachment.dataUrl,
+      })),
+    }),
+    signal: input.signal,
   });
+
   if (response.ok) return response;
-
-  const errorText = await response.text();
-  if (
-    /stream_options|include_usage|unsupported|unrecognized|unknown parameter/iu.test(
-      errorText,
-    )
-  ) {
-    const fallbackResponse = await request(body);
-    if (fallbackResponse.ok) return fallbackResponse;
-    throw new Error((await fallbackResponse.text()) || errorText);
-  }
-
-  throw new Error(errorText);
+  throw new Error(
+    normalizeWorkbenchErrorMessage(
+      (await response.text()) || "OpenClaw agent chat failed",
+    ),
+  );
 }
 
 async function compactSessionContext(input: {
@@ -1803,13 +1702,6 @@ export function AskPage() {
   const [localPermissions, setLocalPermissions] =
     useState<LocalDesktopPermissionSettings>(loadLocalPermissions);
   const [localPermissionsOpen, setLocalPermissionsOpen] = useState(false);
-  const [pendingLocalAction, setPendingLocalAction] = useState<{
-    action: LocalDesktopAction;
-    text: string;
-    attachments: ChatAttachment[];
-    sessionId: string;
-    sessionTitle: string;
-  } | null>(null);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
 
   const { data: defaultModelData } = useQuery({
@@ -1819,15 +1711,6 @@ export function AskPage() {
       return data as { modelId: string | null } | undefined;
     },
     refetchInterval: 5_000,
-  });
-
-  const { data: defaultImageModelData } = useQuery({
-    queryKey: ["desktop-default-image-model"],
-    queryFn: async () => {
-      const { data } = await getApiInternalDesktopDefaultImageModel();
-      return data as { modelId: string | null } | undefined;
-    },
-    refetchInterval: 10_000,
   });
 
   const { data: runtimeStatus } = useQuery({
@@ -1855,7 +1738,6 @@ export function AskPage() {
     [modelsData],
   );
   const currentModelId = defaultModelData?.modelId ?? "";
-  const currentImageModelId = defaultImageModelData?.modelId ?? "";
   const assistantLabel = getAssistantDisplayName(currentModelId);
   const pickerModels = useMemo(() => {
     if (
@@ -2024,92 +1906,6 @@ export function AskPage() {
       setAskSessionSending(sessionId, isSending);
     },
     [],
-  );
-
-  const runLocalDesktopAction = useCallback(
-    async (input: {
-      action: LocalDesktopAction;
-      text: string;
-      attachments: ChatAttachment[];
-      sessionId: string;
-      sessionTitle: string;
-    }) => {
-      const userMessage: ChatMessage = {
-        id: createId("user"),
-        role: "user",
-        text: input.text,
-        createdAt: Date.now(),
-        attachments: input.attachments,
-      };
-      const assistantMessageId = createId("assistant");
-      const assistantMessage: ChatMessage = {
-        id: assistantMessageId,
-        role: "assistant",
-        text: "",
-        createdAt: Date.now(),
-        modelLabel: "本机操作 | Claw-Pi",
-        streaming: true,
-      };
-
-      updateSessionMessages(input.sessionId, (previous, session) => ({
-        title:
-          previous.length === 0 && session.titleSource !== "manual"
-            ? buildSessionTitle(input.text, input.attachments, session.title)
-            : session.title,
-        titleSource:
-          previous.length === 0 && session.titleSource !== "manual"
-            ? "auto"
-            : session.titleSource,
-        messages: [...previous, userMessage, assistantMessage],
-      }));
-      setInput("");
-      setAttachments([]);
-      setSessionSending(input.sessionId, true);
-      markAskReplyStarted(input.sessionId, input.sessionTitle);
-      const startedAt = Date.now();
-
-      try {
-        const result = await executeLocalDesktopAction(input.action);
-        const detail = result.path || result.url;
-        updateSessionMessages(input.sessionId, (previous) => ({
-          messages: previous.map((message) =>
-            message.id === assistantMessageId
-              ? {
-                  ...message,
-                  text: result.ok
-                    ? `${result.message}${detail ? `\n${detail}` : ""}`
-                    : `本机操作失败：${result.message}`,
-                  durationMs: Date.now() - startedAt,
-                  streaming: false,
-                }
-              : message,
-          ),
-        }));
-      } catch (error) {
-        updateSessionMessages(input.sessionId, (previous) => ({
-          messages: previous.map((message) =>
-            message.id === assistantMessageId
-              ? {
-                  ...message,
-                  text: `本机操作失败：${
-                    error instanceof Error ? error.message : "未知错误"
-                  }`,
-                  durationMs: Date.now() - startedAt,
-                  streaming: false,
-                }
-              : message,
-          ),
-        }));
-      } finally {
-        setSessionSending(input.sessionId, false);
-        markAskReplyFinished({
-          sessionId: input.sessionId,
-          title: input.sessionTitle,
-          markUnread: !isAskSessionVisible(input.sessionId),
-        });
-      }
-    },
-    [setSessionSending, updateSessionMessages],
   );
 
   const compactSessionIfNeeded = useCallback(
@@ -2482,42 +2278,17 @@ export function AskPage() {
       return;
     }
 
-    const text = buildDisplayText(
-      input,
+    const text = buildDisplayText(input);
+    if (!text.trim() && attachments.length === 0) return;
+
+    const workbenchRoute = classifyWorkbenchRequest({
+      text,
       attachments,
-      t("ask.defaultAttachmentPrompt"),
-    );
-    if (!text.trim()) return;
+      permissionMode: localPermissions.mode,
+      recentMessages: messages,
+    });
 
-    const localAction = detectLocalDesktopAction(text);
-    if (localAction) {
-      if (!isLocalActionAllowed(localAction, localPermissions)) {
-        setLocalPermissionsOpen(true);
-        toast.info(
-          localPermissions.mode === "basic"
-            ? t("ask.local.toast.enableFirst")
-            : t("ask.local.toast.actionDisabled"),
-        );
-        return;
-      }
-      const actionInput = {
-        action: localAction,
-        text,
-        attachments,
-        sessionId: targetSessionId,
-        sessionTitle: targetSessionTitle,
-      };
-      setLocalPermissionsOpen(false);
-      if (localPermissions.mode === "confirm") {
-        setPendingLocalAction(actionInput);
-        return;
-      }
-      await runLocalDesktopAction(actionInput);
-      return;
-    }
-
-    const imageGenerationRequested = shouldGenerateImage(text, attachments);
-    if (!currentModelId && !imageGenerationRequested) {
+    if (!currentModelId) {
       toast.error(t("ask.toast.noModel"));
       navigate("/workspace/models");
       return;
@@ -2536,9 +2307,7 @@ export function AskPage() {
       role: "assistant",
       text: "",
       createdAt: Date.now(),
-      modelLabel: getAssistantDisplayName(
-        imageGenerationRequested ? currentImageModelId : currentModelId,
-      ),
+      modelLabel: getAssistantDisplayName(currentModelId),
       streaming: true,
     };
 
@@ -2556,13 +2325,21 @@ export function AskPage() {
       .map(serializeHistoryMessage)
       .filter((message): message is ChatCompletionMessage => message !== null)
       .slice(-MAX_CONTEXT_MESSAGES);
-    const payloadMessages = [
+    let payloadMessages = [
       ...(summaryMessage ? [summaryMessage] : []),
       ...(knowledgeMessage ? [knowledgeMessage] : []),
       ...history,
       buildCurrentUserPayload({ text, attachments }),
     ];
-    const inputTokenEstimate = estimateTokensFromMessages(payloadMessages);
+    const recentHistoryContext = buildRecentHistoryContext(messages);
+    const agentWorkbenchMessage = buildAgentWorkbenchMessage({
+      text,
+      attachments,
+      summaryMessage,
+      knowledgeMessage,
+      recentHistoryContext,
+    });
+    let inputTokenEstimate = estimateTokensFromMessages(payloadMessages);
 
     updateSessionMessages(targetSessionId, (previous, session) => ({
       title:
@@ -2586,63 +2363,19 @@ export function AskPage() {
     const requestStartedAt = Date.now();
 
     try {
-      if (imageGenerationRequested) {
-        const result = await generateImage({
-          prompt: text,
-          attachments,
-          modelId: currentImageModelId,
-          signal: controller.signal,
-        });
-        updateSessionMessages(targetSessionId, (previous) => ({
-          messages: previous.map((message) =>
-            message.id === assistantMessageId
-              ? {
-                  ...message,
-                  text: result.markdown,
-                  usage: {
-                    inputTokens: inputTokenEstimate,
-                    outputTokens: 0,
-                    totalTokens: inputTokenEstimate,
-                    estimated: true,
-                  },
-                  durationMs: result.durationMs,
-                  streaming: false,
-                }
-              : message,
-          ),
-        }));
-        if (currentModelId) {
-          void compactSessionIfNeeded({
-            sessionId: targetSessionId,
-            modelId: currentModelId,
-            messages: [
-              ...messages,
-              userMessage,
-              {
-                ...assistantMessage,
-                text: result.markdown,
-                streaming: false,
-              },
-            ],
-            contextSummary: activeSession?.contextSummary,
-            summarizedThroughMessageId:
-              activeSession?.summarizedThroughMessageId,
-          });
-        }
-        completedForNotification = true;
-        return;
-      }
-
-      const response = await fetchChatCompletionStream({
+      const response = await fetchAgentChatStream({
+        sessionId: targetSessionId,
         modelId: currentModelId,
-        messages: payloadMessages,
+        message: agentWorkbenchMessage,
+        attachments,
+        permissionMode: localPermissions.mode,
+        executionMode:
+          workbenchRoute === "write_agent" ||
+          workbenchRoute === "image_generation"
+            ? "write"
+            : "read_only",
         signal: controller.signal,
       });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(errorText || t("ask.toast.sendFailed"));
-      }
 
       const completion = await readStreamedCompletion(response, (delta) => {
         updateSessionMessages(targetSessionId, (previous) => ({
@@ -2705,11 +2438,14 @@ export function AskPage() {
         error instanceof DOMException && error.name === "AbortError";
       const errorMessage =
         error instanceof Error && error.message.trim()
-          ? error.message.trim()
+          ? normalizeWorkbenchErrorMessage(error.message.trim())
           : t("ask.toast.sendFailed");
-      const failedText = imageGenerationRequested
-        ? t("ask.imageFailed", { message: errorMessage })
-        : t("ask.requestFailed", { message: errorMessage });
+      const failedText =
+        errorMessage === INSUFFICIENT_BALANCE_MESSAGE
+          ? errorMessage
+          : workbenchRoute === "image_generation"
+            ? t("ask.imageFailed", { message: errorMessage })
+            : t("ask.requestFailed", { message: errorMessage });
       updateSessionMessages(targetSessionId, (previous) => ({
         messages: previous.map((message) =>
           message.id === assistantMessageId
@@ -2743,15 +2479,13 @@ export function AskPage() {
     activeSessionId,
     attachments,
     compactSessionIfNeeded,
-    currentImageModelId,
     currentModelId,
     input,
     isRuntimeReady,
     knowledgeItems,
-    localPermissions,
+    localPermissions.mode,
     messages,
     navigate,
-    runLocalDesktopAction,
     sendingSessionIds,
     setSessionSending,
     t,
@@ -3450,39 +3184,6 @@ export function AskPage() {
                             </span>
                           );
                         })}
-                      </div>
-                    </div>
-                  ) : null}
-                  {pendingLocalAction ? (
-                    <div className="absolute bottom-12 left-2 z-50 w-[260px] rounded-lg border border-[#303642] bg-[#1a1e26] p-3 shadow-2xl">
-                      <div className="text-[12px] font-medium text-text-primary">
-                        {t("ask.local.confirmTitle")}
-                      </div>
-                      <div className="mt-1 truncate text-[12px] text-text-secondary">
-                        {pendingLocalAction.action.label}
-                      </div>
-                      <div className="mt-1 text-[11px] text-text-muted">
-                        {t("ask.local.confirmHint")}
-                      </div>
-                      <div className="mt-3 flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setPendingLocalAction(null)}
-                          className="h-7 rounded-md px-2.5 text-[12px] text-text-muted transition-colors hover:bg-[#252b35] hover:text-text-primary"
-                        >
-                          {t("ask.confirm.cancel")}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const action = pendingLocalAction;
-                            setPendingLocalAction(null);
-                            void runLocalDesktopAction(action);
-                          }}
-                          className="h-7 rounded-md bg-[var(--color-brand-primary)]/20 px-2.5 text-[12px] font-medium text-[var(--color-brand-primary)] transition-colors hover:bg-[var(--color-brand-primary)]/30"
-                        >
-                          {t("ask.confirm.confirm")}
-                        </button>
                       </div>
                     </div>
                   ) : null}

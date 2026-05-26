@@ -198,8 +198,8 @@ describe("compileOpenClawConfig", () => {
     expect(result.agents.defaults).toMatchObject({
       thinkingDefault: "off",
       contextInjection: "continuation-skip",
-      bootstrapMaxChars: 3500,
-      bootstrapTotalMaxChars: 12000,
+      bootstrapMaxChars: 1500,
+      bootstrapTotalMaxChars: 5000,
       bootstrapPromptTruncationWarning: "off",
       compaction: {
         maxHistoryShare: 0.5,
@@ -948,7 +948,7 @@ describe("compileOpenClawConfig", () => {
       expect(compiled.agents.list).toHaveLength(2);
       expect(compiled.agents.list[0].skills).toEqual(["calendar"]);
       expect(compiled.agents.list[1].skills).toEqual(["calendar"]);
-      delete process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS;
+      Reflect.deleteProperty(process.env, "OPENCLAW_ENABLE_GLOBAL_SKILLS");
     });
   });
 
@@ -1001,7 +1001,7 @@ describe("compileOpenClawConfig", () => {
 
       const botB = compiled.agents.list.find((a) => a.id === "bot-2");
       expect(botB?.skills).toEqual(["shared-skill"]);
-      delete process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS;
+      Reflect.deleteProperty(process.env, "OPENCLAW_ENABLE_GLOBAL_SKILLS");
     });
 
     it("deduplicates when same slug in shared and workspace", () => {
@@ -1019,7 +1019,7 @@ describe("compileOpenClawConfig", () => {
       );
       const agent = compiled.agents.list[0];
       expect(agent.skills).toEqual(["shared-skill"]);
-      delete process.env.OPENCLAW_ENABLE_GLOBAL_SKILLS;
+      Reflect.deleteProperty(process.env, "OPENCLAW_ENABLE_GLOBAL_SKILLS");
     });
 
     it("workspace-only skills still activate allowlist", () => {

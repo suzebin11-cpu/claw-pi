@@ -3,7 +3,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ControllerEnv } from "#controller/app/env";
-import { ImageGenerationService } from "#controller/services/image-generation-service";
+import {
+  ImageGenerationService,
+  normalizeImageGenerationErrorMessage,
+} from "#controller/services/image-generation-service";
 import type { NexuConfigStore } from "#controller/store/nexu-config-store";
 
 const ONE_PIXEL_PNG =
@@ -129,5 +132,19 @@ describe("ImageGenerationService", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0]?.body).not.toHaveProperty("response_format");
     expect(result.filePath).toMatch(/generated-images[\\/].+\.png$/u);
+  });
+
+  it("normalizes image generation balance and network failures", () => {
+    expect(
+      normalizeImageGenerationErrorMessage("token quota is not enough"),
+    ).toBe("余额不足，请及时充值");
+    expect(normalizeImageGenerationErrorMessage("fetch failed")).toBe(
+      "图片生成服务连接失败，请稍后重试",
+    );
+    expect(
+      normalizeImageGenerationErrorMessage(
+        "Request to https://yunwu.example timed out after 180000ms",
+      ),
+    ).toBe("图片生成超时，请稍后重试");
   });
 });

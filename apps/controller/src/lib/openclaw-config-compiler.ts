@@ -751,8 +751,8 @@ export function compileOpenClawConfig(
   const defaultModelId = resolveModelId(
     config,
     env,
-    firstBotModel ??
-      getDesktopSelectedModel(config) ??
+    getDesktopSelectedModel(config) ??
+      firstBotModel ??
       config.runtime.defaultModelId,
     oauthState,
   );
@@ -807,8 +807,8 @@ export function compileOpenClawConfig(
         },
         thinkingDefault: "off",
         contextInjection: "continuation-skip",
-        bootstrapMaxChars: 3500,
-        bootstrapTotalMaxChars: 12000,
+        bootstrapMaxChars: 1500,
+        bootstrapTotalMaxChars: 5000,
         bootstrapPromptTruncationWarning: "off",
         compaction: {
           mode: "safeguard",
@@ -822,6 +822,10 @@ export function compileOpenClawConfig(
         },
         humanDelay: {
           mode: "off",
+        },
+        heartbeat: {
+          every: "0m",
+          includeSystemPromptSection: false,
         },
         verboseDefault: "off",
         elevatedDefault: "full",
@@ -837,6 +841,7 @@ export function compileOpenClawConfig(
       ),
     },
     tools: {
+      profile: "coding",
       exec: {
         security: "full",
         ask: "off",

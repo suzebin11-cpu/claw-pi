@@ -246,19 +246,19 @@ const en = {
   "ask.local.permissions": "Local computer access",
   "ask.local.title": "Local computer access",
   "ask.local.desc":
-    "Choose how much of this computer Lobster Workbench can touch. Webpages, files, and model replies cannot elevate permissions for you.",
+    "Choose the OpenClaw Lobster agent boundary for local tasks. Full access is the default and can be lowered anytime.",
   "ask.local.mode.basic": "Basic",
   "ask.local.mode.basicDesc":
-    "Default. Chat, analyze uploads, generate images, and open webpage links.",
+    "Chat, analyze uploads, and generate images without proactive local reads or writes.",
   "ask.local.mode.confirm": "Confirm actions",
   "ask.local.mode.confirmDesc":
-    "Ask before touching the computer, then run after confirmation.",
+    "Ask before local reads, writes, app launches, or task execution.",
   "ask.local.mode.full": "Full access",
   "ask.local.mode.fullDesc":
-    "No per-action confirmation. For long-running local task control.",
+    "Run user-approved local tasks directly. Risky destructive actions still require confirmation.",
   "ask.local.capability.upload": "Analyze uploads",
-  "ask.local.capability.web": "Open webpage links",
-  "ask.local.capability.workspace": "Workspace results",
+  "ask.local.capability.web": "Websites & apps",
+  "ask.local.capability.workspace": "Files / sheets / decks",
   "ask.local.confirmTitle": "Run this local action?",
   "ask.local.confirmHint": "Delete, overwrite, and arbitrary commands are not allowed.",
   "ask.local.toast.enableFirst":
@@ -281,6 +281,7 @@ const en = {
   "ask.toast.sendFailed": "Failed to send. Please try again later.",
   "ask.toast.imageTooLarge": "{{name}} is too large and was skipped",
   "ask.toast.textTooLarge": "{{name}} is too large and was skipped",
+  "ask.toast.fileTooLarge": "{{name}} is too large and was skipped",
   "ask.toast.textTrimmed": "{{name}} is long, so only the first part was sent",
   "ask.toast.readFailed": "Failed to read {{name}}",
   "ask.toast.tooManyAttachments": "You can add up to {{count}} attachments",

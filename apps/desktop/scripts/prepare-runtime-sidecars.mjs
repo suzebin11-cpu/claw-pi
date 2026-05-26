@@ -91,6 +91,24 @@ async function main() {
     env.NEXU_DESKTOP_COPY_RUNTIME_DEPS = "true";
   } else {
     env.NEXU_DESKTOP_USE_EXISTING_OPENCLAW_SIDECAR ??= "true";
+    await timedStep("build shared sidecar prerequisite", async () => {
+      await runPnpm(["--filter", "@nexu/shared", "build"], {
+        cwd: repoRoot,
+        env,
+      });
+    });
+    await timedStep("build controller sidecar prerequisite", async () => {
+      await runPnpm(["--filter", "@nexu/controller", "build"], {
+        cwd: repoRoot,
+        env,
+      });
+    });
+    await timedStep("build web sidecar prerequisite", async () => {
+      await runPnpm(["--filter", "@nexu/web", "build"], {
+        cwd: repoRoot,
+        env,
+      });
+    });
   }
 
   const scripts = [

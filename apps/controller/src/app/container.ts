@@ -17,6 +17,7 @@ import {
   createRuntimeState,
 } from "../runtime/state.js";
 import { WorkspaceTemplateWriter } from "../runtime/workspace-template-writer.js";
+import { AgentChatService } from "../services/agent-chat-service.js";
 import { AgentService } from "../services/agent-service.js";
 import { AnalyticsService } from "../services/analytics-service.js";
 import { ArtifactService } from "../services/artifact-service.js";
@@ -49,6 +50,7 @@ export interface ControllerContainer {
   gatewayClient: GatewayClient;
   runtimeHealth: RuntimeHealth;
   openclawProcess: OpenClawProcessManager;
+  agentChatService: AgentChatService;
   agentService: AgentService;
   channelService: ChannelService;
   channelFallbackService: ChannelFallbackService;
@@ -169,6 +171,7 @@ export async function createContainer(): Promise<ControllerContainer> {
     gatewayClient,
     runtimeHealth,
     openclawProcess,
+    agentChatService: new AgentChatService(wsClient, env),
     agentService: new AgentService(configStore, openclawSyncService),
     channelService: new ChannelService(
       env,

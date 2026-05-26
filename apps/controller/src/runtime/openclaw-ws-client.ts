@@ -330,6 +330,7 @@ interface EventFrame {
 }
 
 type Frame = RequestFrame | ResponseFrame | EventFrame;
+export type OpenClawGatewayEvent = EventFrame;
 
 // ---------------------------------------------------------------------------
 // WS Client
@@ -338,7 +339,8 @@ type Frame = RequestFrame | ResponseFrame | EventFrame;
 const PROTOCOL_VERSION = 3;
 const MAX_BACKOFF_MS = 4_000;
 const REQUEST_TIMEOUT_MS = 15_000;
-const CONNECT_TIMEOUT_MS = 75_000;
+const CONNECT_CHALLENGE_TIMEOUT_MS = 15_000;
+const CONNECT_TIMEOUT_MS = 15_000;
 
 interface Pending {
   resolve: (value: unknown) => void;
@@ -366,7 +368,9 @@ export class OpenClawWsClient {
   private tickTimer: NodeJS.Timeout | null = null;
   private hardTimeoutTrippedAt: number | null = null;
   private connectTimer: NodeJS.Timeout | null = null;
+  private handshakeTimer: NodeJS.Timeout | null = null;
   private lastClose: OpenClawWsCloseSnapshot | null = null;
+  private eventListeners = new Set<(event: OpenClawGatewayEvent) => void>();
   private onConnectedCallback: (() => void) | null = null;
   private onGatewayShutdownCallback:
     | ((payload: {
@@ -424,6 +428,13 @@ export class OpenClawWsClient {
     return this.lastClose;
   }
 
+  onEvent(listener: (event: OpenClawGatewayEvent) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
+  }
+
   /** Open a WebSocket and begin the handshake. Safe to call multiple times. */
   connect(): void {
     if (this.closed || this.ws) {
@@ -434,12 +445,6 @@ export class OpenClawWsClient {
     const ws = new WebSocket(this.url);
     this.ws = ws;
 
-    // Native WebSocket: use event handler properties instead of ws .on()
-    ws.onmessage = (event) => {
-      const data = event.data;
-      this.handleMessage(typeof data === "string" ? data : String(data));
-    };
-
     let didCleanup = false;
     const cleanupOnce = () => {
       if (didCleanup) return;
@@ -448,7 +453,21 @@ export class OpenClawWsClient {
       this.scheduleReconnect();
     };
 
+    this.armConnectChallengeTimeout(ws, cleanupOnce);
+
+    // Native WebSocket: use event handler properties instead of ws .on()
+    ws.onmessage = (event) => {
+      if (this.ws !== ws) {
+        return;
+      }
+      const data = event.data;
+      this.handleMessage(typeof data === "string" ? data : String(data));
+    };
+
     ws.onclose = (event) => {
+      if (this.ws !== ws) {
+        return;
+      }
       this.lastClose = {
         code: event.code,
         reason: event.reason,
@@ -474,6 +493,9 @@ export class OpenClawWsClient {
     };
 
     ws.onerror = () => {
+      if (this.ws !== ws) {
+        return;
+      }
       logger.warn({}, "openclaw_ws_error");
       // Native WebSocket does NOT fire onclose after a connection-refused error
       // (unlike the `ws` npm package). Force cleanup + reconnect here.
@@ -549,6 +571,7 @@ export class OpenClawWsClient {
 
   private handleEvent(evt: EventFrame): void {
     if (evt.event === "connect.challenge") {
+      this.clearHandshakeTimer();
       const payload = evt.payload as { nonce?: string } | undefined;
       const nonce = payload?.nonce;
       if (!nonce) {
@@ -562,6 +585,17 @@ export class OpenClawWsClient {
       );
       this.sendConnectRequest(nonce);
       return;
+    }
+
+    for (const listener of this.eventListeners) {
+      try {
+        listener(evt);
+      } catch (err) {
+        logger.warn(
+          { error: err instanceof Error ? err.message : String(err) },
+          "openclaw_ws_event_listener_error",
+        );
+      }
     }
 
     if (evt.event === "tick") {
@@ -627,6 +661,7 @@ export class OpenClawWsClient {
 
   private sendConnectRequest(nonce: string): void {
     const id = randomUUID();
+    const ws = this.ws;
     const signedAtMs = Date.now();
     const role = "operator";
     const scopes = ["operator.admin"];
@@ -719,11 +754,14 @@ export class OpenClawWsClient {
         { timeoutMs: CONNECT_TIMEOUT_MS },
         "openclaw_ws_connect_timeout",
       );
-      this.ws?.close(4008, "connect timeout");
+      if (ws) {
+        this.forceReconnectSocket(ws, 4008, "connect timeout");
+      }
     }, CONNECT_TIMEOUT_MS);
 
     this.pending.set(id, {
       resolve: (helloOk) => {
+        this.clearHandshakeTimer();
         this._connected = true;
         this.backoffMs = 500;
         this.lastClose = null;
@@ -853,6 +891,7 @@ export class OpenClawWsClient {
 
   private cleanup(): void {
     this._connected = false;
+    this.clearHandshakeTimer();
     if (this.tickTimer) {
       clearInterval(this.tickTimer);
       this.tickTimer = null;
@@ -868,6 +907,53 @@ export class OpenClawWsClient {
       p.reject(new Error("openclaw gateway disconnected"));
     }
     this.pending.clear();
+  }
+
+  private clearHandshakeTimer(): void {
+    if (!this.handshakeTimer) {
+      return;
+    }
+    clearTimeout(this.handshakeTimer);
+    this.handshakeTimer = null;
+  }
+
+  private armConnectChallengeTimeout(
+    ws: WebSocket,
+    cleanupOnce: () => void,
+  ): void {
+    this.clearHandshakeTimer();
+    this.handshakeTimer = setTimeout(() => {
+      if (this.closed || this.ws !== ws || this._connected) {
+        return;
+      }
+      logger.warn(
+        { timeoutMs: CONNECT_CHALLENGE_TIMEOUT_MS },
+        "openclaw_ws_connect_challenge_timeout",
+      );
+      try {
+        ws.close(4008, "connect challenge timeout");
+      } catch {
+        // Ignore close failures; cleanup below still reconnects the client.
+      }
+      cleanupOnce();
+    }, CONNECT_CHALLENGE_TIMEOUT_MS);
+  }
+
+  private forceReconnectSocket(
+    ws: WebSocket,
+    code: number,
+    reason: string,
+  ): void {
+    if (this.closed || this.ws !== ws) {
+      return;
+    }
+    try {
+      ws.close(code, reason);
+    } catch {
+      // Ignore close failures; cleanup below still reconnects the client.
+    }
+    this.cleanup();
+    this.scheduleReconnect();
   }
 
   /**

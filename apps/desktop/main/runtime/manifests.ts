@@ -221,6 +221,29 @@ function resolvePayloadArchive(
   return null;
 }
 
+function resolveArchiveStamp(
+  packagedSidecarRoot: string,
+  archive: ArchiveInfo,
+): string {
+  const metadataPath = path.resolve(packagedSidecarRoot, "metadata.json");
+
+  try {
+    const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as {
+      fingerprint?: unknown;
+    };
+    const fingerprint = metadata.fingerprint;
+    if (typeof fingerprint === "string" && fingerprint.trim().length > 0) {
+      return `fingerprint:${fingerprint.trim()}`;
+    }
+  } catch {
+    // Older packages do not include archived sidecar metadata. Keep the legacy
+    // stamp format so existing extracted installs remain compatible.
+  }
+
+  const archiveStat = statSync(archive.archivePath);
+  return `${archiveStat.size}:${archiveStat.mtimeMs}`;
+}
+
 /**
  * Resolve the bundled 7za.exe / 7za binary that ships alongside the app in
  * packaged mode. `electronRoot` in packaged builds points at
@@ -402,8 +425,7 @@ export function ensurePackagedOpenclawSidecar(
     path.resolve(runtimeRoot, "openclaw-sidecar"),
   );
   const stampPath = path.resolve(extractedSidecarRoot, ".archive-stamp");
-  const archiveStat = statSync(archive.archivePath);
-  const archiveStamp = `${archiveStat.size}:${archiveStat.mtimeMs}`;
+  const archiveStamp = resolveArchiveStamp(packagedSidecarRoot, archive);
   const extractedOpenclawEntry = path.resolve(
     extractedSidecarRoot,
     "node_modules/openclaw/openclaw.mjs",
@@ -486,8 +508,7 @@ export function checkOpenclawExtractionNeeded(
   );
 
   try {
-    const archiveStat = statSync(archive.archivePath);
-    const archiveStamp = `${archiveStat.size}:${archiveStat.mtimeMs}`;
+    const archiveStamp = resolveArchiveStamp(packagedSidecarRoot, archive);
     return !(
       existsSync(stampPath) &&
       existsSync(extractedEntry) &&
@@ -513,6 +534,15 @@ export async function extractOpenclawSidecarAsync(
   const archive = resolvePayloadArchive(packagedSidecarRoot);
 
   if (!archive) {
+    const packagedEntry = path.resolve(
+      packagedSidecarRoot,
+      "node_modules/openclaw/openclaw.mjs",
+    );
+    if (existsSync(packagedEntry)) {
+      liftBundledExtensionDepsSync(packagedSidecarRoot);
+      return;
+    }
+
     throw new Error(
       `No payload archive found in ${packagedSidecarRoot} ` +
         "(expected payload.7z, payload.tar.gz, or payload.zip)",
@@ -520,8 +550,7 @@ export async function extractOpenclawSidecarAsync(
   }
 
   const extractedSidecarRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
-  const archiveStat = statSync(archive.archivePath);
-  const archiveStamp = `${archiveStat.size}:${archiveStat.mtimeMs}`;
+  const archiveStamp = resolveArchiveStamp(packagedSidecarRoot, archive);
   const stampPath = path.resolve(extractedSidecarRoot, ".archive-stamp");
   const extractedEntry = path.resolve(
     extractedSidecarRoot,

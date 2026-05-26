@@ -38,7 +38,7 @@ export function DesktopShell() {
     .filter(Boolean)
     .join(" ");
   const webSurfaceVersion = 0;
-  const { desktopOpenClawUrl, desktopWebUrl, runtimeConfig } =
+  const { desktopOpenClawUrl, desktopWebUrl, openclawReady, runtimeConfig } =
     useDesktopRuntimeConfig();
   const update = useAutoUpdate();
   const { check: checkForUpdates } = update;
@@ -87,6 +87,7 @@ export function DesktopShell() {
           />
           <SurfaceButton
             active={activeSurface === "openclaw"}
+            disabled={!openclawReady}
             label="OpenClaw"
             meta="Chat with the local OpenClaw assistant"
             onClick={() => setActiveSurface("openclaw")}

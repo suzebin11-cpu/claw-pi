@@ -1,5 +1,14 @@
 import type { ControllerContainer } from "./container.js";
 
+const POST_BOOT_CLOUD_REFRESH_DELAY_MS = 5 * 60_000;
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
 export async function bootstrapController(
   container: ControllerContainer,
 ): Promise<() => void> {
@@ -59,6 +68,7 @@ export async function bootstrapController(
 
   container.openclawProcess.enableAutoRestart();
   container.openclawProcess.start();
+  container.gatewayService.enableDisconnectedWriteTracking();
   container.channelFallbackService.start();
 
   // Start WS client — connects to OpenClaw gateway
@@ -75,6 +85,10 @@ export async function bootstrapController(
       return;
     }
     void (async () => {
+      // The cached cloud model list is still fresh here. Refresh it later so
+      // OpenClaw's expensive model-catalog reload does not block the first
+      // workbench request immediately after startup.
+      await delay(POST_BOOT_CLOUD_REFRESH_DELAY_MS);
       await container.configStore
         .prepareDesktopCloudModelsForBootstrap()
         .catch(() => {});
@@ -92,21 +106,17 @@ export async function bootstrapController(
   // When WS handshake completes, push current config (skipped if unchanged)
   // and mark boot as complete so health loop treats future gateway-unreachable
   // as "unhealthy" instead of "starting".
-  let isFirstWsConnect = true;
   container.wsClient.onConnected(() => {
     container.runtimeState.bootPhase = "ready";
-    if (isFirstWsConnect) {
-      container.gatewayService.enableDisconnectedWriteTracking();
-    } else {
-      // Gateway restarted — only force a re-push when writes actually landed
-      // while the WS was disconnected.
-      container.gatewayService.invalidateIfDirty();
-    }
-    isFirstWsConnect = false;
+    // Force a re-push when writes landed after the process started but before
+    // the WS handshake completed, or during a later gateway reconnect.
+    const hasDisconnectedWrites = container.gatewayService.invalidateIfDirty();
     if (container.openclawProcess.isStable()) {
       signalStable.resolve();
     }
-    void container.openclawSyncService.syncAll().catch(() => {});
+    if (hasDisconnectedWrites) {
+      void container.openclawSyncService.syncAll().catch(() => {});
+    }
   });
 
   const stopBackgroundLoops = container.startBackgroundLoops();

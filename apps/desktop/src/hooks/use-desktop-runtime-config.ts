@@ -6,6 +6,7 @@ export function useDesktopRuntimeConfig() {
   const [runtimeConfig, setRuntimeConfig] =
     useState<DesktopRuntimeConfig | null>(null);
   const [apiReady, setApiReady] = useState(false);
+  const [openclawReady, setOpenclawReady] = useState(false);
 
   useEffect(() => {
     void getRuntimeConfig()
@@ -49,6 +50,43 @@ export function useDesktopRuntimeConfig() {
     };
   }, [runtimeConfig, apiReady]);
 
+  useEffect(() => {
+    const openclawBase = runtimeConfig?.urls.openclawBase;
+    if (!openclawBase) {
+      setOpenclawReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    setOpenclawReady(false);
+
+    const readyUrl = new URL("/chat", openclawBase).toString();
+
+    async function poll() {
+      while (!cancelled) {
+        try {
+          await fetch(readyUrl, {
+            cache: "no-store",
+            mode: "no-cors",
+            signal: AbortSignal.timeout(3000),
+          });
+          if (!cancelled) {
+            setOpenclawReady(true);
+          }
+          return;
+        } catch {
+          // OpenClaw gateway is still booting — do not mount a failing webview yet.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    void poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeConfig?.urls.openclawBase]);
+
   const desktopWebUrl = useMemo(() => {
     if (!runtimeConfig || !apiReady) {
       return null;
@@ -58,7 +96,7 @@ export function useDesktopRuntimeConfig() {
   }, [apiReady, runtimeConfig]);
 
   const desktopOpenClawUrl = useMemo(() => {
-    if (!runtimeConfig) {
+    if (!runtimeConfig || !openclawReady) {
       return null;
     }
 
@@ -66,12 +104,13 @@ export function useDesktopRuntimeConfig() {
       `/chat#token=${encodeURIComponent(runtimeConfig.tokens.gateway)}`,
       runtimeConfig.urls.openclawBase,
     ).toString();
-  }, [runtimeConfig]);
+  }, [openclawReady, runtimeConfig]);
 
   return {
     apiReady,
     desktopOpenClawUrl,
     desktopWebUrl,
+    openclawReady,
     runtimeConfig,
   };
 }

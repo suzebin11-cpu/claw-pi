@@ -40,6 +40,11 @@ function findWorkspaceRoot(startDir: string): string | null {
   return null;
 }
 
+function resolveOpenClawEntryFromBin(openclawBin: string): string {
+  const binDir = path.dirname(path.resolve(openclawBin));
+  return path.resolve(binDir, "..", "node_modules", "openclaw", "openclaw.mjs");
+}
+
 export interface OpenClawRuntimeEvent {
   event: string;
   payload?: unknown;
@@ -178,23 +183,18 @@ export class OpenClawProcessManager {
             "openclaw.mjs",
           )
         : null;
+      const sidecarEntryPath = resolveOpenClawEntryFromBin(this.env.openclawBin);
 
-      if (runtimeEntryPath && existsSync(runtimeEntryPath)) {
-        cmd = electronExec;
-        args = [runtimeEntryPath, "gateway", "run"];
-        extraEnv = { ELECTRON_RUN_AS_NODE: "1" };
-      } else {
-        // Resolve the openclaw entry point relative to the bin script
-        const binDir = path.dirname(path.resolve(this.env.openclawBin));
-        const entry = path.resolve(
-          binDir,
-          "..",
-          "node_modules/openclaw/openclaw.mjs",
-        );
-        cmd = electronExec;
-        args = [entry, "gateway", "run"];
-        extraEnv = { ELECTRON_RUN_AS_NODE: "1" };
-      }
+      const entry =
+        existsSync(sidecarEntryPath)
+          ? sidecarEntryPath
+          : runtimeEntryPath && existsSync(runtimeEntryPath)
+            ? runtimeEntryPath
+            : sidecarEntryPath;
+
+      cmd = electronExec;
+      args = [entry, "gateway", "run"];
+      extraEnv = { ELECTRON_RUN_AS_NODE: "1" };
     } else if (
       process.platform === "win32" &&
       (this.env.openclawBin.endsWith(".cmd") ||
@@ -216,6 +216,7 @@ export class OpenClawProcessManager {
         OPENCLAW_LOG_LEVEL: "info",
         OPENCLAW_RAW_STREAM: "1",
         OPENCLAW_DEBUG_INGRESS_TIMING: "1",
+        OPENCLAW_SKIP_MODEL_PRICING: "1",
         // Explicitly pass config path so OpenClaw's file watcher monitors the correct file
         OPENCLAW_CONFIG_PATH: this.env.openclawConfigPath,
         NEXU_CONTROLLER_URL: `http://127.0.0.1:${this.env.port}`,

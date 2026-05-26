@@ -1063,6 +1063,7 @@ function DesktopShell() {
   // Note: getRuntimeConfig() IPC handler waits for cold-start to complete, so
   // runtimeConfig always has the final ports (including any fallback).
   const [controllerReady, setControllerReady] = useState(false);
+  const [openclawReady, setOpenclawReady] = useState(false);
 
   useEffect(() => {
     if (!runtimeConfig) return;
@@ -1104,11 +1105,48 @@ function DesktopShell() {
     };
   }, [runtimeConfig, controllerReady]);
 
+  useEffect(() => {
+    const openclawBase = runtimeConfig?.urls.openclawBase;
+    if (!openclawBase) {
+      setOpenclawReady(false);
+      return;
+    }
+
+    let cancelled = false;
+    setOpenclawReady(false);
+
+    const readyUrl = new URL("/chat", openclawBase).toString();
+
+    async function poll() {
+      while (!cancelled) {
+        try {
+          await fetch(readyUrl, {
+            cache: "no-store",
+            mode: "no-cors",
+            signal: AbortSignal.timeout(3000),
+          });
+          if (!cancelled) {
+            setOpenclawReady(true);
+          }
+          return;
+        } catch {
+          // OpenClaw gateway is still booting — do not mount a failing webview yet.
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    }
+
+    void poll();
+    return () => {
+      cancelled = true;
+    };
+  }, [runtimeConfig?.urls.openclawBase]);
+
   const desktopWebUrl =
     runtimeConfig && controllerReady
       ? new URL("/workspace", runtimeConfig.urls.web).toString()
       : null;
-  const desktopOpenClawUrl = runtimeConfig
+  const desktopOpenClawUrl = runtimeConfig && openclawReady
     ? new URL(
         `/chat#token=${encodeURIComponent(runtimeConfig.tokens.gateway)}`,
         runtimeConfig.urls.openclawBase,

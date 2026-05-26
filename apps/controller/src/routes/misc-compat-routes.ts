@@ -33,17 +33,31 @@ const openAiChatCompletionBodySchema = z.object({
       content: z.union([z.string(), z.array(z.unknown())]),
       name: z.string().optional(),
       tool_call_id: z.string().optional(),
+      tool_calls: z.array(z.unknown()).optional(),
     }),
   ),
   stream: z.boolean().optional(),
   user: z.string().optional(),
+  tools: z.array(z.unknown()).optional(),
+  tool_choice: z.unknown().optional(),
+  parallel_tool_calls: z.boolean().optional(),
+  stream_options: z.unknown().optional(),
+  response_format: z.unknown().optional(),
+  temperature: z.number().optional(),
+  top_p: z.number().optional(),
+  max_tokens: z.number().optional(),
+  max_completion_tokens: z.number().optional(),
+  presence_penalty: z.number().optional(),
+  frequency_penalty: z.number().optional(),
+  stop: z.union([z.string(), z.array(z.string())]).optional(),
+  seed: z.number().optional(),
   metadata: z
     .object({
       clawpiDynamicSkills: z.boolean().optional(),
     })
     .passthrough()
     .optional(),
-});
+}).passthrough();
 
 type OpenAiCompatMessage = z.infer<
   typeof openAiChatCompletionBodySchema
@@ -52,6 +66,7 @@ type OpenAiCompatMessage = z.infer<
 const DYNAMIC_SKILLS_HEADER = "x-clawpi-dynamic-skills";
 const DYNAMIC_SKILLS_LIMIT = 3;
 const DYNAMIC_SKILLS_MAX_TOTAL_CHARS = 9_000;
+const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
 type DingTalkSessionContext = {
   channel: "dingtalk-connector";
   accountId: string;
@@ -64,6 +79,14 @@ type DingTalkSessionContext = {
 
 function buildOpenAiCompatUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/u, "")}/chat/completions`;
+}
+
+function normalizeCompatErrorMessage(message: string): string {
+  return /(?:token quota is not enough|need quota|insufficient (?:balance|quota|credits?)|quota.+not enough|余额不足|额度不足|余额不够|充值)/iu.test(
+    message,
+  )
+    ? INSUFFICIENT_BALANCE_MESSAGE
+    : message;
 }
 
 function buildOpenAiCompatHeaders(params: {
@@ -461,6 +484,13 @@ export function registerMiscCompatRoutes(
         }
       }
 
+      const {
+        metadata: _metadata,
+        messages: _messages,
+        model: _requestedModel,
+        ...upstreamPassthrough
+      } = body as typeof body & Record<string, unknown>;
+
       const response = await proxyFetch(
         buildOpenAiCompatUrl(provider.baseUrl),
         {
@@ -470,6 +500,7 @@ export function registerMiscCompatRoutes(
             extraHeaders: toStringHeaderRecord(provider.headers),
           }),
           body: JSON.stringify({
+            ...upstreamPassthrough,
             model: modelId,
             messages: upstreamMessages,
             stream: body.stream ?? true,
@@ -480,9 +511,12 @@ export function registerMiscCompatRoutes(
 
       if (!response.ok || !response.body) {
         const errorText = await response.text();
-        return new Response(errorText || "Upstream completion failed", {
-          status: response.status,
-        });
+        return new Response(
+          normalizeCompatErrorMessage(errorText || "Upstream completion failed"),
+          {
+            status: response.status,
+          },
+        );
       }
 
       const encoder = new TextEncoder();
@@ -629,7 +663,11 @@ export function registerMiscCompatRoutes(
                   choices: [
                     {
                       delta: {
-                        content: `\n\n[compat stream error: ${error instanceof Error ? error.message : String(error)}]`,
+                        content: `\n\n${normalizeCompatErrorMessage(
+                          error instanceof Error
+                            ? error.message
+                            : String(error),
+                        )}`,
                       },
                     },
                   ],

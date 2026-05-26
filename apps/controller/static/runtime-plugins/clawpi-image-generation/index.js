@@ -1,8 +1,10 @@
 const PLUGIN_ID = "clawpi-image-generation";
 const DEFAULT_CONTROLLER_URL = "http://127.0.0.1:3010";
+const CONTROLLER_FETCH_TIMEOUT_MS = 190_000;
+const CONTROLLER_FETCH_RETRY_DELAYS_MS = [500, 1_500, 3_000];
 
 const IMAGE_TOOL_PROMPT =
-  "Claw-Pi can generate images through the image_generate tool. When the user asks to generate, create, draw, render, edit, or remake an image, call image_generate instead of saying you cannot generate images. After the tool returns, give a short confirmation only. The tool result carries the generated image as structured media, so never reply with raw image URLs, local file paths, or markdown image links. In messaging channels such as WeChat, send the attached media directly instead of describing a link.";
+  "Use image_generate for image generation and image editing requests. If reference image paths are provided, pass them through inputImages. After a successful tool call, include the generated image markdown from the tool result in web/workbench final replies so the client can render the image. In messaging channels such as WeChat, prefer sending attached media directly instead of only describing a link.";
 
 function getPluginConfig(api) {
   const entry = api?.config?.plugins?.entries?.[PLUGIN_ID];
@@ -19,6 +21,44 @@ function getControllerUrl(api) {
       ? process.env.NEXU_CONTROLLER_URL.trim()
       : "";
   return (configured || fromEnv || DEFAULT_CONTROLLER_URL).replace(/\/+$/u, "");
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shouldRetryLocalControllerFetch(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch failed|network|socket|connection|econnreset|econnrefused|etimedout|eai_again|enotfound|aborted|timeout|timed out/i.test(
+    message,
+  );
+}
+
+async function fetchControllerWithRetries(url, init, api) {
+  let retryIndex = 0;
+
+  while (true) {
+    try {
+      return await fetch(url, init);
+    } catch (error) {
+      if (
+        init?.signal?.aborted ||
+        retryIndex >= CONTROLLER_FETCH_RETRY_DELAYS_MS.length ||
+        !shouldRetryLocalControllerFetch(error)
+      ) {
+        throw error;
+      }
+
+      const retryDelay = CONTROLLER_FETCH_RETRY_DELAYS_MS[retryIndex] ?? 0;
+      retryIndex += 1;
+      api?.logger?.warn?.(
+        `[clawpi-image-generation] controller fetch retry ${retryIndex}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      await delay(retryDelay);
+    }
+  }
 }
 
 function textResult(text, details) {
@@ -115,9 +155,12 @@ const plugin = {
 
           let response;
           const controller = new AbortController();
-          const timeoutId = setTimeout(() => controller.abort(), 190_000);
+          const timeoutId = setTimeout(
+            () => controller.abort(),
+            CONTROLLER_FETCH_TIMEOUT_MS,
+          );
           try {
-            response = await fetch(
+            response = await fetchControllerWithRetries(
               `${getControllerUrl(api)}/api/internal/desktop/images/generations`,
               {
                 method: "POST",
@@ -125,6 +168,7 @@ const plugin = {
                 body: JSON.stringify(body),
                 signal: controller.signal,
               },
+              api,
             );
           } catch (error) {
             return textResult(
@@ -148,7 +192,12 @@ const plugin = {
             return textResult(`生图失败：${message}`);
           }
 
-          const resultText = "图片已生成。";
+          const resultText =
+            typeof data.markdown === "string" && data.markdown.trim()
+              ? `图片已生成。\n${data.markdown.trim()}`
+              : typeof data.url === "string" && data.url.trim()
+                ? `图片已生成。\n${data.url.trim()}`
+                : "图片已生成。";
 
           const mediaUrls = [data.url].filter(
             (value) => typeof value === "string" && value.trim(),

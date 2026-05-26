@@ -171,6 +171,93 @@ const GEMINI_TYPE_ARRAY_SEARCH =
   "cleaned.type = types.length === 1 ? types[0] : types;";
 const GEMINI_TYPE_ARRAY_REPLACEMENT =
   'cleaned.type = types.length >= 1 ? types[0] : "string";';
+const OPENAI_RESPONSES_FUNCTION_NAME_HELPER_SEARCH =
+  "function convertResponsesMessages(model, context, allowedToolCallProviders, options) {";
+const OPENAI_RESPONSES_FUNCTION_NAME_HELPER_REPLACEMENT = [
+  "function sanitizeOpenAIResponsesFunctionName(name) {",
+  '\tconst sanitized = String(name ?? "").replace(/[^a-zA-Z0-9_-]/g, "_");',
+  '\treturn (sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized) || "tool_call";',
+  "}",
+  OPENAI_RESPONSES_FUNCTION_NAME_HELPER_SEARCH,
+].join("\n");
+const OPENAI_RESPONSES_FUNCTION_CALL_NAME_SEARCH = [
+  "\t\t\t\toutput.push({",
+  '\t\t\t\t\ttype: "function_call",',
+  "\t\t\t\t\tid: itemId,",
+  "\t\t\t\t\tcall_id: callId,",
+  "\t\t\t\t\tname: block.name,",
+  "\t\t\t\t\targuments: JSON.stringify(block.arguments)",
+  "\t\t\t\t});",
+].join("\n");
+const OPENAI_RESPONSES_FUNCTION_CALL_NAME_REPLACEMENT = [
+  "\t\t\t\toutput.push({",
+  '\t\t\t\t\ttype: "function_call",',
+  "\t\t\t\t\tid: itemId,",
+  "\t\t\t\t\tcall_id: callId,",
+  "\t\t\t\t\tname: sanitizeOpenAIResponsesFunctionName(block.name),",
+  "\t\t\t\t\targuments: JSON.stringify(block.arguments)",
+  "\t\t\t\t});",
+].join("\n");
+const MODEL_PRICING_REFRESH_SEARCH = [
+  "function startGatewayModelPricingRefresh(params) {",
+  "\trefreshGatewayModelPricingCache(params).catch((error) => {",
+  "\t\tlog.warn(`pricing bootstrap failed: ${String(error)}`);",
+  "\t});",
+  "\treturn () => {",
+  "\t\tclearRefreshTimer();",
+  "\t};",
+  "}",
+].join("\n");
+const MODEL_PRICING_REFRESH_REPLACEMENT = [
+  "function startGatewayModelPricingRefresh(params) {",
+  '\tif (process.env.OPENCLAW_SKIP_MODEL_PRICING === "1") {',
+  "\t\treplaceGatewayModelPricingCache(/* @__PURE__ */ new Map());",
+  "\t\tclearRefreshTimer();",
+  "\t\treturn () => {",
+  "\t\t\tclearRefreshTimer();",
+  "\t\t};",
+  "\t}",
+  "\trefreshGatewayModelPricingCache(params).catch((error) => {",
+  "\t\tlog.warn(`pricing bootstrap failed: ${String(error)}`);",
+  "\t});",
+  "\treturn () => {",
+  "\t\tclearRefreshTimer();",
+  "\t};",
+  "}",
+].join("\n");
+const TELEGRAM_SETUP_ENTRY_PLUGIN_SEARCH = [
+  "\tplugin: {",
+  '\t\tspecifier: "./src/channel.setup.js",',
+  '\t\texportName: "telegramSetupPlugin"',
+  "\t}",
+].join("\n");
+const TELEGRAM_SETUP_ENTRY_PLUGIN_REPLACEMENT = [
+  "\tplugin: {",
+  '\t\tspecifier: "./channel-plugin-api.js",',
+  '\t\texportName: "telegramSetupPlugin"',
+  "\t}",
+].join("\n");
+const TELEGRAM_SETUP_ENTRY_SECRETS_SEARCH = [
+  "\tsecrets: {",
+  '\t\tspecifier: "./src/secret-contract.js",',
+  '\t\texportName: "channelSecrets"',
+  "\t}",
+].join("\n");
+const TELEGRAM_SETUP_ENTRY_SECRETS_REPLACEMENT = [
+  "\tsecrets: {",
+  '\t\tspecifier: "./secret-contract-api.js",',
+  '\t\texportName: "channelSecrets"',
+  "\t}",
+].join("\n");
+const TELEGRAM_SECRET_CONTRACT_EXPORT_SEARCH =
+  "export { collectRuntimeConfigAssignments, secretTargetRegistryEntries };";
+const TELEGRAM_SECRET_CONTRACT_EXPORT_REPLACEMENT = [
+  "const channelSecrets = {",
+  "\tsecretTargetRegistryEntries,",
+  "\tcollectRuntimeConfigAssignments",
+  "};",
+  "export { channelSecrets, collectRuntimeConfigAssignments, secretTargetRegistryEntries };",
+].join("\n");
 const CONTROL_UI_BUNDLE_PATTERN = /^index-.*\.js$/u;
 const CONTROL_UI_IMAGE_EXTRACTOR_SEARCH =
   'function ey(e){let t=e.content,n=[];if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&n.push({url:t.url})}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&n.push({url:e.url})}}return n}';
@@ -588,6 +675,7 @@ const CONTROL_UI_CHAT_PARTIAL_REPLY_OPTIONS_REPLACEMENT = [
   "\t\t\t\t\tonAgentRunStart: (runId) => {",
 ].join("\n");
 const MODELS_CONFIG_BUNDLE_PATTERN = /^models-config-.*\.js$/u;
+const MODEL_CATALOG_BUNDLE_PATTERN = /^model-catalog-.*\.js$/u;
 const MODELS_CONFIG_FINGERPRINT_SEARCH = [
   "async function buildModelsJsonFingerprint(params) {",
   '\tconst authProfilesMtimeMs = await readFileMtimeMs(path.join(params.agentDir, "auth-profiles.json"));',
@@ -622,6 +710,90 @@ const MODELS_CONFIG_FINGERPRINT_REPLACEMENT = [
   "\t\tmodelsFileRaw",
   "\t});",
   "}",
+].join("\n");
+const MODELS_CONFIG_REPLACE_MODE_SEARCH = [
+  "async function resolveProvidersForModelsJsonWithDeps(params, deps) {",
+  "\tconst { cfg, agentDir, env } = params;",
+  "\tconst explicitProviders = cfg.models?.providers ?? {};",
+  "\treturn mergeProviders({",
+  "\t\timplicit: await (deps?.resolveImplicitProviders ?? resolveImplicitProviders)({",
+  "\t\t\tagentDir,",
+  "\t\t\tconfig: cfg,",
+  "\t\t\tenv,",
+  "\t\t\texplicitProviders",
+  "\t\t}),",
+  "\t\texplicit: explicitProviders",
+  "\t});",
+  "}",
+].join("\n");
+const MODELS_CONFIG_REPLACE_MODE_REPLACEMENT = [
+  "async function resolveProvidersForModelsJsonWithDeps(params, deps) {",
+  "\tconst { cfg, agentDir, env } = params;",
+  "\tconst explicitProviders = cfg.models?.providers ?? {};",
+  '\tif (cfg.models?.mode === "replace" && Object.keys(explicitProviders).length > 0) {',
+  "\t\treturn explicitProviders;",
+  "\t}",
+  "\treturn mergeProviders({",
+  "\t\timplicit: await (deps?.resolveImplicitProviders ?? resolveImplicitProviders)({",
+  "\t\t\tagentDir,",
+  "\t\t\tconfig: cfg,",
+  "\t\t\tenv,",
+  "\t\t\texplicitProviders",
+  "\t\t}),",
+  "\t\texplicit: explicitProviders",
+  "\t});",
+  "}",
+].join("\n");
+const MODEL_CATALOG_REPLACE_MODE_SEARCH = [
+  "\t\t\tconst supplemental = await augmentModelCatalogWithProviderPlugins({",
+  "\t\t\t\tconfig: cfg,",
+  "\t\t\t\tenv: process.env,",
+  "\t\t\t\tcontext: {",
+  "\t\t\t\t\tconfig: cfg,",
+  "\t\t\t\t\tagentDir,",
+  "\t\t\t\t\tenv: process.env,",
+  "\t\t\t\t\tentries: [...models]",
+  "\t\t\t\t}",
+  "\t\t\t});",
+].join("\n");
+const MODEL_CATALOG_REPLACE_MODE_REPLACEMENT = [
+  "\t\t\tconst supplemental = cfg.models?.mode === \"replace\" ? [] : await augmentModelCatalogWithProviderPlugins({",
+  "\t\t\t\tconfig: cfg,",
+  "\t\t\t\tenv: process.env,",
+  "\t\t\t\tcontext: {",
+  "\t\t\t\t\tconfig: cfg,",
+  "\t\t\t\t\tagentDir,",
+  "\t\t\t\t\tenv: process.env,",
+  "\t\t\t\t\tentries: [...models]",
+  "\t\t\t\t}",
+  "\t\t\t});",
+].join("\n");
+const MODEL_CATALOG_REPLACE_FAST_PATH_SEARCH = [
+  "\t\t\tconst cfg = params?.config ?? loadConfig();",
+  "\t\t\tawait ensureOpenClawModelsJson(cfg);",
+].join("\n");
+const MODEL_CATALOG_REPLACE_FAST_PATH_REPLACEMENT = [
+  "\t\t\tconst cfg = params?.config ?? loadConfig();",
+  '\t\t\tif (cfg.models?.mode === "replace" && cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {',
+  "\t\t\t\tfor (const [providerKey, providerConfig] of Object.entries(cfg.models.providers)) {",
+  "\t\t\t\t\tconst provider = normalizeOptionalString(String(providerKey)) ?? \"\";",
+  "\t\t\t\t\tif (!provider || !Array.isArray(providerConfig?.models)) continue;",
+  "\t\t\t\t\tfor (const entry of providerConfig.models) {",
+  "\t\t\t\t\t\tconst id = normalizeOptionalString(String(entry?.id ?? \"\")) ?? \"\";",
+  "\t\t\t\t\t\tif (!id) continue;",
+  "\t\t\t\t\t\tconst name = normalizeOptionalString(String(entry?.name ?? id)) || id;",
+  "\t\t\t\t\t\tconst contextWindow = typeof entry?.contextWindow === \"number\" && entry.contextWindow > 0 ? entry.contextWindow : void 0;",
+  "\t\t\t\t\t\tconst reasoning = typeof entry?.reasoning === \"boolean\" ? entry.reasoning : void 0;",
+  "\t\t\t\t\t\tconst input = Array.isArray(entry?.input) ? entry.input : void 0;",
+  "\t\t\t\t\t\tmodels.push({ id, name, provider, contextWindow, reasoning, input });",
+  "\t\t\t\t\t}",
+  "\t\t\t\t}",
+  "\t\t\t\tconst sorted = sortModels(models);",
+  "\t\t\t\tlogStage(\"replace-config-ready\", `entries=${sorted.length}`);",
+  "\t\t\t\tlogStage(\"complete\", `entries=${sorted.length}`);",
+  "\t\t\t\treturn sorted;",
+  "\t\t\t}",
+  "\t\t\tawait ensureOpenClawModelsJson(cfg);",
 ].join("\n");
 const GEMINI_NORMALIZE_IMPORT_ANCHOR =
   'import { t as getProviderEnvVars } from "./provider-env-vars-';
@@ -882,7 +1054,7 @@ async function writeSidecarMetadataAndLaunchers(targetSidecarRoot, fingerprint) 
   );
   await writeFile(
     resolve(targetSidecarBinDir, "openclaw.cmd"),
-    `@echo off\r\nnode "${targetPackagedOpenclawEntry}" %*\r\n`,
+    `@echo off\r\nsetlocal\r\nset "SCRIPT_DIR=%~dp0"\r\nset "ENTRY=%SCRIPT_DIR%..\\node_modules\\openclaw\\openclaw.mjs"\r\nnode "%ENTRY%" %*\r\n`,
   );
 
   const wrapperPath = resolve(targetSidecarBinDir, "openclaw");
@@ -928,6 +1100,29 @@ exit 127
   await removePathIfExists(resolve(targetSidecarNodeModules, "electron"));
   await removePathIfExists(
     resolve(targetSidecarNodeModules, "electron-builder"),
+  );
+}
+
+async function writeArchivedSidecarMetadata(
+  targetSidecarRoot,
+  fingerprint,
+  archiveFormat,
+  payloadFileName,
+) {
+  await writeFile(
+    resolve(targetSidecarRoot, "metadata.json"),
+    `${JSON.stringify(
+      {
+        strategy: "archived-sidecar-node-modules",
+        archive: {
+          format: archiveFormat,
+          path: payloadFileName,
+        },
+        fingerprint,
+      },
+      null,
+      2,
+    )}\n`,
   );
 }
 
@@ -1875,6 +2070,203 @@ async function patchGeminiToolSanitization(openclawPackageRoot) {
   return patchedFiles;
 }
 
+async function patchOpenAIResponsesFunctionNames(openclawPackageRoot) {
+  const patchedFiles = new Map();
+  const distDir = resolve(openclawPackageRoot, "dist");
+
+  let entries;
+  try {
+    entries = await readdir(distDir);
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] dist directory not found, skipping OpenAI Responses function name patch",
+    );
+    return patchedFiles;
+  }
+
+  for (const entry of entries) {
+    if (!/\.js$/u.test(entry)) continue;
+    const entryPath = resolve(distDir, entry);
+    let source;
+    try {
+      source = await readFile(entryPath, "utf8");
+    } catch {
+      continue;
+    }
+    if (!source.includes("function buildOpenAIResponsesParams(")) continue;
+
+    let patched = false;
+    if (
+      source.includes(OPENAI_RESPONSES_FUNCTION_NAME_HELPER_SEARCH) &&
+      !source.includes("function sanitizeOpenAIResponsesFunctionName(")
+    ) {
+      source = applyExactReplacement(
+        source,
+        OPENAI_RESPONSES_FUNCTION_NAME_HELPER_SEARCH,
+        OPENAI_RESPONSES_FUNCTION_NAME_HELPER_REPLACEMENT,
+        `${entry}: add OpenAI Responses function name sanitizer`,
+      );
+      patched = true;
+    }
+    if (source.includes(OPENAI_RESPONSES_FUNCTION_CALL_NAME_SEARCH)) {
+      source = applyExactReplacement(
+        source,
+        OPENAI_RESPONSES_FUNCTION_CALL_NAME_SEARCH,
+        OPENAI_RESPONSES_FUNCTION_CALL_NAME_REPLACEMENT,
+        `${entry}: sanitize historical OpenAI Responses function_call names`,
+      );
+      patched = true;
+    }
+
+    if (patched) {
+      patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
+      console.log(
+        `[openclaw-sidecar] patched OpenAI Responses function names in ${entry}`,
+      );
+    }
+  }
+
+  if (patchedFiles.size === 0) {
+    console.warn(
+      "[openclaw-sidecar] no OpenAI Responses function name anchors found (may already be fixed upstream)",
+    );
+  }
+
+  return patchedFiles;
+}
+
+async function patchModelPricingBootstrap(openclawPackageRoot) {
+  const patchedFiles = new Map();
+  const distDir = resolve(openclawPackageRoot, "dist");
+  let entries;
+  try {
+    entries = await readdir(distDir);
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] dist directory not found, skipping model pricing bootstrap patch",
+    );
+    return patchedFiles;
+  }
+
+  for (const entry of entries) {
+    if (!/^usage-format-.*\.js$/u.test(entry)) continue;
+    const entryPath = resolve(distDir, entry);
+    let source;
+    try {
+      source = await readFile(entryPath, "utf8");
+    } catch {
+      continue;
+    }
+    if (
+      source.includes(MODEL_PRICING_REFRESH_SEARCH) &&
+      !source.includes("OPENCLAW_SKIP_MODEL_PRICING")
+    ) {
+      source = applyExactReplacement(
+        source,
+        MODEL_PRICING_REFRESH_SEARCH,
+        MODEL_PRICING_REFRESH_REPLACEMENT,
+        `${entry}: skip model pricing bootstrap`,
+      );
+      patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
+      console.log(
+        `[openclaw-sidecar] patched model pricing bootstrap in ${entry}`,
+      );
+    }
+  }
+
+  if (patchedFiles.size === 0) {
+    console.warn(
+      "[openclaw-sidecar] no model pricing bootstrap anchors found (may already be fixed upstream)",
+    );
+  }
+
+  return patchedFiles;
+}
+
+async function patchTelegramBundledSetupEntry(openclawPackageRoot) {
+  const patchedFiles = new Map();
+  const telegramDir = resolve(
+    openclawPackageRoot,
+    "dist",
+    "extensions",
+    "telegram",
+  );
+  const setupEntryPath = resolve(telegramDir, "setup-entry.js");
+  const secretContractPath = resolve(telegramDir, "secret-contract-api.js");
+
+  let setupEntrySource;
+  try {
+    setupEntrySource = await readFile(setupEntryPath, "utf8");
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] Telegram setup-entry not found, skipping bundled setup patch",
+    );
+    return patchedFiles;
+  }
+
+  let patchCount = 0;
+  if (setupEntrySource.includes(TELEGRAM_SETUP_ENTRY_PLUGIN_SEARCH)) {
+    setupEntrySource = applyExactReplacement(
+      setupEntrySource,
+      TELEGRAM_SETUP_ENTRY_PLUGIN_SEARCH,
+      TELEGRAM_SETUP_ENTRY_PLUGIN_REPLACEMENT,
+      "telegram setup-entry plugin specifier",
+    );
+    patchCount += 1;
+  }
+
+  if (setupEntrySource.includes(TELEGRAM_SETUP_ENTRY_SECRETS_SEARCH)) {
+    setupEntrySource = applyExactReplacement(
+      setupEntrySource,
+      TELEGRAM_SETUP_ENTRY_SECRETS_SEARCH,
+      TELEGRAM_SETUP_ENTRY_SECRETS_REPLACEMENT,
+      "telegram setup-entry secrets specifier",
+    );
+    patchCount += 1;
+  }
+
+  if (patchCount > 0) {
+    patchedFiles.set(relative(openclawPackageRoot, setupEntryPath), setupEntrySource);
+    console.log(
+      "[openclaw-sidecar] patched Telegram bundled setup entry specifiers",
+    );
+  }
+
+  try {
+    let secretContractSource = await readFile(secretContractPath, "utf8");
+    if (
+      secretContractSource.includes(TELEGRAM_SECRET_CONTRACT_EXPORT_SEARCH) &&
+      !secretContractSource.includes("const channelSecrets =")
+    ) {
+      secretContractSource = applyExactReplacement(
+        secretContractSource,
+        TELEGRAM_SECRET_CONTRACT_EXPORT_SEARCH,
+        TELEGRAM_SECRET_CONTRACT_EXPORT_REPLACEMENT,
+        "telegram setup-entry channelSecrets export",
+      );
+      patchedFiles.set(
+        relative(openclawPackageRoot, secretContractPath),
+        secretContractSource,
+      );
+      console.log(
+        "[openclaw-sidecar] patched Telegram bundled secret contract export",
+      );
+    }
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] Telegram secret-contract-api not found, skipping setup secrets patch",
+    );
+  }
+
+  if (patchedFiles.size === 0) {
+    console.warn(
+      "[openclaw-sidecar] no Telegram setup-entry anchors found (may already be fixed upstream)",
+    );
+  }
+
+  return patchedFiles;
+}
+
 async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
   const patchedFiles = new Map();
   const distDir = resolve(openclawPackageRoot, "dist");
@@ -2147,6 +2539,7 @@ async function patchModelsConfigCaching(openclawPackageRoot) {
     } catch {
       continue;
     }
+    let patchCount = 0;
     if (
       source.includes(MODELS_CONFIG_FINGERPRINT_SEARCH) &&
       !source.includes("readFileRawForFingerprint")
@@ -2157,9 +2550,24 @@ async function patchModelsConfigCaching(openclawPackageRoot) {
         MODELS_CONFIG_FINGERPRINT_REPLACEMENT,
         `${entry}: stabilize models.json cache fingerprint`,
       );
+      patchCount += 1;
+    }
+    if (
+      source.includes(MODELS_CONFIG_REPLACE_MODE_SEARCH) &&
+      !source.includes('cfg.models?.mode === "replace"')
+    ) {
+      source = applyExactReplacement(
+        source,
+        MODELS_CONFIG_REPLACE_MODE_SEARCH,
+        MODELS_CONFIG_REPLACE_MODE_REPLACEMENT,
+        `${entry}: skip implicit provider discovery in replace mode`,
+      );
+      patchCount += 1;
+    }
+    if (patchCount > 0) {
       patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
       console.log(
-        `[openclaw-sidecar] patched models config cache fingerprint in ${entry}`,
+        `[openclaw-sidecar] patched models config behavior in ${entry}`,
       );
     }
   }
@@ -2167,6 +2575,70 @@ async function patchModelsConfigCaching(openclawPackageRoot) {
   if (patchedFiles.size === 0) {
     console.warn(
       "[openclaw-sidecar] no models config cache anchors found (may already be fixed upstream)",
+    );
+  }
+
+  return patchedFiles;
+}
+
+async function patchModelCatalogReplaceMode(openclawPackageRoot) {
+  const patchedFiles = new Map();
+  const distDir = resolve(openclawPackageRoot, "dist");
+  let entries;
+  try {
+    entries = await readdir(distDir);
+  } catch {
+    console.warn(
+      "[openclaw-sidecar] dist directory not found, skipping model catalog replace-mode patch",
+    );
+    return patchedFiles;
+  }
+
+  for (const entry of entries) {
+    if (!MODEL_CATALOG_BUNDLE_PATTERN.test(entry)) continue;
+    const entryPath = resolve(distDir, entry);
+    let source;
+    try {
+      source = await readFile(entryPath, "utf8");
+    } catch {
+      continue;
+    }
+    let patchCount = 0;
+    if (
+      source.includes(MODEL_CATALOG_REPLACE_FAST_PATH_SEARCH) &&
+      !source.includes('logStage("replace-config-ready"')
+    ) {
+      source = applyExactReplacement(
+        source,
+        MODEL_CATALOG_REPLACE_FAST_PATH_SEARCH,
+        MODEL_CATALOG_REPLACE_FAST_PATH_REPLACEMENT,
+        `${entry}: use explicit replace-mode model catalog`,
+      );
+      patchCount += 1;
+    }
+    if (
+      source.includes(MODEL_CATALOG_REPLACE_MODE_SEARCH) &&
+      !source.includes('cfg.models?.mode === "replace" ? []')
+    ) {
+      source = applyExactReplacement(
+        source,
+        MODEL_CATALOG_REPLACE_MODE_SEARCH,
+        MODEL_CATALOG_REPLACE_MODE_REPLACEMENT,
+        `${entry}: skip provider plugin catalog augmentation in replace mode`,
+      );
+      patchCount += 1;
+    }
+    if (patchCount > 0) {
+      patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
+      console.log(
+        `[openclaw-sidecar] patched model catalog replace-mode behavior in ${entry}`,
+      );
+    }
+  }
+
+  if (patchedFiles.size === 0) {
+    console.warn(
+      "[openclaw-sidecar] no model catalog replace-mode anchors found (may already be fixed upstream)",
     );
   }
 
@@ -2189,16 +2661,28 @@ async function stagePatchedOpenclawPackage() {
   const bridgePatchedFiles = await patchReplyOutcomeBridge(stagedOpenclawRoot);
   const geminiPatchedFiles =
     await patchGeminiToolSanitization(stagedOpenclawRoot);
+  const openAIResponsesPatchedFiles =
+    await patchOpenAIResponsesFunctionNames(stagedOpenclawRoot);
+  const modelPricingPatchedFiles =
+    await patchModelPricingBootstrap(stagedOpenclawRoot);
+  const telegramSetupPatchedFiles =
+    await patchTelegramBundledSetupEntry(stagedOpenclawRoot);
   const controlUiPatchedFiles =
     await patchControlUiGeneratedImageRendering(stagedOpenclawRoot);
   const modelsConfigPatchedFiles =
     await patchModelsConfigCaching(stagedOpenclawRoot);
+  const modelCatalogPatchedFiles =
+    await patchModelCatalogReplaceMode(stagedOpenclawRoot);
   const patchedFiles = new Map([
     ...overlayFiles,
     ...bridgePatchedFiles,
     ...geminiPatchedFiles,
+    ...openAIResponsesPatchedFiles,
+    ...modelPricingPatchedFiles,
+    ...telegramSetupPatchedFiles,
     ...controlUiPatchedFiles,
     ...modelsConfigPatchedFiles,
+    ...modelCatalogPatchedFiles,
   ]);
 
   for (const [patchRelativePath, patchedSource] of patchedFiles) {
@@ -2546,6 +3030,12 @@ async function prepareOpenclawSidecar() {
       await writeFile(
         resolve(sidecarRoot, "package.json"),
         '{\n  "name": "openclaw-sidecar",\n  "private": true\n}\n',
+      );
+      await writeArchivedSidecarMetadata(
+        sidecarRoot,
+        fingerprint,
+        archiveFormat,
+        payloadFileName,
       );
       await robustRename(archivePath, resolve(sidecarRoot, payloadFileName));
     });

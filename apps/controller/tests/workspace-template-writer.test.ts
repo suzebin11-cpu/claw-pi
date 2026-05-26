@@ -94,13 +94,17 @@ describe("WorkspaceTemplateWriter", () => {
     await rm(rootDir, { recursive: true, force: true });
   });
 
+  function platformTemplatesDir(): string {
+    if (!env.platformTemplatesDir) {
+      throw new Error("platformTemplatesDir missing in test env");
+    }
+    return env.platformTemplatesDir;
+  }
+
   it("migrates legacy AGENTS.md startup instructions without overwriting custom files", async () => {
-    await mkdir(env.platformTemplatesDir!, { recursive: true });
-    await writeFile(
-      path.join(env.platformTemplatesDir!, "AGENTS.md"),
-      legacyAgents,
-      "utf8",
-    );
+    const templatesDir = platformTemplatesDir();
+    await mkdir(templatesDir, { recursive: true });
+    await writeFile(path.join(templatesDir, "AGENTS.md"), legacyAgents, "utf8");
 
     const workspaceDir = path.join(env.openclawStateDir, "agents", "bot-1");
     await mkdir(workspaceDir, { recursive: true });
@@ -120,5 +124,21 @@ describe("WorkspaceTemplateWriter", () => {
     expect(await readFile(path.join(workspaceDir, "SOUL.md"), "utf8")).toBe(
       "custom soul",
     );
+  });
+
+  it("seeds platform templates into the default main workspace without configured bots", async () => {
+    const templatesDir = platformTemplatesDir();
+    await mkdir(templatesDir, { recursive: true });
+    await writeFile(path.join(templatesDir, "AGENTS.md"), legacyAgents, "utf8");
+
+    await new WorkspaceTemplateWriter(env).write([]);
+
+    const mainAgents = await readFile(
+      path.join(env.openclawStateDir, "agents", "main", "AGENTS.md"),
+      "utf8",
+    );
+    expect(mainAgents).toContain("Keep startup lightweight");
+    expect(mainAgents).toContain("## Claw Pi Task Execution");
+    expect(mainAgents).not.toContain("Before doing anything else:");
   });
 });

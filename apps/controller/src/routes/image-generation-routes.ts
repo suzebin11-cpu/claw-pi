@@ -1,5 +1,6 @@
 import { type OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { ControllerContainer } from "../app/container.js";
+import { normalizeImageGenerationErrorMessage } from "../services/image-generation-service.js";
 import type { ControllerBindings } from "../types.js";
 
 const imageGenerationBodySchema = z.object({
@@ -71,8 +72,9 @@ export function registerImageGenerationRoutes(
         );
         return c.json({ ok: true as const, ...result }, 200);
       } catch (error) {
-        const message =
-          error instanceof Error ? error.message : "图片生成失败，请稍后重试";
+        const message = normalizeImageGenerationErrorMessage(
+          error instanceof Error ? error.message : "图片生成失败，请稍后重试",
+        );
         return c.json({ ok: false as const, error: message }, 400);
       }
     },

@@ -60,9 +60,11 @@ type OpenAiImageResponse = {
 
 const DEFAULT_IMAGE_SIZE = "1024x1024";
 const IMAGE_GENERATION_TIMEOUT_MS = 180_000;
+const IMAGE_DOWNLOAD_TIMEOUT_MS = 90_000;
 const IMAGE_GENERATION_RETRY_DELAYS_MS = [1_500, 3_000] as const;
 const MAX_INPUT_IMAGES = 4;
 const MAX_PROMPT_CHARS = 4000;
+const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
 
 function getGeneratedImagesDir(env: ControllerEnv): string {
   return path.join(env.nexuHomeDir, "generated-images");
@@ -91,7 +93,12 @@ function normalizeSize(input: GenerateImageInput): string {
   const rawSize = input.size?.trim();
   if (rawSize) return rawSize;
 
-  switch (input.aspectRatio?.trim()) {
+  const aspectRatio = input.aspectRatio?.trim();
+  if (aspectRatio === "1:1" || aspectRatio === "square") {
+    return DEFAULT_IMAGE_SIZE;
+  }
+
+  switch (aspectRatio) {
     case "landscape":
     case "16:9":
     case "3:2":
@@ -100,8 +107,6 @@ function normalizeSize(input: GenerateImageInput): string {
     case "9:16":
     case "2:3":
       return "1024x1536";
-    case "1:1":
-    case "square":
     default:
       return DEFAULT_IMAGE_SIZE;
   }
@@ -137,9 +142,10 @@ function parseDataUrl(input: string): { bytes: Buffer; mimeType: string } {
   };
 }
 
-function parseImageResponse(
-  payload: OpenAiImageResponse,
-): { b64Json?: string; url?: string } {
+function parseImageResponse(payload: OpenAiImageResponse): {
+  b64Json?: string;
+  url?: string;
+} {
   const first = payload.data?.[0];
   if (!first) {
     const message = payload.error?.message ?? "生图接口没有返回图片";
@@ -175,9 +181,7 @@ function shouldRetryWithoutResponseFormat(message: string): boolean {
   const normalized = message.toLowerCase();
   return (
     normalized.includes("response_format") &&
-    (/unknown|unsupported|unrecognized|invalid|not support/u.test(
-      normalized,
-    ) ||
+    (/unknown|unsupported|unrecognized|invalid|not support/u.test(normalized) ||
       /不支持|未知|无效|不允许/u.test(message))
   );
 }
@@ -186,6 +190,35 @@ function isImageSafetyRejection(message: string): boolean {
   return /safety system|content policy|content moderation|policy violation|unsafe|安全系统|安全策略|内容审核|风控|违规/u.test(
     message.toLowerCase(),
   );
+}
+
+function isInsufficientBalanceError(message: string): boolean {
+  return /(?:token quota is not enough|need quota|insufficient (?:balance|quota|credits?)|quota.+not enough|余额不足|额度不足|余额不够|充值)/iu.test(
+    message,
+  );
+}
+
+function isImageNetworkError(message: string): boolean {
+  return (
+    /^(?:fetch failed|network error)$/iu.test(message.trim()) ||
+    /(?:socket|connection|econnreset|econnrefused|etimedout|eai_again|enotfound|network|fetch failed|网络|连接失败|连接中断)/iu.test(
+      message,
+    )
+  );
+}
+
+export function normalizeImageGenerationErrorMessage(message: string): string {
+  const trimmed = message.trim();
+  if (isInsufficientBalanceError(trimmed)) {
+    return INSUFFICIENT_BALANCE_MESSAGE;
+  }
+  if (/timed out|timeout|超时/iu.test(trimmed)) {
+    return "图片生成超时，请稍后重试";
+  }
+  if (isImageNetworkError(trimmed)) {
+    return "图片生成服务连接失败，请稍后重试";
+  }
+  return trimmed || "图片生成失败，请稍后重试";
 }
 
 function shouldRetryTransientImageError(
@@ -200,7 +233,7 @@ function shouldRetryTransientImageError(
     return true;
   }
 
-  return /overloaded|rate limit|too many|temporar|timeout|timed out|busy|queue|upstream|econnreset|etimedout|限流|负载|繁忙|饱和|排队|超时|稍后再试/u.test(
+  return /fetch failed|network|socket|connection|aborted|overloaded|rate limit|too many|temporar|timeout|timed out|busy|queue|upstream|econnreset|econnrefused|etimedout|eai_again|enotfound|限流|负载|繁忙|饱和|排队|超时|网络|连接|稍后再试/u.test(
     message.toLowerCase(),
   );
 }
@@ -213,15 +246,53 @@ async function fetchImageBytes(
   fetchImpl: ImageFetch,
   imageUrl: string,
 ): Promise<{ bytes: Buffer; mimeType: string }> {
-  const response = await fetchImpl(imageUrl);
-  if (!response.ok) {
-    throw new Error(`下载生成图片失败: HTTP ${response.status}`);
+  let retryIndex = 0;
+
+  while (true) {
+    try {
+      const response = await fetchImpl(imageUrl, {
+        timeoutMs: IMAGE_DOWNLOAD_TIMEOUT_MS,
+      });
+      if (!response.ok) {
+        const message = `下载生成图片失败: HTTP ${response.status}`;
+        if (
+          retryIndex < IMAGE_GENERATION_RETRY_DELAYS_MS.length &&
+          shouldRetryTransientImageError(response.status, message)
+        ) {
+          const retryDelay = IMAGE_GENERATION_RETRY_DELAYS_MS[retryIndex] ?? 0;
+          retryIndex += 1;
+          logger.warn(
+            { retryIndex, retryDelay, status: response.status },
+            "image_download_transient_retry",
+          );
+          await delay(retryDelay);
+          continue;
+        }
+        throw new Error(message);
+      }
+      const contentType = response.headers.get("content-type") ?? "image/png";
+      return {
+        mimeType: contentType.split(";")[0]?.trim() || "image/png",
+        bytes: Buffer.from(await response.arrayBuffer()),
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (
+        retryIndex < IMAGE_GENERATION_RETRY_DELAYS_MS.length &&
+        shouldRetryTransientImageError(null, message)
+      ) {
+        const retryDelay = IMAGE_GENERATION_RETRY_DELAYS_MS[retryIndex] ?? 0;
+        retryIndex += 1;
+        logger.warn(
+          { retryIndex, retryDelay, errorMessage: message },
+          "image_download_network_retry",
+        );
+        await delay(retryDelay);
+        continue;
+      }
+      throw error;
+    }
   }
-  const contentType = response.headers.get("content-type") ?? "image/png";
-  return {
-    mimeType: contentType.split(";")[0]?.trim() || "image/png",
-    bytes: Buffer.from(await response.arrayBuffer()),
-  };
 }
 
 async function buildInputImageBlob(
@@ -252,7 +323,8 @@ async function buildInputImageBlob(
   const mimeType = mimeTypeFromPath(input);
   return {
     blob: new Blob([bytes], { type: mimeType }),
-    fileName: path.basename(input) || `reference.${extensionFromMimeType(mimeType)}`,
+    fileName:
+      path.basename(input) || `reference.${extensionFromMimeType(mimeType)}`,
   };
 }
 
@@ -267,7 +339,9 @@ export class ImageGenerationService {
     this.fetchImpl = options.fetchImpl ?? proxyFetch;
   }
 
-  async generateImage(input: GenerateImageInput): Promise<GeneratedImageResult> {
+  async generateImage(
+    input: GenerateImageInput,
+  ): Promise<GeneratedImageResult> {
     const startedAt = Date.now();
     const prompt = input.prompt.trim();
     if (!prompt) {
@@ -289,29 +363,34 @@ export class ImageGenerationService {
 
     const cloudModelId = runtimeModelIdToCloudModelId(settings.modelId);
     const size = normalizeSize(input);
-    const payload = inputImages.length > 0
-      ? await this.callImageEdit({
-          settings,
-          modelId: cloudModelId,
-          prompt,
-          size,
-          inputImages,
-        })
-      : await this.callImageGeneration({
-          settings,
-          modelId: cloudModelId,
-          prompt,
-          size,
-        });
+    const payload =
+      inputImages.length > 0
+        ? await this.callImageEdit({
+            settings,
+            modelId: cloudModelId,
+            prompt,
+            size,
+            inputImages,
+          })
+        : await this.callImageGeneration({
+            settings,
+            modelId: cloudModelId,
+            prompt,
+            size,
+          });
 
     const generated = parseImageResponse(payload);
+    const generatedUrl = generated.url;
+    if (generated.b64Json === undefined && !generatedUrl) {
+      throw new Error("生图接口返回格式不包含 url 或 b64_json");
+    }
     const image =
       generated.b64Json !== undefined
         ? {
             bytes: Buffer.from(generated.b64Json, "base64"),
             mimeType: "image/png",
           }
-        : await fetchImageBytes(this.fetchImpl, generated.url!);
+        : await fetchImageBytes(this.fetchImpl, generatedUrl ?? "");
 
     const result = await this.saveImage({
       bytes: image.bytes,
@@ -360,16 +439,23 @@ export class ImageGenerationService {
           const retryDelay = IMAGE_GENERATION_RETRY_DELAYS_MS[retryIndex] ?? 0;
           retryIndex += 1;
           logger.warn(
-            { label: params.label, retryIndex, retryDelay, errorMessage: message },
+            {
+              label: params.label,
+              retryIndex,
+              retryDelay,
+              errorMessage: message,
+            },
             "image_generation_network_retry",
           );
           await delay(retryDelay);
           continue;
         }
         throw new Error(
-          message === "fetch failed" && lastUpstreamError
-            ? lastUpstreamError
-            : message,
+          normalizeImageGenerationErrorMessage(
+            message === "fetch failed" && lastUpstreamError
+              ? lastUpstreamError
+              : message,
+          ),
         );
       }
 
@@ -382,7 +468,11 @@ export class ImageGenerationService {
       if (includeResponseFormat && shouldRetryWithoutResponseFormat(message)) {
         includeResponseFormat = false;
         logger.warn(
-          { label: params.label, status: response.status, errorMessage: message },
+          {
+            label: params.label,
+            status: response.status,
+            errorMessage: message,
+          },
           "image_generation_retry_without_response_format",
         );
         continue;
@@ -416,7 +506,7 @@ export class ImageGenerationService {
         },
         "image_generation_failed",
       );
-      throw new Error(message);
+      throw new Error(normalizeImageGenerationErrorMessage(message));
     }
   }
 
@@ -441,8 +531,7 @@ export class ImageGenerationService {
       linkUrl:
         (typeof cloud.linkUrl === "string" && cloud.linkUrl.trim()) ||
         status.linkUrl,
-      apiKey:
-        (typeof cloud.apiKey === "string" && cloud.apiKey.trim()) || null,
+      apiKey: (typeof cloud.apiKey === "string" && cloud.apiKey.trim()) || null,
       modelId: normalizeImageModelId(configuredModelId),
     };
   }

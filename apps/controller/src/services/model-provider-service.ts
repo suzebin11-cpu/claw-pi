@@ -286,6 +286,11 @@ function findWorkspaceRoot(startDir: string): string | null {
   return null;
 }
 
+function resolveOpenClawEntryFromBin(openclawBin: string): string {
+  const binDir = path.dirname(path.resolve(openclawBin));
+  return path.resolve(binDir, "..", "node_modules", "openclaw", "openclaw.mjs");
+}
+
 function getOpenClawCommandSpec(env: ControllerEnv): {
   command: string;
   argsPrefix: string[];
@@ -304,6 +309,15 @@ function getOpenClawCommandSpec(env: ControllerEnv): {
     : null;
   const electronExec = process.env.OPENCLAW_ELECTRON_EXECUTABLE;
   if (electronExec) {
+    const sidecarEntryPath = resolveOpenClawEntryFromBin(env.openclawBin);
+    if (existsSync(sidecarEntryPath)) {
+      return {
+        command: electronExec,
+        argsPrefix: [sidecarEntryPath],
+        extraEnv: { ELECTRON_RUN_AS_NODE: "1" },
+      };
+    }
+
     if (runtimeEntryPath && existsSync(runtimeEntryPath)) {
       return {
         command: electronExec,
@@ -312,15 +326,9 @@ function getOpenClawCommandSpec(env: ControllerEnv): {
       };
     }
 
-    const binDir = path.dirname(path.resolve(env.openclawBin));
-    const entry = path.resolve(
-      binDir,
-      "..",
-      "node_modules/openclaw/openclaw.mjs",
-    );
     return {
       command: electronExec,
-      argsPrefix: [entry],
+      argsPrefix: [sidecarEntryPath],
       extraEnv: { ELECTRON_RUN_AS_NODE: "1" },
     };
   }

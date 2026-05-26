@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { cors } from "hono/cors";
+import { registerAgentChatRoutes } from "../routes/agent-chat-routes.js";
 import { registerActivationRoutes } from "../routes/activation-routes.js";
 import { registerArtifactRoutes } from "../routes/artifact-routes.js";
 import { registerBotRoutes } from "../routes/bot-routes.js";
@@ -38,6 +39,7 @@ export function createApp(container: ControllerContainer) {
 
   registerActivationRoutes(app, container);
   registerBotRoutes(app, container);
+  registerAgentChatRoutes(app, container);
   registerMiscCompatRoutes(app, container);
   registerDesktopRoutes(app, container);
   registerDesktopCompatRoutes(app, container);

@@ -13,6 +13,9 @@ const cacheFilePath = path.join(runtimeDir, cacheFileName);
 const lockfilePath = path.join(runtimeDir, "package-lock.json");
 const criticalRuntimeFiles = [
   path.join("node_modules", "openclaw", "dist"),
+  path.join("node_modules", "openclaw", "package.json"),
+  path.join("node_modules", "tslog", "package.json"),
+  path.join("node_modules", "tslog", "esm", "index.js"),
   path.join("node_modules", "@whiskeysockets", "baileys", "lib", "index.js"),
   path.join(
     "node_modules",
