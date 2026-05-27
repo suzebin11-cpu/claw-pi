@@ -142,6 +142,7 @@ export function DesktopShell() {
         </div>
         <div style={{ display: activeSurface === "web" ? "contents" : "none" }}>
           <SurfaceFrame
+            active={activeSurface === "web"}
             description="Authenticated workspace surface served by the repo-local web sidecar."
             src={desktopWebUrl}
             title="nexu Web"
@@ -155,7 +156,9 @@ export function DesktopShell() {
           }}
         >
           <SurfaceFrame
+            active={activeSurface === "openclaw"}
             description="Local OpenClaw chat surface for asking questions directly."
+            mountWhenInactive={false}
             src={desktopOpenClawUrl}
             title="OpenClaw Chat"
             version={0}

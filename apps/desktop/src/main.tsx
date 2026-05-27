@@ -1282,6 +1282,7 @@ function DesktopShell() {
           <SurfaceFrame
             active={activeSurface === "openclaw"}
             description="Local OpenClaw chat surface for asking questions directly."
+            mountWhenInactive={false}
             src={desktopOpenClawUrl}
             title="OpenClaw Chat"
             version={0}

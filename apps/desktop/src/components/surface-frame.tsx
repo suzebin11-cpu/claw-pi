@@ -44,6 +44,7 @@ export function SurfaceFrame({
   title: _title,
   description: _description,
   active = true,
+  mountWhenInactive = true,
   src,
   version,
   preload,
@@ -51,6 +52,7 @@ export function SurfaceFrame({
   title: string;
   description: string;
   active?: boolean;
+  mountWhenInactive?: boolean;
   src: string | null;
   version: number;
   preload?: string;
@@ -63,6 +65,11 @@ export function SurfaceFrame({
   const webviewReadyRef = useRef(false);
   const retryCountRef = useRef(0);
   const retryTimerRef = useRef<number | null>(null);
+  const [webviewCrash, setWebviewCrash] = useState<{
+    reason: string;
+    exitCode: number | null;
+  } | null>(null);
+  const [reloadVersion, setReloadVersion] = useState(0);
 
   // Reset when src changes
   if (src !== prevSrcRef.current) {
@@ -74,7 +81,11 @@ export function SurfaceFrame({
       retryTimerRef.current = null;
     }
     if (webviewReady) setWebviewReady(false);
+    if (webviewCrash) setWebviewCrash(null);
   }
+
+  const shouldKeepMounted = Boolean(src) && (active || mountWhenInactive);
+  const shouldMountWebview = shouldKeepMounted && !webviewCrash;
 
   const webviewRefCallback = useCallback(
     (el: HTMLElement | null) => {
@@ -122,18 +133,51 @@ export function SurfaceFrame({
           }
         }, WEBVIEW_RETRY_DELAY_MS);
       };
+      const markGone = (event: Event) => {
+        const goneEvent = event as Event & {
+          reason?: string;
+          exitCode?: number;
+        };
+        webviewReadyRef.current = false;
+        setWebviewReady(false);
+        setWebviewCrash({
+          reason: goneEvent.reason || "unknown",
+          exitCode:
+            typeof goneEvent.exitCode === "number" ? goneEvent.exitCode : null,
+        });
+      };
       el.addEventListener("dom-ready", markReady);
       el.addEventListener("did-finish-load", markReady);
       el.addEventListener("did-fail-load", retryLoad);
+      el.addEventListener("render-process-gone", markGone);
       cleanupListenersRef.current = () => {
         el.removeEventListener("dom-ready", markReady);
         el.removeEventListener("did-finish-load", markReady);
         el.removeEventListener("did-fail-load", retryLoad);
+        el.removeEventListener("render-process-gone", markGone);
       };
       el.setAttribute("src", src);
     },
     [preload, src],
   );
+
+  useEffect(() => {
+    if (shouldKeepMounted) {
+      return;
+    }
+    if (retryTimerRef.current !== null) {
+      window.clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
+    if (cleanupListenersRef.current) {
+      cleanupListenersRef.current();
+      cleanupListenersRef.current = null;
+    }
+    retryCountRef.current = 0;
+    webviewReadyRef.current = false;
+    setWebviewReady(false);
+    setWebviewCrash(null);
+  }, [shouldKeepMounted]);
 
   useEffect(() => {
     return () => {
@@ -148,7 +192,16 @@ export function SurfaceFrame({
     };
   }, []);
 
-  const showLoader = !src || !webviewReady;
+  const reloadWebview = useCallback(() => {
+    retryCountRef.current = 0;
+    webviewReadyRef.current = false;
+    setWebviewReady(false);
+    setWebviewCrash(null);
+    setReloadVersion((current) => current + 1);
+  }, []);
+
+  const showLoader =
+    !webviewCrash && active && (!src || (shouldKeepMounted && !webviewReady));
 
   return (
     <section
@@ -158,11 +211,11 @@ export function SurfaceFrame({
       }
       style={{ position: "relative" }}
     >
-      {src && (
+      {shouldMountWebview && (
         <webview
           ref={webviewRefCallback as React.Ref<HTMLWebViewElement>}
           className="desktop-web-frame"
-          key={`${src}:${version}`}
+          key={`${src}:${version}:${reloadVersion}`}
           // @ts-expect-error Electron webview boolean attribute — must be empty string, not boolean
           allowpopups=""
           style={{ opacity: webviewReady ? 1 : 0 }}
@@ -184,6 +237,50 @@ export function SurfaceFrame({
           }}
         >
           <ClawPiLoader size={96} />
+        </div>
+      )}
+
+      {webviewCrash && active && (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 12,
+            background: "#11161d",
+            color: "rgba(255, 255, 255, 0.86)",
+            zIndex: 20,
+            padding: 24,
+            textAlign: "center",
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 600 }}>
+            页面进程已崩溃
+          </div>
+          <div style={{ maxWidth: 460, fontSize: 12, opacity: 0.72 }}>
+            {`原因：${webviewCrash.reason}${
+              webviewCrash.exitCode === null
+                ? ""
+                : `，退出码：${webviewCrash.exitCode}`
+            }`}
+          </div>
+          <button
+            type="button"
+            onClick={reloadWebview}
+            style={{
+              border: "1px solid rgba(255, 255, 255, 0.18)",
+              borderRadius: 8,
+              background: "rgba(255, 255, 255, 0.08)",
+              color: "white",
+              cursor: "pointer",
+              padding: "8px 12px",
+            }}
+          >
+            重新加载
+          </button>
         </div>
       )}
     </section>

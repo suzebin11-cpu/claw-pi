@@ -3,7 +3,7 @@
 :toc-title: 目录
 :sectnums:
 :revnumber: 0.1
-:revdate: 2026-05-25
+:revdate: 2026-05-28
 :revremark: arc42 working document
 
 == 1. 引言与目标
@@ -38,6 +38,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * OpenClaw pricing bootstrap 可通过 `OPENCLAW_SKIP_MODEL_PRICING=1` 禁用，避免首条请求被 OpenRouter 价格表超时拖慢。
 * OpenClaw WS 首次 connected 后只在断连期间发生配置写入时触发 `syncAll()`，避免启动阶段重复 reload。
 * OpenClaw sidecar 在 `models.mode="replace"` 且已有显式供应商模型时，跳过隐式 provider discovery，并直接从 Claw-Pi 编译出的 `models.providers` 构建 model catalog。
+* Desktop shell 保持主 Web 工作台常驻，但 OpenClaw 原生调试页改为按需挂载，降低隐藏 webview 常驻导致的 OOM 风险。
 
 === 1.3 质量目标
 
@@ -115,6 +116,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * Sidecar patch：OpenClaw 上游包通过 `prepare-openclaw-sidecar.mjs` 打补丁，确保打包产物可重复生成。
 * 冷启动体验修复：即使 OpenClaw WS 尚未 connected，Controller 也先返回 SSE stream，再在后台等待 gateway ready。
 * Replace-mode catalog fast path：当 Claw-Pi 已经把云雾/Link 模型写进 OpenClaw config 的显式 providers 时，OpenClaw 不再扫描隐式供应商或 provider plugin catalog，直接使用显式列表。
+* Desktop surface lifecycle：用户主流程 Web 工作台保持挂载以保留输入框、附件预览和滚动状态；OpenClaw 原生页只在被激活时挂载，inactive 后释放其 webview 进程。
 
 == 5. 构建块视图
 
@@ -168,6 +170,9 @@ Claw-Pi Desktop
 
 |`release/win-unpacked`
 |当前 portable 运行包目录。
+
+|`SurfaceFrame`
+|Electron desktop 内嵌 webview 容器。支持按 surface 控制 inactive 时是否继续挂载，并在 webview renderer 崩溃时显示可重载错误态。
 |===
 
 == 6. 运行时视图
@@ -227,6 +232,30 @@ Controller compileModelsConfig
 ----
 
 这个路径只影响 OpenClaw sidecar 的模型发现阶段，不改变龙虾大脑、微信/飞书渠道和 `/v1/chat/completions` 的兼容路径。
+
+=== 6.5 Desktop Surface 生命周期
+
+[source,text]
+----
+默认用户路径:
+  Web 工作台 /workspace
+  -> SurfaceFrame mountWhenInactive=true
+  -> 切到其他桌面页时仍保留输入、附件预览、滚动和会话 UI 状态
+
+诊断/调试路径:
+  OpenClaw 原生 /chat
+  -> SurfaceFrame mountWhenInactive=false
+  -> 只有 activeSurface=openclaw 时挂载 webview
+  -> inactive 后卸载 webview，释放 OpenClaw Chat 页面内存
+
+崩溃路径:
+  webview render-process-gone
+  -> SurfaceFrame 记录 reason/exitCode
+  -> 显示“页面进程已崩溃”和“重新加载”
+  -> 用户触发后重新挂载 webview
+----
+
+该策略优先保护普通用户使用 Web 工作台的连续性，同时减少非主流程 OpenClaw 原生页在后台常驻造成的 OOM 风险。
 
 == 7. 部署视图
 
@@ -325,6 +354,14 @@ agent:{agentId}:workbench:{sessionId}
 
 结果：`AgentChatService` 创建 `ReadableStream` 后立即返回 Response，后台等待 Gateway connected。
 
+=== ADR-006: Web 工作台常驻，OpenClaw 原生页按需挂载
+
+*状态：已采纳*
+
+原因：诊断包中出现多次 Electron embedded webview OOM。直接卸载所有 inactive webview 会影响习惯使用 Web 工作台的用户，造成输入框内容、附件预览、滚动位置和未完成操作状态丢失。
+
+结果：主 Web 工作台保持 inactive 常驻；OpenClaw 原生调试页 inactive 时卸载。`SurfaceFrame` 增加 `mountWhenInactive` 控制，并在 `render-process-gone` 时显示可重载错误态。
+
 == 10. 质量需求
 
 === 10.1 质量场景
@@ -352,6 +389,10 @@ agent:{agentId}:workbench:{sessionId}
 |可打包性
 |修复必须进入 portable 包，而不是手工改 release 目录。
 |`dist:win:portable` 成功，sidecar patch 日志出现。
+
+|桌面稳定性
+|后台 OpenClaw 原生页不应在普通 Web 工作台使用期间长期占用 webview 进程内存。
+|切换到 Web 后 OpenClaw surface inactive 时不挂载 webview；若 webview 崩溃，UI 显示可重载错误态。
 |===
 
 === 10.2 当前验证
@@ -362,6 +403,8 @@ agent:{agentId}:workbench:{sessionId}
 * `node --check apps/desktop/scripts/prepare-openclaw-sidecar.mjs` 通过。
 * `pnpm --filter @nexu/desktop prepare:openclaw-sidecar` 通过，日志出现 `patched models config behavior` 和 `patched model catalog replace-mode behavior`。
 * `pnpm --filter @nexu/desktop build` 通过（本轮早期验证）。
+* `pnpm --filter @nexu/desktop typecheck` 通过（2026-05-28 webview lifecycle 变更）。
+* `pnpm --filter @nexu/desktop build` 通过（2026-05-28 webview lifecycle 变更）。
 * `pnpm --filter @nexu/desktop dist:win:portable` 通过（本轮早期验证，当前最新 controller 通过手动替换 bundle 进入 `win-unpacked`）。
 * 当前 `win-unpacked` 手动替换 controller bundle 和 OpenClaw dist 后验证：工作台 `link/gpt-5.5` warm 请求 12.2s 返回 `OK-WARM-AFTER-PATCH`。
 * 最终 sanity 请求 `codex-agent-final-warm-20260525232231` 返回 `OK-FINAL-WARM`，总耗时 22.4s；阶段日志显示 WS request 29ms、session 排队 1ms，主要耗时在模型解析和云雾/Link API 返回。
@@ -388,6 +431,14 @@ agent:{agentId}:workbench:{sessionId}
 |配置热 reload 抖动
 |Controller 多次写 OpenClaw config 可能触发 reload，占用事件循环。
 |已限制首次 WS connected 后的重复 `syncAll()`；后续继续减少无差异写入，增加 config fingerprint 去重。
+
+|Webview 生命周期切换
+|卸载 inactive webview 可释放内存，但若用于主工作台会丢失输入、附件预览、滚动位置和正在接收的流式回复。
+|只对 OpenClaw 原生调试页启用 inactive 卸载；Web 工作台保持常驻。后续若需要卸载 Web，必须先持久化草稿、附件和运行中任务状态。
+
+|Webview OOM 复现
+|如果 OOM 根因来自主 Web 工作台本身，卸载 OpenClaw 原生页只能降低概率，不能完全消除。
+|保留 `render-process-gone` 可见错误态；继续用诊断包统计 `reason=oom` 频率，必要时进一步拆分工作台资源或实现 Web surface 安全恢复。
 
 |附件能力不足
 |当前已保存附件，但 DOCX/PPTX/XLSX/PDF 的深度解析仍需补齐。
