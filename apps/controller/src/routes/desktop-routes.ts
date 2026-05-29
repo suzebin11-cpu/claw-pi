@@ -13,8 +13,21 @@ const desktopReadyResponseSchema = z.object({
   runtime: z.object({
     ok: z.boolean(),
     status: z.number().nullable(),
+    skipped: z.boolean().optional(),
   }),
   status: z.enum(["active", "starting", "degraded", "unhealthy"]),
+  desktopReady: z.boolean(),
+  webReady: z.boolean(),
+  openclawReady: z.boolean(),
+  agentReady: z.boolean(),
+  channelsReady: z.boolean(),
+  blockers: z.array(
+    z.object({
+      scope: z.enum(["desktop", "web", "openclaw", "agent", "channels"]),
+      code: z.string(),
+      message: z.string(),
+    }),
+  ),
   gatewayConnected: z.boolean(),
   model: z.object({
     ready: z.boolean(),
@@ -497,6 +510,50 @@ export function registerDesktopRoutes(
         bots.find((bot) => bot.status === "active") ??
         bots.find((bot) => bot.status !== "deleted") ??
         null;
+      const gatewayConnected = container.gatewayService.isConnected();
+      const openclawReady =
+        gatewayConnected && (runtime.ok || runtime.skipped === true);
+      const agentReady = openclawReady && modelReady;
+      const blockers: Array<{
+        scope: "desktop" | "web" | "openclaw" | "agent" | "channels";
+        code: string;
+        message: string;
+      }> = [];
+      if (runtime.skipped === true && !gatewayConnected) {
+        blockers.push({
+          scope: "openclaw",
+          code: "gateway_probe_disabled_no_ws",
+          message:
+            "OpenClaw health probe is disabled and the gateway WebSocket is not connected.",
+        });
+      } else if (!runtime.ok && runtime.status !== null) {
+        blockers.push({
+          scope: "openclaw",
+          code: `openclaw_health_http_${runtime.status}`,
+          message: `OpenClaw health endpoint returned HTTP ${runtime.status}.`,
+        });
+      } else if (!runtime.ok && !runtime.skipped) {
+        blockers.push({
+          scope: "openclaw",
+          code: "openclaw_health_unreachable",
+          message: "OpenClaw health endpoint is unreachable.",
+        });
+      }
+      if (!gatewayConnected) {
+        blockers.push({
+          scope: "openclaw",
+          code: "openclaw_ws_disconnected",
+          message: "Controller is not connected to the OpenClaw gateway.",
+        });
+      }
+      if (!modelReady) {
+        blockers.push({
+          scope: "agent",
+          code: "model_not_ready",
+          message:
+            "The effective OpenClaw runtime model is missing or does not match the configured default model.",
+        });
+      }
 
       const gatewayPort = container.env.openclawGatewayPort;
       const gatewayToken = container.env.openclawGatewayToken;
@@ -510,6 +567,12 @@ export function registerDesktopRoutes(
       return c.json(
         {
           ready: true,
+          desktopReady: true,
+          webReady: true,
+          openclawReady,
+          agentReady,
+          channelsReady: openclawReady,
+          blockers,
           workspacePath: preferredBot
             ? path.join(
                 container.env.openclawStateDir,
@@ -519,7 +582,7 @@ export function registerDesktopRoutes(
             : path.join(container.env.openclawStateDir, "agents"),
           runtime,
           status: container.runtimeState.status,
-          gatewayConnected: container.gatewayService.isConnected(),
+          gatewayConnected,
           model: {
             ready: modelReady,
             defaultModelId: configuredModelId,

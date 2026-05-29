@@ -16,7 +16,6 @@ export function useDesktopRuntimeConfig() {
 
   useEffect(() => {
     if (!runtimeConfig) return;
-    if (apiReady) return;
 
     let cancelled = false;
     const readyUrl = new URL(
@@ -31,10 +30,17 @@ export function useDesktopRuntimeConfig() {
             signal: AbortSignal.timeout(3000),
           });
           if (res.ok) {
-            const data = await res.json();
-            if (data.ready) {
+            const data = (await res.json()) as {
+              ready?: boolean;
+              desktopReady?: boolean;
+              webReady?: boolean;
+              openclawReady?: boolean;
+            };
+            if (typeof data.openclawReady === "boolean" && !cancelled) {
+              setOpenclawReady(data.openclawReady);
+            }
+            if (data.ready || data.desktopReady || data.webReady) {
               if (!cancelled) setApiReady(true);
-              return;
             }
           }
         } catch {
@@ -48,44 +54,7 @@ export function useDesktopRuntimeConfig() {
     return () => {
       cancelled = true;
     };
-  }, [runtimeConfig, apiReady]);
-
-  useEffect(() => {
-    const openclawBase = runtimeConfig?.urls.openclawBase;
-    if (!openclawBase) {
-      setOpenclawReady(false);
-      return;
-    }
-
-    let cancelled = false;
-    setOpenclawReady(false);
-
-    const readyUrl = new URL("/chat", openclawBase).toString();
-
-    async function poll() {
-      while (!cancelled) {
-        try {
-          await fetch(readyUrl, {
-            cache: "no-store",
-            mode: "no-cors",
-            signal: AbortSignal.timeout(3000),
-          });
-          if (!cancelled) {
-            setOpenclawReady(true);
-          }
-          return;
-        } catch {
-          // OpenClaw gateway is still booting — do not mount a failing webview yet.
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-
-    void poll();
-    return () => {
-      cancelled = true;
-    };
-  }, [runtimeConfig?.urls.openclawBase]);
+  }, [runtimeConfig]);
 
   const desktopWebUrl = useMemo(() => {
     if (!runtimeConfig || !apiReady) {

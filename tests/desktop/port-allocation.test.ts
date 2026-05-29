@@ -54,13 +54,38 @@ function createRuntimeConfig(input?: {
   };
 }
 
-async function listenOnPort(port: number): Promise<void> {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(port, "127.0.0.1", () => resolve());
-  });
-  servers.push(server);
+async function listenOnEphemeralPort(): Promise<number> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const server = createServer();
+    const port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("Could not determine ephemeral port."));
+          return;
+        }
+        resolve(address.port);
+      });
+    });
+
+    if (port < 65_000) {
+      servers.push(server);
+      return port;
+    }
+
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
+  throw new Error("Could not reserve a usable ephemeral port.");
 }
 
 afterEach(async () => {
@@ -83,41 +108,57 @@ afterEach(async () => {
 
 describe("desktop port allocation", () => {
   it("probes the next idle port when preferred ports are occupied", async () => {
-    const runtimeConfig = createRuntimeConfig();
-    await listenOnPort(runtimeConfig.ports.controller);
-    await listenOnPort(runtimeConfig.ports.web);
-    await listenOnPort(61_020);
+    const controllerPort = await listenOnEphemeralPort();
+    const webPort = await listenOnEphemeralPort();
+    const openclawPort = await listenOnEphemeralPort();
+    const runtimeConfig = createRuntimeConfig({
+      controllerPort,
+      webPort,
+      openclawPort,
+    });
 
     const result = await allocateDesktopRuntimePorts({}, runtimeConfig);
-
-    expect(result.runtimeConfig.ports.controller).toBe(61_001);
-    expect(result.runtimeConfig.ports.web).toBe(61_011);
-    expect(result.runtimeConfig.urls.openclawBase).toBe(
-      "http://127.0.0.1:61021",
+    const allocatedOpenclawPort = Number.parseInt(
+      new URL(result.runtimeConfig.urls.openclawBase).port,
+      10,
     );
-    expect(result.allocations).toEqual([
-      {
-        purpose: "controller",
-        preferredPort: 61_000,
-        port: 61_001,
-        strategy: "probed",
-        attemptDelta: 1,
-      },
-      {
-        purpose: "web",
-        preferredPort: 61_010,
-        port: 61_011,
-        strategy: "probed",
-        attemptDelta: 1,
-      },
-      {
-        purpose: "openclaw",
-        preferredPort: 61_020,
-        port: 61_021,
-        strategy: "probed",
-        attemptDelta: 1,
-      },
-    ]);
+
+    expect(result.runtimeConfig.ports.controller).not.toBe(controllerPort);
+    expect(result.runtimeConfig.ports.web).not.toBe(webPort);
+    expect(allocatedOpenclawPort).not.toBe(openclawPort);
+    expect(
+      new Set([
+        result.runtimeConfig.ports.controller,
+        result.runtimeConfig.ports.web,
+        allocatedOpenclawPort,
+      ]).size,
+    ).toBe(3);
+    expect(result.allocations).toHaveLength(3);
+    expect(result.allocations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          purpose: "controller",
+          preferredPort: controllerPort,
+          port: result.runtimeConfig.ports.controller,
+          strategy: "probed",
+        }),
+        expect.objectContaining({
+          purpose: "web",
+          preferredPort: webPort,
+          port: result.runtimeConfig.ports.web,
+          strategy: "probed",
+        }),
+        expect.objectContaining({
+          purpose: "openclaw",
+          preferredPort: openclawPort,
+          port: allocatedOpenclawPort,
+          strategy: "probed",
+        }),
+      ]),
+    );
+    expect(result.allocations.every((item) => item.attemptDelta > 0)).toBe(
+      true,
+    );
   });
 
   it("throws a classified error when explicit ports conflict inside the bundle", async () => {

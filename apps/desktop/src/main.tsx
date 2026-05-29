@@ -2,7 +2,13 @@ import * as amplitude from "@amplitude/unified";
 import { Identify } from "@amplitude/unified";
 import * as Sentry from "@sentry/electron/renderer";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import ReactDOM from "react-dom/client";
 import { Toaster, toast } from "sonner";
 import type {
@@ -990,16 +996,23 @@ function DiagnosticsPage({
 
 type DesktopReadyPayload = {
   ready?: boolean;
+  desktopReady?: boolean;
+  webReady?: boolean;
+  openclawReady?: boolean;
   runtime?: {
     ok?: boolean;
     status?: number | null;
+    skipped?: boolean;
   };
   status?: "active" | "starting" | "degraded" | "unhealthy";
   gatewayConnected?: boolean;
 };
 
+const DESKTOP_READY_CONTROL_FALLBACK_MS = 12_000;
+const WEB_SURFACE_INACTIVE_UNMOUNT_MS = 120_000;
+
 function isDesktopApiReady(payload: DesktopReadyPayload): boolean {
-  return Boolean(payload.ready);
+  return Boolean(payload.ready || payload.desktopReady || payload.webReady);
 }
 
 function DesktopShell() {
@@ -1012,6 +1025,7 @@ function DesktopShell() {
   const [runtimeConfig, setRuntimeConfig] =
     useState<DesktopRuntimeConfig | null>(null);
   const update = useAutoUpdate();
+  const activeSurfaceRef = useRef(activeSurface);
 
   // Setup animation phases:
   // "playing" → main video (23s) plays once
@@ -1064,12 +1078,19 @@ function DesktopShell() {
   // runtimeConfig always has the final ports (including any fallback).
   const [controllerReady, setControllerReady] = useState(false);
   const [openclawReady, setOpenclawReady] = useState(false);
+  const [, setControllerReadyFailed] = useState(false);
+
+  useEffect(() => {
+    activeSurfaceRef.current = activeSurface;
+  }, [activeSurface]);
 
   useEffect(() => {
     if (!runtimeConfig) return;
-    if (controllerReady) return;
 
     let cancelled = false;
+    const startedAt = Date.now();
+    let apiReadySeen = false;
+    let fallbackShown = false;
     const readyUrl = new URL(
       "/api/internal/desktop/ready",
       runtimeConfig.urls.web,
@@ -1084,16 +1105,31 @@ function DesktopShell() {
           if (res.ok) {
             const data = (await res.json()) as DesktopReadyPayload;
 
-            if (!cancelled && isDesktopApiReady(data)) {
-              setControllerReady(true);
+            if (typeof data.openclawReady === "boolean" && !cancelled) {
+              setOpenclawReady(data.openclawReady);
             }
 
-            if (isDesktopApiReady(data)) {
-              return;
+            if (!cancelled && isDesktopApiReady(data)) {
+              apiReadySeen = true;
+              setControllerReady(true);
+              setControllerReadyFailed(false);
             }
           }
         } catch {
           // Controller or web sidecar not ready yet — keep polling
+        }
+        if (
+          !cancelled &&
+          !fallbackShown &&
+          !apiReadySeen &&
+          Date.now() - startedAt >= DESKTOP_READY_CONTROL_FALLBACK_MS
+        ) {
+          fallbackShown = true;
+          setControllerReadyFailed(true);
+          if (activeSurfaceRef.current === "web") {
+            setActiveSurface("control");
+            setChromeMode("full");
+          }
         }
         await new Promise((r) => setTimeout(r, 1000));
       }
@@ -1103,44 +1139,7 @@ function DesktopShell() {
     return () => {
       cancelled = true;
     };
-  }, [runtimeConfig, controllerReady]);
-
-  useEffect(() => {
-    const openclawBase = runtimeConfig?.urls.openclawBase;
-    if (!openclawBase) {
-      setOpenclawReady(false);
-      return;
-    }
-
-    let cancelled = false;
-    setOpenclawReady(false);
-
-    const readyUrl = new URL("/chat", openclawBase).toString();
-
-    async function poll() {
-      while (!cancelled) {
-        try {
-          await fetch(readyUrl, {
-            cache: "no-store",
-            mode: "no-cors",
-            signal: AbortSignal.timeout(3000),
-          });
-          if (!cancelled) {
-            setOpenclawReady(true);
-          }
-          return;
-        } catch {
-          // OpenClaw gateway is still booting — do not mount a failing webview yet.
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    }
-
-    void poll();
-    return () => {
-      cancelled = true;
-    };
-  }, [runtimeConfig?.urls.openclawBase]);
+  }, [runtimeConfig]);
 
   const desktopWebUrl =
     runtimeConfig && controllerReady
@@ -1270,6 +1269,7 @@ function DesktopShell() {
             title="nexu Web"
             version={webSurfaceVersion}
             preload={getWebviewPreloadUrl()}
+            inactiveUnmountDelayMs={WEB_SURFACE_INACTIVE_UNMOUNT_MS}
           />
         </div>
         <div

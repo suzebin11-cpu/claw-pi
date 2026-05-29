@@ -308,8 +308,27 @@ function getOpenClawCommandSpec(env: ControllerEnv): {
       )
     : null;
   const electronExec = process.env.OPENCLAW_ELECTRON_EXECUTABLE;
+  const sidecarEntryPath = resolveOpenClawEntryFromBin(env.openclawBin);
+  if (env.openclawNodeExecutable && existsSync(env.openclawNodeExecutable)) {
+    const entry =
+      existsSync(sidecarEntryPath) ||
+      !runtimeEntryPath ||
+      !existsSync(runtimeEntryPath)
+        ? sidecarEntryPath
+        : runtimeEntryPath;
+
+    return {
+      command: env.openclawNodeExecutable,
+      argsPrefix: [entry],
+      extraEnv: {
+        PATH: `${path.dirname(env.openclawNodeExecutable)}${path.delimiter}${
+          process.env.PATH ?? ""
+        }`,
+      },
+    };
+  }
+
   if (electronExec) {
-    const sidecarEntryPath = resolveOpenClawEntryFromBin(env.openclawBin);
     if (existsSync(sidecarEntryPath)) {
       return {
         command: electronExec,

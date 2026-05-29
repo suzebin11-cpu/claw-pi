@@ -184,6 +184,61 @@ function sanitizeErrorMessage(
   return sanitized.replace(/([a-z]+:\/\/)([^@\s/]+)@/giu, "$1***:***@");
 }
 
+function copyPrimitiveProperty(
+  target: Error,
+  source: unknown,
+  key: string,
+): void {
+  if (typeof source !== "object" || source === null) {
+    return;
+  }
+  const value = (source as Record<string, unknown>)[key];
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    Object.defineProperty(target, key, {
+      value,
+      enumerable: false,
+      configurable: true,
+    });
+  }
+}
+
+function createProxySafeCause(
+  cause: unknown,
+  proxyEnv: ProxyFetchEnv,
+  depth = 0,
+): unknown {
+  if (!(cause instanceof Error) || depth > 2) {
+    return cause;
+  }
+
+  const safeCause = new Error(sanitizeErrorMessage(cause.message, proxyEnv));
+  safeCause.name = cause.name;
+
+  const causeRecord = cause as Error & {
+    cause?: unknown;
+    code?: unknown;
+    errno?: unknown;
+    syscall?: unknown;
+  };
+  copyPrimitiveProperty(safeCause, causeRecord, "code");
+  copyPrimitiveProperty(safeCause, causeRecord, "errno");
+  copyPrimitiveProperty(safeCause, causeRecord, "syscall");
+
+  if (causeRecord.cause !== undefined) {
+    Object.defineProperty(safeCause, "cause", {
+      value: createProxySafeCause(causeRecord.cause, proxyEnv, depth + 1),
+      enumerable: false,
+      configurable: true,
+    });
+  }
+
+  return safeCause;
+}
+
 function createAbortSignal(
   signal: AbortSignal | undefined,
   timeoutMs: number | undefined,
@@ -303,6 +358,13 @@ function createProxySafeError(
 
   const safeError = new Error(sanitizeErrorMessage(error.message, proxyEnv));
   safeError.name = error.name;
+  if (error.cause !== undefined) {
+    Object.defineProperty(safeError, "cause", {
+      value: createProxySafeCause(error.cause, proxyEnv),
+      enumerable: false,
+      configurable: true,
+    });
+  }
   return safeError;
 }
 

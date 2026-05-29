@@ -48,6 +48,7 @@ export function SurfaceFrame({
   src,
   version,
   preload,
+  inactiveUnmountDelayMs,
 }: {
   title: string;
   description: string;
@@ -56,6 +57,7 @@ export function SurfaceFrame({
   src: string | null;
   version: number;
   preload?: string;
+  inactiveUnmountDelayMs?: number;
 }) {
   void _title;
   void _description;
@@ -70,6 +72,7 @@ export function SurfaceFrame({
     exitCode: number | null;
   } | null>(null);
   const [reloadVersion, setReloadVersion] = useState(0);
+  const [retainInactiveMount, setRetainInactiveMount] = useState(true);
 
   // Reset when src changes
   if (src !== prevSrcRef.current) {
@@ -84,7 +87,38 @@ export function SurfaceFrame({
     if (webviewCrash) setWebviewCrash(null);
   }
 
-  const shouldKeepMounted = Boolean(src) && (active || mountWhenInactive);
+  useEffect(() => {
+    if (active) {
+      setRetainInactiveMount(true);
+      return;
+    }
+
+    if (!mountWhenInactive) {
+      setRetainInactiveMount(false);
+      return;
+    }
+
+    if (inactiveUnmountDelayMs === undefined) {
+      setRetainInactiveMount(true);
+      return;
+    }
+
+    if (inactiveUnmountDelayMs <= 0) {
+      setRetainInactiveMount(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setRetainInactiveMount(false);
+    }, inactiveUnmountDelayMs);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [active, inactiveUnmountDelayMs, mountWhenInactive]);
+
+  const shouldKeepMounted =
+    Boolean(src) && (active || (mountWhenInactive && retainInactiveMount));
   const shouldMountWebview = shouldKeepMounted && !webviewCrash;
 
   const webviewRefCallback = useCallback(

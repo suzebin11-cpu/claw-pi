@@ -89,10 +89,12 @@ export function startHealthLoop(params: {
       const prevGateway = params.state.gatewayStatus;
       const checkedAt = new Date().toISOString();
       const result = await params.runtimeHealth.probe();
+      const gatewayConnected = params.wsClient?.isConnected() ?? false;
+      const probeSkipped = result.skipped === true;
       params.state.lastGatewayProbeAt = checkedAt;
       if (result.ok) {
         if (
-          !params.wsClient?.isConnected() &&
+          !gatewayConnected &&
           hasRecentGatewayAuthFailure(params.wsClient)
         ) {
           params.state.gatewayStatus = "degraded";
@@ -113,6 +115,20 @@ export function startHealthLoop(params: {
         // instead of waiting for the backoff timer.
         if (prevGateway !== "active") {
           params.wsClient?.retryNow();
+        }
+      } else if (probeSkipped) {
+        if (gatewayConnected) {
+          params.state.gatewayStatus = "active";
+          params.state.lastGatewayError = null;
+        } else if (hasRecentGatewayAuthFailure(params.wsClient)) {
+          params.state.gatewayStatus = "degraded";
+          params.state.lastGatewayError = "gateway_auth_failed";
+        } else {
+          const stillBooting = params.state.bootPhase === "booting";
+          const processAlive = params.processManager?.isAlive() ?? false;
+          params.state.gatewayStatus =
+            stillBooting || processAlive ? "starting" : "degraded";
+          params.state.lastGatewayError = "gateway_probe_disabled_no_ws";
         }
       } else if (result.status !== null) {
         // Gateway responded but with an error status code

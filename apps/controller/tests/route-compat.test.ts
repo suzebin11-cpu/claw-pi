@@ -935,9 +935,29 @@ describe("controller route compatibility", () => {
     const response = await app.request("/api/internal/desktop/ready");
     expect(response.status).toBe(200);
 
-    const payload = (await response.json()) as { workspacePath: string };
+    const payload = (await response.json()) as {
+      workspacePath: string;
+      ready: boolean;
+      desktopReady: boolean;
+      webReady: boolean;
+      openclawReady: boolean;
+      agentReady: boolean;
+      channelsReady: boolean;
+      runtime: { ok: boolean; status: number | null; skipped?: boolean };
+      blockers: Array<{ scope: string; code: string; message: string }>;
+    };
     expect(payload.workspacePath).toBe(
       path.join(rootDir, ".openclaw", "agents", bot.id),
+    );
+    expect(payload.ready).toBe(true);
+    expect(payload.desktopReady).toBe(true);
+    expect(payload.webReady).toBe(true);
+    expect(payload.openclawReady).toBe(false);
+    expect(payload.agentReady).toBe(false);
+    expect(payload.channelsReady).toBe(false);
+    expect(payload.runtime).toMatchObject({ ok: false, skipped: true });
+    expect(payload.blockers.map((blocker) => blocker.code)).toContain(
+      "gateway_probe_disabled_no_ws",
     );
   });
 });

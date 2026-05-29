@@ -622,18 +622,6 @@ function estimateTokenCostYuan(input: {
   );
 }
 
-function formatTokenCount(count: number): string {
-  if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
-  if (count >= 10_000) return `${(count / 1_000).toFixed(1)}K`;
-  return String(Math.round(count));
-}
-
-function formatUsageCost(cost: number | undefined): string | null {
-  if (cost === undefined) return null;
-  if (cost > 0 && cost < 0.0001) return "<¥0.0001";
-  return `¥${cost.toFixed(cost < 0.01 ? 4 : 2)}`;
-}
-
 function formatDurationMs(durationMs: number | undefined): string | null {
   if (durationMs === undefined || !Number.isFinite(durationMs)) return null;
   if (durationMs < 1000) return `${Math.max(1, Math.round(durationMs))}ms`;
@@ -1619,28 +1607,7 @@ function MessageBubble({
               </button>
             ) : null}
           </div>
-          {message.usage ? (
-            <div className="shrink-0 text-right tabular-nums">
-              <span>
-                {message.usage.estimated ? t("ask.usage.estimated") : ""}
-                {t("ask.usage.tokens")}:{" "}
-                {formatTokenCount(message.usage.totalTokens)} ↑
-                {formatTokenCount(message.usage.inputTokens)} ↓
-                {formatTokenCount(message.usage.outputTokens)}
-              </span>
-              {formatUsageCost(message.usage.costYuan) ? (
-                <span className="ml-2">
-                  {t("ask.usage.cost")}{" "}
-                  {formatUsageCost(message.usage.costYuan)}
-                </span>
-              ) : null}
-              {durationLabel ? (
-                <span className="ml-2">
-                  {t("ask.usage.duration")} {durationLabel}
-                </span>
-              ) : null}
-            </div>
-          ) : durationLabel ? (
+          {durationLabel ? (
             <div className="shrink-0 text-right tabular-nums">
               {t("ask.usage.duration")} {durationLabel}
             </div>

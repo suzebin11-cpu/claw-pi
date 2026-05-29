@@ -1,4 +1,9 @@
-import { type ChildProcess, execSync, spawn } from "node:child_process";
+import {
+  type ChildProcess,
+  execFileSync,
+  execSync,
+  spawn,
+} from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { readdir, rm } from "node:fs/promises";
 import net from "node:net";
@@ -43,6 +48,27 @@ function findWorkspaceRoot(startDir: string): string | null {
 function resolveOpenClawEntryFromBin(openclawBin: string): string {
   const binDir = path.dirname(path.resolve(openclawBin));
   return path.resolve(binDir, "..", "node_modules", "openclaw", "openclaw.mjs");
+}
+
+function isUsableStandaloneNode(nodeExecutable: string | null): boolean {
+  if (!nodeExecutable || !existsSync(nodeExecutable)) {
+    return false;
+  }
+
+  try {
+    const version = execFileSync(
+      nodeExecutable,
+      ["-p", "process.versions.node"],
+      {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    ).trim();
+    const major = Number.parseInt(version.split(".")[0] ?? "", 10);
+    return Number.isFinite(major) && major >= 22;
+  } catch {
+    return false;
+  }
 }
 
 export interface OpenClawRuntimeEvent {
@@ -170,7 +196,41 @@ export class OpenClawProcessManager {
     let args: string[];
     let extraEnv: Record<string, string> = {};
 
-    if (electronExec) {
+    const standaloneNodeExec = isUsableStandaloneNode(
+      this.env.openclawNodeExecutable,
+    )
+      ? this.env.openclawNodeExecutable
+      : null;
+
+    if (standaloneNodeExec) {
+      const sidecarEntryPath = resolveOpenClawEntryFromBin(this.env.openclawBin);
+      const workspaceRoot =
+        process.env.NEXU_WORKSPACE_ROOT?.trim() ||
+        findWorkspaceRoot(process.cwd());
+      const runtimeEntryPath = workspaceRoot
+        ? path.join(
+            workspaceRoot,
+            "openclaw-runtime",
+            "node_modules",
+            "openclaw",
+            "openclaw.mjs",
+          )
+        : null;
+      const entry =
+        existsSync(sidecarEntryPath)
+          ? sidecarEntryPath
+          : runtimeEntryPath && existsSync(runtimeEntryPath)
+            ? runtimeEntryPath
+            : sidecarEntryPath;
+
+      cmd = standaloneNodeExec;
+      args = [entry, "gateway", "run"];
+      extraEnv = {
+        PATH: `${path.dirname(standaloneNodeExec)}${path.delimiter}${
+          process.env.PATH ?? ""
+        }`,
+      };
+    } else if (electronExec) {
       const workspaceRoot =
         process.env.NEXU_WORKSPACE_ROOT?.trim() ||
         findWorkspaceRoot(process.cwd());

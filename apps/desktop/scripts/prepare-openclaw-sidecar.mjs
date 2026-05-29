@@ -1321,7 +1321,10 @@ async function createZipArchive(sourceRoot, archivePath) {
 async function create7zArchive(sourceRoot, archivePath) {
   const { path7za } = require("7zip-bin");
   // -t7z   : 7z container
-  // -m0=lzma2 / -mx=7 : LZMA2 level 7 (good ratio without burning CPU for hours)
+  // -m0=lzma2 / -mx=1 : fast LZMA2 compression. OpenClaw sidecars contain
+  // many small node_modules files; high solid compression can stall for a long
+  // time on Windows/OneDrive workspaces and block release packaging.
+  // -ms=off: disable solid mode to keep compression and extraction predictable.
   // -mmt=on: multi-threaded compression
   // -y     : assume yes on prompts (e.g. overwrite)
   // -r     : recurse
@@ -1331,7 +1334,8 @@ async function create7zArchive(sourceRoot, archivePath) {
       "a",
       "-t7z",
       "-m0=lzma2",
-      "-mx=7",
+      "-mx=1",
+      "-ms=off",
       "-mmt=on",
       "-y",
       "-r",
@@ -2998,20 +3002,23 @@ async function prepareOpenclawSidecar() {
   );
 
   if (willArchiveOpenclawSidecar) {
-    // Windows: LZMA2-compressed .7z for fastest extraction on cold install.
+    // Windows uses zip because 7z solid/LZMA compression is brittle in
+    // OneDrive-synced workspaces with large node_modules trees and can block
+    // release packaging for many minutes. The desktop extractor already
+    // supports payload.zip through the platform tar implementation.
     // macOS/Linux: tar.gz stays (tar is ubiquitous; gz is good enough).
-    const archiveFormat = process.platform === "win32" ? "7z" : "tar.gz";
+    const archiveFormat = process.platform === "win32" ? "zip" : "tar.gz";
     const archiveFileName =
-      archiveFormat === "7z"
-        ? "openclaw-sidecar.7z"
+      archiveFormat === "zip"
+        ? "openclaw-sidecar.zip"
         : "openclaw-sidecar.tar.gz";
     const payloadFileName =
-      archiveFormat === "7z" ? "payload.7z" : "payload.tar.gz";
+      archiveFormat === "zip" ? "payload.zip" : "payload.tar.gz";
     const archivePath = resolve(dirname(sidecarRoot), archiveFileName);
     await timedStep("archive openclaw sidecar", async () => {
       await removePathIfExists(archivePath);
-      if (archiveFormat === "7z") {
-        await create7zArchive(sidecarRoot, archivePath);
+      if (archiveFormat === "zip") {
+        await createZipArchive(sidecarRoot, archivePath);
       } else {
         await run("tar", ["-czf", archivePath, "-C", sidecarRoot, "."]);
       }

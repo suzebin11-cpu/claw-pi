@@ -38,7 +38,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * OpenClaw pricing bootstrap 可通过 `OPENCLAW_SKIP_MODEL_PRICING=1` 禁用，避免首条请求被 OpenRouter 价格表超时拖慢。
 * OpenClaw WS 首次 connected 后只在断连期间发生配置写入时触发 `syncAll()`，避免启动阶段重复 reload。
 * OpenClaw sidecar 在 `models.mode="replace"` 且已有显式供应商模型时，跳过隐式 provider discovery，并直接从 Claw-Pi 编译出的 `models.providers` 构建 model catalog。
-* Desktop shell 保持主 Web 工作台常驻，但 OpenClaw 原生调试页改为按需挂载，降低隐藏 webview 常驻导致的 OOM 风险。
+* Desktop shell 保持主 Web 工作台活跃态连续性；Web inactive 后延迟释放，OpenClaw 原生调试页按需挂载，降低隐藏 webview 常驻导致的 OOM 风险。
 
 === 1.3 质量目标
 
@@ -69,7 +69,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * 不能移除 `/v1/chat/completions`，该接口仍作为兼容和诊断路径存在。
 * 工作台用户回复不能静默绕回直连模型路径。
 * 打包产物必须在 `apps/desktop/release/win-unpacked` 可运行。
-* Windows 环境下不能依赖系统 Node 版本，OpenClaw sidecar 优先使用 Electron Node。
+* Windows 环境下不能依赖系统 Node 版本；packaged OpenClaw sidecar 必须优先使用随包发布的 standalone Node runtime，Electron-as-Node 仅作为兜底。
 * 不输出或提交 API key、账号 token、云雾配置明文。
 
 == 3. 上下文与范围
@@ -110,13 +110,17 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 
 * Controller-first：Controller 仍是本地控制面，负责读取 Claw-Pi 配置、编译 OpenClaw 配置、启动 OpenClaw、同步模型和渠道。
 * OpenClaw-backed workbench：工作台新增 `AgentChatService`，将用户消息包装成权限约束后发送给 OpenClaw `agent`。
+* OpenClaw-backed ask surface：网页龙虾/龙虾工作台的用户发送路径统一进入 `/api/internal/agent-chat/stream`，`/v1/chat/completions` 只保留为压缩、兼容和诊断路径。
 * SSE compatibility：对前端保持 OpenAI-compatible stream 形态，内部事件来自 OpenClaw `chat` event。
 * Lightweight workbench turns：工作台请求显式传 `bootstrapContextMode="lightweight"` 和 `extraSystemPrompt`，保留 runner/tool 能力，同时避免新工作区 bootstrap 文档抢占用户消息。
 * 固定默认模型：测试和默认路径只使用 `link/gpt-5.5`；生图固定 `clawpi-image/gpt-image-2`。
 * Sidecar patch：OpenClaw 上游包通过 `prepare-openclaw-sidecar.mjs` 打补丁，确保打包产物可重复生成。
 * 冷启动体验修复：即使 OpenClaw WS 尚未 connected，Controller 也先返回 SSE stream，再在后台等待 gateway ready。
+* Readiness 分层：`desktopReady`/`webReady` 只表示本地壳和 Web 可打开；`openclawReady` 表示 health + gateway WS；`agentReady` 再叠加模型状态。OpenClaw 原生页可被 `openclawReady` gate，Web 工作台不能被它全局阻塞。
 * Replace-mode catalog fast path：当 Claw-Pi 已经把云雾/Link 模型写进 OpenClaw config 的显式 providers 时，OpenClaw 不再扫描隐式供应商或 provider plugin catalog，直接使用显式列表。
-* Desktop surface lifecycle：用户主流程 Web 工作台保持挂载以保留输入框、附件预览和滚动状态；OpenClaw 原生页只在被激活时挂载，inactive 后释放其 webview 进程。
+* Runtime plugin atomic staging：Controller 写入 runtime plugins 时，临时 staging 放在 OpenClaw `extensions` 扫描目录之外，并清理历史 `.staging-*` 残留，避免 OpenClaw 把半成品目录当插件加载。
+* Desktop surface lifecycle：用户主流程 Web 工作台活跃时保持挂载；inactive 超过保留窗口后释放 webview 进程。OpenClaw 原生页只在被激活时挂载。
+* Cold-start fail-open：桌面壳优先打开控制面。端口区间耗尽时回退 OS ephemeral port；ready 超时则从 Web surface 切到 Control Plane；连续冷启动失败时重置已解压 OpenClaw sidecar。
 
 == 5. 构建块视图
 
@@ -166,13 +170,13 @@ Claw-Pi Desktop
 |复制 OpenClaw runtime，打补丁，处理 sidecar 依赖；其中包括 replace-mode model catalog fast path 和 provider discovery 跳过逻辑。
 
 |`manifests.ts`
-|解析 runtime sidecar manifest，支持 archive/raw sidecar fallback。
+|解析 runtime sidecar manifest，支持 archive/raw sidecar fallback，并在连续冷启动失败后重置已解压 OpenClaw sidecar。
 
 |`release/win-unpacked`
 |当前 portable 运行包目录。
 
 |`SurfaceFrame`
-|Electron desktop 内嵌 webview 容器。支持按 surface 控制 inactive 时是否继续挂载，并在 webview renderer 崩溃时显示可重载错误态。
+|Electron desktop 内嵌 webview 容器。支持按 surface 控制 inactive 时是否继续挂载或延迟释放，并在 webview renderer 崩溃时显示可重载错误态。
 |===
 
 == 6. 运行时视图
@@ -183,7 +187,9 @@ Claw-Pi Desktop
 ----
 Workbench UI
   -> POST /api/internal/agent-chat/stream
+  -> Web sidecar uses long-running timeout for this stream route
   -> AgentChatService creates SSE immediately
+  -> Controller emits SSE keepalive comments while OpenClaw/tool work is silent
   -> wait until OpenClaw WS connected if needed
   -> ws.request("agent", sessionKey, message, thinking="off", bootstrapContextMode="lightweight")
   -> OpenClaw dispatches agent turn
@@ -202,6 +208,8 @@ User asks image generation
   -> clawpi-image-generation runtime plugin
   -> Controller /api/internal/desktop/images/generations
   -> cloud image model clawpi-image/gpt-image-2
+  -> Controller logs endpoint/model/input-image/count/duration/status for the cloud image call
+  -> Controller does not auto-retry generation/edit network failures because the request may already have been charged upstream
   -> generated image stored under nexu-home/generated-images
   -> markdown image URL returned to UI
 ----
@@ -240,7 +248,8 @@ Controller compileModelsConfig
 默认用户路径:
   Web 工作台 /workspace
   -> SurfaceFrame mountWhenInactive=true
-  -> 切到其他桌面页时仍保留输入、附件预览、滚动和会话 UI 状态
+  -> 切到其他桌面页时短时间保留输入、附件预览、滚动和会话 UI 状态
+  -> inactive 超过保留窗口后卸载 webview，释放隐藏页面内存
 
 诊断/调试路径:
   OpenClaw 原生 /chat
@@ -257,6 +266,25 @@ Controller compileModelsConfig
 
 该策略优先保护普通用户使用 Web 工作台的连续性，同时减少非主流程 OpenClaw 原生页在后台常驻造成的 OOM 风险。
 
+=== 6.6 桌面冷启动恢复
+
+[source,text]
+----
+Electron main
+  -> allocateDesktopRuntimePorts()
+  -> preferred range 被占用时回退 OS ephemeral port
+  -> createMainWindow()
+  -> renderer 等待 /api/internal/desktop/ready
+  -> 12s 内 web/desktop 未 ready 时切到 Control Plane
+
+连续冷启动失败:
+  StartupHealthCheck unhealthy
+  -> packaged mode 重置 data/user-data/runtime/openclaw-sidecar
+  -> 下次 extractOpenclawSidecarAsync() 从 resources/runtime/openclaw 重新解压
+----
+
+该恢复路径只清理可重建的 OpenClaw sidecar 解压目录，不清理 `nexu-home`、聊天状态、模型配置或用户上传文件。
+
 == 7. 部署视图
 
 当前目标部署形态是 Windows portable：
@@ -264,6 +292,8 @@ Controller compileModelsConfig
 * 可执行文件：`apps/desktop/release/win-unpacked/Claw-Pi.exe`
 * Controller bundle：`resources/runtime/controller/dist/index.js`
 * OpenClaw sidecar：`resources/runtime/openclaw/node_modules/openclaw`
+* Standalone Node runtime：`resources/runtime/node/bin/node.exe`
+* OpenClaw archive payload：Windows 使用 `resources/runtime/openclaw/payload.zip`，避免 7z/LZMA 在 OneDrive 路径下长时间卡住。
 * 用户数据：`apps/desktop/release/win-unpacked/data`
 * OpenClaw 状态：`data/user-data/runtime/openclaw/state`
 * Claw-Pi 配置：`data/nexu-home`
@@ -274,7 +304,6 @@ Controller compileModelsConfig
 ----
 $env:NEXU_DESKTOP_USE_EXISTING_BUILDS='1'
 $env:NEXU_DESKTOP_USE_EXISTING_RUNTIME_INSTALL='1'
-$env:NEXU_DESKTOP_ARCHIVE_OPENCLAW_SIDECAR='0'
 pnpm --filter @nexu/desktop dist:win:portable
 ----
 
@@ -334,9 +363,9 @@ agent:{agentId}:workbench:{sessionId}
 
 *状态：已采纳*
 
-原因：龙虾大脑、诊断工具和旧路径仍依赖 OpenAI-compatible 接口。
+原因：上下文压缩、诊断工具、旧路径和第三方兼容调用仍依赖 OpenAI-compatible 接口。
 
-结果：工作台迁移不删除 `/v1/chat/completions`。
+结果：工作台/网页龙虾用户发送路径走 OpenClaw-backed `/api/internal/agent-chat/stream`；迁移不删除 `/v1/chat/completions`，但不能把它当作主问答 runner。
 
 === ADR-003: 禁用 OpenClaw pricing bootstrap
 
@@ -354,13 +383,53 @@ agent:{agentId}:workbench:{sessionId}
 
 结果：`AgentChatService` 创建 `ReadableStream` 后立即返回 Response，后台等待 Gateway connected。
 
-=== ADR-006: Web 工作台常驻，OpenClaw 原生页按需挂载
+=== ADR-006: Web 工作台延迟释放，OpenClaw 原生页按需挂载
 
 *状态：已采纳*
 
 原因：诊断包中出现多次 Electron embedded webview OOM。直接卸载所有 inactive webview 会影响习惯使用 Web 工作台的用户，造成输入框内容、附件预览、滚动位置和未完成操作状态丢失。
 
-结果：主 Web 工作台保持 inactive 常驻；OpenClaw 原生调试页 inactive 时卸载。`SurfaceFrame` 增加 `mountWhenInactive` 控制，并在 `render-process-gone` 时显示可重载错误态。
+结果：主 Web 工作台 active 时保持连续使用体验；inactive 后保留短窗口，超过窗口则卸载 webview。OpenClaw 原生调试页 inactive 时立即卸载。`SurfaceFrame` 增加 `mountWhenInactive` 和 `inactiveUnmountDelayMs` 控制，并在 `render-process-gone` 时显示可重载错误态。
+
+=== ADR-007: Readiness 状态分层，禁止全局 OpenClaw gate
+
+*状态：已采纳*
+
+原因：桌面壳、Web 工作台、OpenClaw gateway、agent 模型和微信/外部渠道的可用性不同步。若用一个 `openclawReady` 阻塞所有入口，OpenClaw 配置或 WS 问题会连带让 Web 和诊断能力不可用；若把 health probe disabled 当 healthy，则 UI 会出现假就绪。
+
+结果：`/api/internal/desktop/ready` 保留兼容 `ready=true`，同时返回 `desktopReady`、`webReady`、`openclawReady`、`agentReady`、`channelsReady` 和 `blockers`。桌面端用该接口更新 OpenClaw 原生页状态；Web 工作台只依赖 `desktopReady/webReady` 打开，发送 agent 任务时再由 SSE 后台等待或暴露 blocker。
+
+=== ADR-008: OpenClaw runtime plugin staging 不进入 extensions
+
+*状态：已采纳*
+
+原因：OpenClaw 会扫描 `extensions` 目录下的插件。若 Controller 把 `.staging-*` 临时目录放在该目录内，启动或热 reload 可能读到缺失 `openclaw.plugin.json` 的半成品目录，导致 `Config invalid` 和 gateway 无法就绪。
+
+结果：runtime plugin copy staging 改到 `openclawStateDir/tmp/plugin-staging`；`ensurePlugins()` 启动时清理历史 `extensions/*.staging-*` 目录。
+
+=== ADR-009: 冷启动 fail-open 到控制面
+
+*状态：已采纳*
+
+原因：部分用户无法打开时，问题可能发生在 Web sidecar、OpenClaw sidecar、ready 接口或端口分配阶段。若桌面壳默认停留在 Web surface 且 `desktopWebUrl` 为空，用户看到的是长时间加载而不是可诊断界面。
+
+结果：非显式端口配置在首选区间耗尽后回退 OS ephemeral port；renderer 获取 runtimeConfig 后持续轮询 `/api/internal/desktop/ready`，若 12 秒内 `desktopReady/webReady` 未出现则自动切到 Control Plane，保留日志导出和 runtime 单元操作能力。
+
+=== ADR-010: 连续失败后重置可重建 sidecar
+
+*状态：已采纳*
+
+原因：覆盖安装或异常退出可能留下损坏的 `data/user-data/runtime/openclaw-sidecar` 解压目录，但 `.archive-stamp` 仍匹配，导致后续启动持续复用损坏 runtime。
+
+结果：`StartupHealthCheck` 判定连续冷启动失败后，packaged mode 删除可重建的 `openclaw-sidecar` 和 `.staging` 目录；下一次 `extractOpenclawSidecarAsync()` 从随包资源重新解压。用户配置、聊天、模型和附件目录不被清理。
+
+=== ADR-011: Packaged OpenClaw 使用 standalone Node 和 ZIP payload
+
+*状态：已采纳*
+
+原因：packaged 环境中使用 `Claw-Pi.exe` 的 Electron-as-Node 启动 OpenClaw gateway 时，实测会在 gateway listen 前卡住；同一份 sidecar 使用 standalone `node.exe` 可正常 ready。同时 Windows/OneDrive 工作目录下 7z/LZMA 压缩 OpenClaw node_modules 可能长时间不退出，阻塞发版。
+
+结果：Windows release 将构建机 `node.exe` 复制到 `resources/runtime/node/bin/node.exe` 并签名；Controller 通过 `OPENCLAW_NODE_EXECUTABLE` 优先用该 Node 启动 OpenClaw，缺失时才回退 Electron-as-Node。Windows OpenClaw sidecar payload 改为 `payload.zip`，保留 `payload.7z` 解压兼容以支持旧包。
 
 == 10. 质量需求
 
@@ -384,15 +453,27 @@ agent:{agentId}:workbench:{sessionId}
 
 |生图正确性
 |OpenClaw 或 UI 生图使用 `gpt Image2`。
-|Controller image generation 返回 200 并生成 PNG。
+|Controller image generation 返回 200 并生成 PNG；若网络在提交后断开，返回明确失败且不自动重试，避免重复扣费。
+
+|生图可诊断性
+|云端图片接口可能在 60s-180s 内断开本地响应，但上游已经扣费。
+|`image_generation_response_lost` 记录 endpoint、模型、是否图生图、输入图片数量、timeout、elapsedMs、error/cause code；`proxyFetch` 保留脱敏后的 fetch cause metadata。
+
+|长任务流稳定性
+|工作台生图、图生图、文件处理等长任务可能超过 120s。
+|Web sidecar 对工作台 stream 和生图接口使用长任务超时；Controller SSE 定期发送 keepalive，最终结果仍能回到 UI。
 
 |可打包性
 |修复必须进入 portable 包，而不是手工改 release 目录。
 |`dist:win:portable` 成功，sidecar patch 日志出现。
 
 |桌面稳定性
-|后台 OpenClaw 原生页不应在普通 Web 工作台使用期间长期占用 webview 进程内存。
-|切换到 Web 后 OpenClaw surface inactive 时不挂载 webview；若 webview 崩溃，UI 显示可重载错误态。
+|后台 OpenClaw 原生页和长期隐藏 Web 工作台不应持续占用 webview 进程内存。
+|切换到 Web 后 OpenClaw surface inactive 时不挂载 webview；Web surface inactive 超过保留窗口后卸载；若 webview 崩溃，UI 显示可重载错误态。
+
+|启动可诊断性
+|Controller/Web/OpenClaw 任一 sidecar 卡住时，桌面壳仍应打开控制面。
+|非显式端口冲突回退 ephemeral port；ready 超时自动切到 Control Plane；连续冷启动失败后重置可重建 OpenClaw sidecar；packaged OpenClaw 使用随包 standalone Node 启动。
 |===
 
 === 10.2 当前验证
@@ -406,6 +487,12 @@ agent:{agentId}:workbench:{sessionId}
 * `pnpm --filter @nexu/desktop typecheck` 通过（2026-05-28 webview lifecycle 变更）。
 * `pnpm --filter @nexu/desktop build` 通过（2026-05-28 webview lifecycle 变更）。
 * `pnpm --filter @nexu/desktop dist:win:portable` 通过（本轮早期验证，当前最新 controller 通过手动替换 bundle 进入 `win-unpacked`）。
+* `pnpm --filter @nexu/controller typecheck` 通过（2026-05-29 packaged Node 变更）。
+* `pnpm --filter @nexu/desktop typecheck` 通过（2026-05-29 packaged Node 变更）。
+* `pnpm --filter @nexu/controller exec vitest run tests/openclaw-runtime-plugin-writer.test.ts tests/route-compat.test.ts tests/wechat-channel.test.ts tests/wechat-connect-flow.test.ts` 通过（50 tests）。
+* `pnpm exec vitest run tests/desktop/runtime-manifests.test.ts -t "passes packaged standalone node"` 通过；该文件全量在 Windows 下仍有既有 POSIX 路径断言失败，不属于本次变更。
+* `pnpm --filter @nexu/desktop dist:win:portable` 通过；`resources/runtime/node/bin/node.exe` 被签名并进入包，`resources/runtime/openclaw/payload.zip` 生成。
+* 当前 `win-unpacked` 冷启动验证：Controller `50800`、Web `50810`、OpenClaw `18789` 均监听；OpenClaw 由 `resources/runtime/node/bin/node.exe` 启动，gateway ready 后 WS connected。
 * 当前 `win-unpacked` 手动替换 controller bundle 和 OpenClaw dist 后验证：工作台 `link/gpt-5.5` warm 请求 12.2s 返回 `OK-WARM-AFTER-PATCH`。
 * 最终 sanity 请求 `codex-agent-final-warm-20260525232231` 返回 `OK-FINAL-WARM`，总耗时 22.4s；阶段日志显示 WS request 29ms、session 排队 1ms，主要耗时在模型解析和云雾/Link API 返回。
 * 冷启动无重复 `syncAll()` 后，`model-catalog` 从约 68-69s 降到约 5.9s；加入 replace-mode fast path 后，日志显示 `replace-config-ready elapsedMs=0 entries=13`、`complete elapsedMs=3 entries=13`。
@@ -425,24 +512,48 @@ agent:{agentId}:workbench:{sessionId}
 |继续记录 `agent_chat_gateway_ready`、`openclaw_ws_connected`、`first_text`，后续优化 process startup/session-init。
 
 |Gateway health 与 WS 状态短暂不一致
-|冷启动时 health 可能已显示 active，但 Controller WS 尚未完成握手，首条工作台请求会等待 `agent_chat_gateway_ready`。
-|后续可让 health/前端同时参考 `OpenClawWsClient.isConnected()`，或缩短 WS 握手卡死等待。
+|冷启动时 health 可能已响应，但 Controller WS 尚未完成握手；probe disabled 时也不能当成 ready。
+|`openclawReady` 必须同时参考 health/probe 状态和 `OpenClawWsClient.isConnected()`；`AgentChatService` 仍在 SSE 后台等待 `agent_chat_gateway_ready`。
 
 |配置热 reload 抖动
 |Controller 多次写 OpenClaw config 可能触发 reload，占用事件循环。
 |已限制首次 WS connected 后的重复 `syncAll()`；后续继续减少无差异写入，增加 config fingerprint 去重。
 
+|Runtime plugin 半成品目录
+|如果 staging 留在 OpenClaw extensions 扫描目录内，OpenClaw 可能把半成品目录当插件加载并导致 gateway 无法 ready。
+|staging 移到 `openclawStateDir/tmp/plugin-staging`，启动时清理历史 `.staging-*` 残留。
+
 |Webview 生命周期切换
 |卸载 inactive webview 可释放内存，但若用于主工作台会丢失输入、附件预览、滚动位置和正在接收的流式回复。
-|只对 OpenClaw 原生调试页启用 inactive 卸载；Web 工作台保持常驻。后续若需要卸载 Web，必须先持久化草稿、附件和运行中任务状态。
+|OpenClaw 原生调试页 inactive 立即卸载；Web 工作台 inactive 延迟卸载。后续若需要缩短保留窗口，必须先持久化草稿、附件和运行中任务状态。
 
 |Webview OOM 复现
 |如果 OOM 根因来自主 Web 工作台本身，卸载 OpenClaw 原生页只能降低概率，不能完全消除。
-|保留 `render-process-gone` 可见错误态；继续用诊断包统计 `reason=oom` 频率，必要时进一步拆分工作台资源或实现 Web surface 安全恢复。
+|保留 `render-process-gone` 可见错误态，并对长期 hidden Web surface 做延迟释放；继续用诊断包统计 `reason=oom` 频率，必要时进一步拆分工作台资源或实现 Web surface 安全恢复。
+
+|端口区间耗尽
+|本机已有服务占用默认 Controller/Web/OpenClaw 端口区间时，主进程可能在创建窗口前失败。
+|非显式端口配置允许回退 OS ephemeral port；显式用户配置仍严格失败，避免静默覆盖用户指定端口。
+
+|Sidecar 解压目录损坏
+|`.archive-stamp` 匹配但实际 node_modules 或 OpenClaw 文件损坏时，普通快速路径会继续复用损坏目录。
+|连续冷启动失败后只删除可重建 `openclaw-sidecar` 解压目录，保留用户配置和数据。
+
+|Packaged Node 体积和平台匹配
+|随包发布 `node.exe` 会增加 Windows 包体积，且必须匹配目标架构。
+|Windows 当前只打 x64 包；构建时复制当前 Node runtime，冷启动烟测确认 OpenClaw 进程命令行使用 `resources/runtime/node/bin/node.exe`。
+
+|ZIP payload 体积
+|`payload.zip` 比高压缩 7z 更大，可能增加下载体积。
+|接受该体积换取可预测打包和安装解压；若未来需要缩小体积，应在非 OneDrive 临时目录中做 7z 压缩并设置超时/失败回退。
 
 |附件能力不足
 |当前已保存附件，但 DOCX/PPTX/XLSX/PDF 的深度解析仍需补齐。
 |后续按文件类型逐步接入文档解析和 OpenClaw tool 读取。
+
+|生图响应丢失
+|云端图片接口可能已经生成并扣费，但本地 fetch 在读取响应时断开，导致没有可保存图片。
+|生图/改图接口不做自动重试；日志记录 `image_generation_response_lost`、elapsedMs、endpoint、modelId、hasInputImages、inputImageCount、fetch cause/code，用户侧提示可能已提交但未收到结果，避免重复扣费。
 
 |侧车补丁维护成本
 |OpenClaw dist 文件名和 anchor 可能随上游版本变化。

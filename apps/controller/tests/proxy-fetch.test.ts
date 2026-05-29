@@ -120,6 +120,40 @@ describe("proxyFetch", () => {
     );
   });
 
+  it("preserves sanitized fetch cause metadata", async () => {
+    process.env.HTTP_PROXY = "http://user:pass@proxy.example.com:8080";
+    const cause = Object.assign(
+      new Error("connect http://user:pass@proxy.example.com:8080"),
+      {
+        code: "UND_ERR_SOCKET",
+        syscall: "read",
+      },
+    );
+    const failure = new Error("fetch failed") as Error & { cause?: unknown };
+    failure.cause = cause;
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw failure;
+      }),
+    );
+
+    await proxyFetch("https://example.com").catch((error: unknown) => {
+      expect(error).toBeInstanceOf(Error);
+      const safeError = error as Error & {
+        cause?: Error & { code?: string; syscall?: string };
+      };
+      const safeCause = safeError.cause;
+      expect(safeCause).toBeInstanceOf(Error);
+      expect(safeCause?.message).toBe(
+        "connect http://***:***@proxy.example.com:8080/",
+      );
+      expect(safeCause?.code).toBe("UND_ERR_SOCKET");
+      expect(safeCause?.syscall).toBe("read");
+    });
+  });
+
   it("enables env proxy fallback when proxy env is configured", async () => {
     process.env.HTTP_PROXY = "http://proxy.example.com:8080";
 

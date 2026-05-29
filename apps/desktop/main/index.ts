@@ -36,6 +36,7 @@ import {
   checkOpenclawExtractionNeeded,
   createRuntimeUnitManifests,
   extractOpenclawSidecarAsync,
+  resetPackagedOpenclawSidecarExtraction,
 } from "./runtime/manifests";
 import {
   type PortAllocation,
@@ -1274,6 +1275,17 @@ app.whenReady().then(async () => {
       logColdStart(
         `unhealthy: ${health.consecutiveFailures} consecutive cold-start failures`,
       );
+      if (app.isPackaged) {
+        const reset = await resetPackagedOpenclawSidecarExtraction(
+          electronRoot,
+          app.getPath("userData"),
+        );
+        logColdStart(
+          reset
+            ? "startup self-heal: reset extracted openclaw sidecar after repeated failures"
+            : "startup self-heal: no packaged openclaw sidecar archive available to reset",
+        );
+      }
     }
 
     try {

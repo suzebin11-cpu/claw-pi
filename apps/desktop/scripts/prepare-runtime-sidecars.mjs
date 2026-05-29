@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { resetDir } from "./lib/sidecar-paths.mjs";
@@ -77,6 +78,32 @@ async function runPnpm(args, options = {}) {
   });
 }
 
+async function copyStandaloneNodeRuntime() {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const sourceNode = process.execPath;
+  const nodeRuntimeBinDir = resolve(releaseRuntimeRoot, "node", "bin");
+  const targetNode = resolve(nodeRuntimeBinDir, "node.exe");
+
+  await mkdir(nodeRuntimeBinDir, { recursive: true });
+  await copyFile(sourceNode, targetNode);
+  await writeFile(
+    resolve(releaseRuntimeRoot, "node", "metadata.json"),
+    `${JSON.stringify(
+      {
+        strategy: "standalone-node-runtime",
+        source: sourceNode,
+        copiedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+}
+
 async function main() {
   const env = {
     ...process.env,
@@ -86,6 +113,9 @@ async function main() {
   if (isRelease) {
     await timedStep("reset release runtime root", async () => {
       await resetDir(releaseRuntimeRoot);
+    });
+    await timedStep("copy standalone node runtime", async () => {
+      await copyStandaloneNodeRuntime();
     });
     env.NEXU_DESKTOP_SIDECAR_OUT_DIR = releaseRuntimeRoot;
     env.NEXU_DESKTOP_COPY_RUNTIME_DEPS = "true";

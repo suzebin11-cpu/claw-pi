@@ -148,9 +148,13 @@ function supportsOpenclawRuntime(
  */
 function buildOpenclawNodePath(
   openclawSidecarRoot: string,
+  preferredNodeExecutable?: string,
 ): string | undefined {
   const currentPath = process.env.PATH ?? "";
-  const candidates = [normalizeNodeCandidate(process.env.NODE)];
+  const candidates = [
+    normalizeNodeCandidate(preferredNodeExecutable),
+    normalizeNodeCandidate(process.env.NODE),
+  ];
 
   try {
     candidates.push(
@@ -183,6 +187,20 @@ function buildOpenclawNodePath(
   return buildNode22Path();
 }
 
+function resolvePackagedNodeExecutable(
+  runtimeSidecarBaseRoot: string,
+): string | undefined {
+  const executableName = process.platform === "win32" ? "node.exe" : "node";
+  const candidate = path.resolve(
+    runtimeSidecarBaseRoot,
+    "node",
+    "bin",
+    executableName,
+  );
+
+  return existsSync(candidate) ? candidate : undefined;
+}
+
 export function buildSkillNodePath(
   electronRoot: string,
   isPackaged: boolean,
@@ -208,9 +226,9 @@ type ArchiveInfo = {
 function resolvePayloadArchive(
   packagedSidecarRoot: string,
 ): ArchiveInfo | null {
-  // Prefer .7z on Windows: LZMA2 ratio + single sealed blob keeps NSIS
-  // install time and Defender scanning minimal. See
-  // scripts/prepare-openclaw-sidecar.mjs for the rationale.
+  // Keep .7z first for backward compatibility with older packaged payloads.
+  // New Windows builds use payload.zip because it is faster and more
+  // predictable in OneDrive-synced workspaces.
   const sevenZipPath = path.resolve(packagedSidecarRoot, "payload.7z");
   if (existsSync(sevenZipPath))
     return { archivePath: sevenZipPath, format: "7z" };
@@ -603,6 +621,25 @@ export async function extractOpenclawSidecarAsync(
   }
 }
 
+export async function resetPackagedOpenclawSidecarExtraction(
+  electronRoot: string,
+  userDataPath: string,
+): Promise<boolean> {
+  const runtimeSidecarBaseRoot = path.resolve(electronRoot, "runtime");
+  const runtimeRoot = path.resolve(userDataPath, "runtime");
+  const packagedSidecarRoot = path.resolve(runtimeSidecarBaseRoot, "openclaw");
+  const archive = resolvePayloadArchive(packagedSidecarRoot);
+
+  if (!archive) {
+    return false;
+  }
+
+  const extractedSidecarRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
+  await removeDirectoryAsync(extractedSidecarRoot);
+  await removeDirectoryAsync(`${extractedSidecarRoot}.staging`);
+  return true;
+}
+
 export function createRuntimeUnitManifests(
   electronRoot: string,
   userDataPath: string,
@@ -665,7 +702,13 @@ export function createRuntimeUnitManifests(
   const webPort = runtimeConfig.ports.web;
   const webUrl = runtimeConfig.urls.web;
   const electronNodeRunner = resolveElectronNodeRunner(isPackaged);
-  const openclawNodePath = buildOpenclawNodePath(openclawSidecarRoot);
+  const packagedNodeExecutable = isPackaged
+    ? resolvePackagedNodeExecutable(runtimeSidecarBaseRoot)
+    : undefined;
+  const openclawNodePath = buildOpenclawNodePath(
+    openclawSidecarRoot,
+    packagedNodeExecutable,
+  );
   const skillNodePath = buildSkillNodePath(electronRoot, isPackaged);
   const childProcessProxyEnv = buildChildProcessProxyEnv(runtimeConfig.proxy);
 
@@ -746,6 +789,9 @@ export function createRuntimeUnitManifests(
           ? path.resolve(electronRoot, "static/platform-templates")
           : path.resolve(repoRoot, "apps/controller/static/platform-templates"),
         OPENCLAW_BIN: openclawBinPath,
+        ...(packagedNodeExecutable
+          ? { OPENCLAW_NODE_EXECUTABLE: packagedNodeExecutable }
+          : {}),
         ...(isPackaged ? { OPENCLAW_ELECTRON_EXECUTABLE: process.execPath } : {}),
         OPENCLAW_EXTENSIONS_DIR: path.resolve(
           openclawPackageRoot,

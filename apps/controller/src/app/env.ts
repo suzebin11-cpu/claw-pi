@@ -48,6 +48,7 @@ const envSchema = z.object({
   OPENCLAW_CONFIG_PATH: z.string().optional(),
   OPENCLAW_SKILLS_DIR: z.string().optional(),
   OPENCLAW_EXTENSIONS_DIR: z.string().optional(),
+  OPENCLAW_NODE_EXECUTABLE: z.string().optional(),
   SKILLHUB_STATIC_SKILLS_DIR: z.string().optional(),
   PLATFORM_TEMPLATES_DIR: z.string().optional(),
   OPENCLAW_GATEWAY_PORT: z.coerce.number().int().positive().default(18789),
@@ -132,6 +133,9 @@ export const env = {
     "workspace-templates",
   ),
   openclawBin: parsed.OPENCLAW_BIN,
+  openclawNodeExecutable: parsed.OPENCLAW_NODE_EXECUTABLE
+    ? expandHomeDir(parsed.OPENCLAW_NODE_EXECUTABLE)
+    : null,
   openclawLaunchdLabel: parsed.OPENCLAW_LAUNCHD_LABEL ?? null,
   litellmBaseUrl: parsed.LITELLM_BASE_URL ?? null,
   litellmApiKey: parsed.LITELLM_API_KEY ?? null,

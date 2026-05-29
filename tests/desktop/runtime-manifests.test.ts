@@ -1,16 +1,58 @@
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const fsState = vi.hoisted(() => ({
-  paths: new Set<string>(),
-  stampContents: new Map<string, string>(),
-  archiveStamp: "123:456",
-}));
+const fsState = vi.hoisted(() => {
+  const paths = new Set<string>();
+  const stampContents = new Map<string, string>();
+  const isInside = (parent: string, child: string) =>
+    child === parent ||
+    child.startsWith(`${parent}/`) ||
+    child.startsWith(`${parent}\\`);
+  const removeTree = (target: string) => {
+    for (const existing of Array.from(paths)) {
+      if (isInside(target, existing)) {
+        paths.delete(existing);
+      }
+    }
+    for (const existing of Array.from(stampContents.keys())) {
+      if (isInside(target, existing)) {
+        stampContents.delete(existing);
+      }
+    }
+  };
+  const copyTree = (source: string, dest: string) => {
+    for (const existing of Array.from(paths)) {
+      if (isInside(source, existing)) {
+        paths.add(`${dest}${existing.slice(source.length)}`);
+      }
+    }
+    for (const [existing, contents] of Array.from(stampContents.entries())) {
+      if (isInside(source, existing)) {
+        stampContents.set(`${dest}${existing.slice(source.length)}`, contents);
+      }
+    }
+  };
+  const moveTree = (source: string, dest: string) => {
+    copyTree(source, dest);
+    removeTree(source);
+  };
+
+  return {
+    paths,
+    stampContents,
+    archiveStamp: "123:456",
+    copyTree,
+    moveTree,
+    removeTree,
+  };
+});
 
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const execSyncMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   execFileSync: execFileSyncMock,
+  execSync: execSyncMock,
   execFile: vi.fn(
     (_cmd: unknown, _args: unknown, cb?: (...a: unknown[]) => void) => {
       cb?.(null, "", "");
@@ -31,6 +73,15 @@ vi.mock("node:fs", () => ({
   mkdirSync: vi.fn((target: string) => {
     fsState.paths.add(target);
   }),
+  rmSync: vi.fn((target: string) => {
+    fsState.removeTree(target);
+  }),
+  renameSync: vi.fn((source: string, dest: string) => {
+    fsState.moveTree(source, dest);
+  }),
+  cpSync: vi.fn((source: string, dest: string) => {
+    fsState.copyTree(source, dest);
+  }),
   readFileSync: vi.fn(
     (target: string) => fsState.stampContents.get(target) ?? "",
   ),
@@ -39,6 +90,14 @@ vi.mock("node:fs", () => ({
     fsState.paths.add(target);
     fsState.stampContents.set(target, contents);
   }),
+}));
+
+vi.mock("../../apps/desktop/main/runtime/lift-bundled-extension-deps", () => ({
+  liftBundledExtensionDepsSync: vi.fn(() => ({
+    failed: 0,
+    linked: 0,
+    skipped: 0,
+  })),
 }));
 
 import {
@@ -99,36 +158,42 @@ describe("desktop runtime manifests", () => {
     fsState.paths.clear();
     fsState.stampContents.clear();
     execFileSyncMock.mockReset();
+    execSyncMock.mockReset();
+    execSyncMock.mockImplementation((command: string) => {
+      const match = command.match(/^rmdir \/s \/q "(.+)"$/u);
+      if (match?.[1]) {
+        fsState.removeTree(match[1]);
+      }
+    });
   });
 
   describe("buildSkillNodePath", () => {
     it("prefers bundled desktop node_modules in dev", () => {
-      const result = buildSkillNodePath("/repo/apps/desktop", false, "");
+      const electronRoot = path.resolve("/repo/apps/desktop");
+      const result = buildSkillNodePath(electronRoot, false, "");
 
-      expect(result).toBe("/repo/apps/desktop/node_modules");
+      expect(result).toBe(path.resolve(electronRoot, "node_modules"));
     });
 
     it("prefers packaged bundled-node-modules for desktop dist", () => {
-      const result = buildSkillNodePath(
+      const electronRoot = path.resolve(
         "/Applications/Nexu.app/Contents/Resources",
-        true,
-        "",
       );
+      const result = buildSkillNodePath(electronRoot, true, "");
 
-      expect(result).toBe(
-        "/Applications/Nexu.app/Contents/Resources/bundled-node-modules",
-      );
+      expect(result).toBe(path.resolve(electronRoot, "bundled-node-modules"));
     });
 
     it("preserves inherited NODE_PATH entries without duplication", () => {
-      const bundledPath = "/repo/apps/desktop/node_modules";
+      const electronRoot = path.resolve("/repo/apps/desktop");
+      const bundledPath = path.resolve(electronRoot, "node_modules");
       const inherited = [
         bundledPath,
         "/usr/local/lib/node_modules",
         "/opt/custom/node_modules",
       ].join(path.delimiter);
 
-      const result = buildSkillNodePath("/repo/apps/desktop", false, inherited);
+      const result = buildSkillNodePath(electronRoot, false, inherited);
 
       expect(result).toBe(
         [
@@ -142,11 +207,20 @@ describe("desktop runtime manifests", () => {
 
   describe("ensurePackagedOpenclawSidecar", () => {
     it("reuses existing extracted sidecar when stamp and entry already match", () => {
-      const archivePath =
-        "/Applications/Nexu.app/Contents/Resources/runtime/openclaw/payload.tar.gz";
-      const extractedRoot = "/Users/testuser/.nexu/openclaw-sidecar";
-      const stampPath = `${extractedRoot}/.archive-stamp`;
-      const entryPath = `${extractedRoot}/node_modules/openclaw/openclaw.mjs`;
+      const runtimeSidecarBaseRoot = path.resolve(
+        "/Applications/Nexu.app/Contents/Resources/runtime",
+      );
+      const runtimeRoot = path.resolve("/Users/testuser/.nexu");
+      const archivePath = path.resolve(
+        runtimeSidecarBaseRoot,
+        "openclaw/payload.tar.gz",
+      );
+      const extractedRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
+      const stampPath = path.resolve(extractedRoot, ".archive-stamp");
+      const entryPath = path.resolve(
+        extractedRoot,
+        "node_modules/openclaw/openclaw.mjs",
+      );
 
       fsState.paths.add(archivePath);
       fsState.paths.add(stampPath);
@@ -154,8 +228,8 @@ describe("desktop runtime manifests", () => {
       fsState.stampContents.set(stampPath, fsState.archiveStamp);
 
       const result = ensurePackagedOpenclawSidecar(
-        "/Applications/Nexu.app/Contents/Resources/runtime",
-        "/Users/testuser/.nexu",
+        runtimeSidecarBaseRoot,
+        runtimeRoot,
       );
 
       expect(result).toBe(extractedRoot);
@@ -163,11 +237,20 @@ describe("desktop runtime manifests", () => {
     });
 
     it("extracts through staging, verifies entry, and atomically swaps into place", () => {
-      const archivePath =
-        "/Applications/Nexu.app/Contents/Resources/runtime/openclaw/payload.tar.gz";
-      const extractedRoot = "/Users/testuser/.nexu/openclaw-sidecar";
+      const runtimeSidecarBaseRoot = path.resolve(
+        "/Applications/Nexu.app/Contents/Resources/runtime",
+      );
+      const runtimeRoot = path.resolve("/Users/testuser/.nexu");
+      const archivePath = path.resolve(
+        runtimeSidecarBaseRoot,
+        "openclaw/payload.tar.gz",
+      );
+      const extractedRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
       const stagingRoot = `${extractedRoot}.staging`;
-      const stagingEntry = `${stagingRoot}/node_modules/openclaw/openclaw.mjs`;
+      const stagingEntry = path.resolve(
+        stagingRoot,
+        "node_modules/openclaw/openclaw.mjs",
+      );
 
       fsState.paths.add(archivePath);
 
@@ -176,19 +259,11 @@ describe("desktop runtime manifests", () => {
           fsState.paths.add(stagingRoot);
           fsState.paths.add(stagingEntry);
         }
-        if (cmd === "mv") {
-          fsState.paths.delete(stagingRoot);
-          fsState.paths.delete(stagingEntry);
-          fsState.paths.add(extractedRoot);
-          fsState.paths.add(
-            `${extractedRoot}/node_modules/openclaw/openclaw.mjs`,
-          );
-        }
       });
 
       const result = ensurePackagedOpenclawSidecar(
-        "/Applications/Nexu.app/Contents/Resources/runtime",
-        "/Users/testuser/.nexu",
+        runtimeSidecarBaseRoot,
+        runtimeRoot,
       );
 
       expect(result).toBe(extractedRoot);
@@ -198,49 +273,53 @@ describe("desktop runtime manifests", () => {
         "-C",
         stagingRoot,
       ]);
-      expect(execFileSyncMock).toHaveBeenCalledWith("mv", [
-        stagingRoot,
-        extractedRoot,
-      ]);
-      expect(fsState.stampContents.get(`${stagingRoot}/.archive-stamp`)).toBe(
-        fsState.archiveStamp,
-      );
+      expect(
+        fsState.paths.has(
+          path.resolve(extractedRoot, "node_modules/openclaw/openclaw.mjs"),
+        ),
+      ).toBe(true);
+      expect(fsState.paths.has(stagingRoot)).toBe(false);
+      expect(
+        fsState.stampContents.get(
+          path.resolve(extractedRoot, ".archive-stamp"),
+        ),
+      ).toBe(fsState.archiveStamp);
     });
 
     it("cleans leftover staging directories before a fresh extraction", () => {
-      const archivePath =
-        "/Applications/Nexu.app/Contents/Resources/runtime/openclaw/payload.tar.gz";
-      const extractedRoot = "/Users/testuser/.nexu/openclaw-sidecar";
+      const runtimeSidecarBaseRoot = path.resolve(
+        "/Applications/Nexu.app/Contents/Resources/runtime",
+      );
+      const runtimeRoot = path.resolve("/Users/testuser/.nexu");
+      const archivePath = path.resolve(
+        runtimeSidecarBaseRoot,
+        "openclaw/payload.tar.gz",
+      );
+      const extractedRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
       const stagingRoot = `${extractedRoot}.staging`;
-      const stagingEntry = `${stagingRoot}/node_modules/openclaw/openclaw.mjs`;
+      const stagingEntry = path.resolve(
+        stagingRoot,
+        "node_modules/openclaw/openclaw.mjs",
+      );
 
       fsState.paths.add(archivePath);
       fsState.paths.add(stagingRoot);
 
       execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
-        if (cmd === "rm" && args[1] === stagingRoot) {
-          fsState.paths.delete(stagingRoot);
-        }
         if (cmd === "tar" && args[3] === stagingRoot) {
           fsState.paths.add(stagingRoot);
           fsState.paths.add(stagingEntry);
         }
-        if (cmd === "mv") {
-          fsState.paths.delete(stagingRoot);
-          fsState.paths.delete(stagingEntry);
-          fsState.paths.add(extractedRoot);
-          fsState.paths.add(
-            `${extractedRoot}/node_modules/openclaw/openclaw.mjs`,
-          );
-        }
       });
 
-      ensurePackagedOpenclawSidecar(
-        "/Applications/Nexu.app/Contents/Resources/runtime",
-        "/Users/testuser/.nexu",
-      );
+      ensurePackagedOpenclawSidecar(runtimeSidecarBaseRoot, runtimeRoot);
 
-      expect(execFileSyncMock).toHaveBeenCalledWith("rm", ["-rf", stagingRoot]);
+      if (process.platform === "win32") {
+        expect(execSyncMock).toHaveBeenCalledWith(
+          `rmdir /s /q "${stagingRoot}"`,
+          { stdio: "ignore", timeout: 30_000 },
+        );
+      }
       expect(execFileSyncMock).toHaveBeenCalledWith("tar", [
         "-xzf",
         archivePath,
@@ -250,11 +329,20 @@ describe("desktop runtime manifests", () => {
     });
 
     it("retries extraction after a transient tar failure and succeeds on the next attempt", () => {
-      const archivePath =
-        "/Applications/Nexu.app/Contents/Resources/runtime/openclaw/payload.tar.gz";
-      const extractedRoot = "/Users/testuser/.nexu/openclaw-sidecar";
+      const runtimeSidecarBaseRoot = path.resolve(
+        "/Applications/Nexu.app/Contents/Resources/runtime",
+      );
+      const runtimeRoot = path.resolve("/Users/testuser/.nexu");
+      const archivePath = path.resolve(
+        runtimeSidecarBaseRoot,
+        "openclaw/payload.tar.gz",
+      );
+      const extractedRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
       const stagingRoot = `${extractedRoot}.staging`;
-      const stagingEntry = `${stagingRoot}/node_modules/openclaw/openclaw.mjs`;
+      const stagingEntry = path.resolve(
+        stagingRoot,
+        "node_modules/openclaw/openclaw.mjs",
+      );
       let tarAttempts = 0;
 
       fsState.paths.add(archivePath);
@@ -268,30 +356,27 @@ describe("desktop runtime manifests", () => {
           fsState.paths.add(stagingRoot);
           fsState.paths.add(stagingEntry);
         }
-        if (cmd === "mv") {
-          fsState.paths.delete(stagingRoot);
-          fsState.paths.delete(stagingEntry);
-          fsState.paths.add(extractedRoot);
-          fsState.paths.add(
-            `${extractedRoot}/node_modules/openclaw/openclaw.mjs`,
-          );
-        }
       });
 
       const result = ensurePackagedOpenclawSidecar(
-        "/Applications/Nexu.app/Contents/Resources/runtime",
-        "/Users/testuser/.nexu",
+        runtimeSidecarBaseRoot,
+        runtimeRoot,
       );
 
       expect(result).toBe(extractedRoot);
       expect(tarAttempts).toBe(2);
-      expect(execFileSyncMock).toHaveBeenCalledWith("sleep", ["1"]);
     });
 
     it("throws after retries when extraction never produces the critical entry", () => {
-      const archivePath =
-        "/Applications/Nexu.app/Contents/Resources/runtime/openclaw/payload.tar.gz";
-      const extractedRoot = "/Users/testuser/.nexu/openclaw-sidecar";
+      const runtimeSidecarBaseRoot = path.resolve(
+        "/Applications/Nexu.app/Contents/Resources/runtime",
+      );
+      const runtimeRoot = path.resolve("/Users/testuser/.nexu");
+      const archivePath = path.resolve(
+        runtimeSidecarBaseRoot,
+        "openclaw/payload.tar.gz",
+      );
+      const extractedRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
       const stagingRoot = `${extractedRoot}.staging`;
 
       fsState.paths.add(archivePath);
@@ -303,10 +388,7 @@ describe("desktop runtime manifests", () => {
       });
 
       expect(() =>
-        ensurePackagedOpenclawSidecar(
-          "/Applications/Nexu.app/Contents/Resources/runtime",
-          "/Users/testuser/.nexu",
-        ),
+        ensurePackagedOpenclawSidecar(runtimeSidecarBaseRoot, runtimeRoot),
       ).toThrow("Extraction verification failed");
 
       const tarCalls = execFileSyncMock.mock.calls.filter(
@@ -316,7 +398,7 @@ describe("desktop runtime manifests", () => {
         ([cmd]) => cmd === "sleep",
       );
       expect(tarCalls).toHaveLength(3);
-      expect(sleepCalls).toHaveLength(2);
+      expect(sleepCalls).toHaveLength(0);
     });
   });
 
@@ -366,6 +448,32 @@ describe("desktop runtime manifests", () => {
         ALL_PROXY: "socks5://proxy.example.com:1080",
         NO_PROXY: "example.com,localhost,127.0.0.1,::1",
       });
+    });
+
+    it("passes packaged standalone node to the controller when available", () => {
+      const nodeExecutable = path.resolve(
+        "/Applications/Nexu.app/Contents/Resources/runtime/node/bin/node.exe",
+      );
+      fsState.paths.add(nodeExecutable);
+      execFileSyncMock.mockReturnValue("24.11.1\n");
+
+      const manifests = createRuntimeUnitManifests(
+        "/Applications/Nexu.app/Contents/Resources",
+        "/Users/testuser/Library/Application Support/@nexu/desktop",
+        true,
+        createRuntimeConfig(),
+      );
+
+      const controllerManifest = manifests.find(
+        (manifest) => manifest.id === "controller",
+      );
+
+      expect(controllerManifest?.env).toMatchObject({
+        OPENCLAW_NODE_EXECUTABLE: nodeExecutable,
+      });
+      expect(controllerManifest?.env?.PATH?.split(path.delimiter)[0]).toBe(
+        path.dirname(nodeExecutable),
+      );
     });
   });
 });

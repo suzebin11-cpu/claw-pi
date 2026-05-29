@@ -65,6 +65,10 @@ const IMAGE_GENERATION_RETRY_DELAYS_MS = [1_500, 3_000] as const;
 const MAX_INPUT_IMAGES = 4;
 const MAX_PROMPT_CHARS = 4000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
+const IMAGE_RESPONSE_LOST_MESSAGE =
+  "图片生成请求可能已提交，但本地未收到图片结果；为避免重复扣费，已停止自动重试。";
+
+type ImageEndpointLabel = "generations" | "edits";
 
 function getGeneratedImagesDir(env: ControllerEnv): string {
   return path.join(env.nexuHomeDir, "generated-images");
@@ -87,6 +91,73 @@ function normalizeImageModelId(modelId: string | null | undefined): string {
 function runtimeModelIdToCloudModelId(modelId: string): string {
   const slashIndex = modelId.indexOf("/");
   return slashIndex >= 0 ? modelId.slice(slashIndex + 1) : modelId;
+}
+
+function summarizeImageEndpoint(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return "image endpoint";
+  }
+}
+
+function readPrimitiveProperty(
+  value: unknown,
+  key: string,
+): string | number | boolean | undefined {
+  if (typeof value !== "object" || value === null) {
+    return undefined;
+  }
+  const property = (value as Record<string, unknown>)[key];
+  if (
+    typeof property === "string" ||
+    typeof property === "number" ||
+    typeof property === "boolean"
+  ) {
+    return property;
+  }
+  return undefined;
+}
+
+function readErrorCause(error: unknown): unknown {
+  if (typeof error !== "object" || error === null) {
+    return undefined;
+  }
+  return (error as { cause?: unknown }).cause;
+}
+
+function buildImageFetchErrorDetails(error: unknown): Record<string, unknown> {
+  const message = error instanceof Error ? error.message : String(error);
+  const details: Record<string, unknown> = {
+    errorMessage: message,
+  };
+
+  if (error instanceof Error) {
+    details.errorName = error.name;
+  }
+
+  const errorCode = readPrimitiveProperty(error, "code");
+  if (errorCode !== undefined) {
+    details.errorCode = errorCode;
+  }
+
+  const cause = readErrorCause(error);
+  if (cause instanceof Error) {
+    details.causeName = cause.name;
+    details.causeMessage = cause.message;
+  } else if (cause !== undefined) {
+    details.causeMessage = String(cause);
+  }
+
+  for (const key of ["code", "errno", "syscall"] as const) {
+    const value = readPrimitiveProperty(cause, key);
+    if (value !== undefined) {
+      details[`cause${key.charAt(0).toUpperCase()}${key.slice(1)}`] = value;
+    }
+  }
+
+  return details;
 }
 
 function normalizeSize(input: GenerateImageInput): string {
@@ -213,10 +284,10 @@ export function normalizeImageGenerationErrorMessage(message: string): string {
     return INSUFFICIENT_BALANCE_MESSAGE;
   }
   if (/timed out|timeout|超时/iu.test(trimmed)) {
-    return "图片生成超时，请稍后重试";
+    return IMAGE_RESPONSE_LOST_MESSAGE;
   }
   if (isImageNetworkError(trimmed)) {
-    return "图片生成服务连接失败，请稍后重试";
+    return IMAGE_RESPONSE_LOST_MESSAGE;
   }
   return trimmed || "图片生成失败，请稍后重试";
 }
@@ -413,7 +484,10 @@ export class ImageGenerationService {
   }
 
   private async callImageEndpointWithRetries(params: {
-    label: string;
+    label: ImageEndpointLabel;
+    modelId: string;
+    hasInputImages: boolean;
+    inputImageCount: number;
     buildRequest: (
       includeResponseFormat: boolean,
     ) =>
@@ -421,42 +495,27 @@ export class ImageGenerationService {
       | { url: string; init: RequestInit & { timeoutMs: number } };
   }): Promise<OpenAiImageResponse> {
     let includeResponseFormat = false;
-    let retryIndex = 0;
-    let lastUpstreamError: string | null = null;
 
     while (true) {
       const request = await params.buildRequest(includeResponseFormat);
       let response: Response;
+      let elapsedMs = 0;
 
       try {
-        response = await this.fetchImpl(request.url, request.init);
+        const result = await this.fetchImageCloudEndpoint({
+          label: params.label,
+          modelId: params.modelId,
+          hasInputImages: params.hasInputImages,
+          inputImageCount: params.inputImageCount,
+          includeResponseFormat,
+          url: request.url,
+          init: request.init,
+        });
+        response = result.response;
+        elapsedMs = result.elapsedMs;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        if (
-          retryIndex < IMAGE_GENERATION_RETRY_DELAYS_MS.length &&
-          shouldRetryTransientImageError(null, message)
-        ) {
-          const retryDelay = IMAGE_GENERATION_RETRY_DELAYS_MS[retryIndex] ?? 0;
-          retryIndex += 1;
-          logger.warn(
-            {
-              label: params.label,
-              retryIndex,
-              retryDelay,
-              errorMessage: message,
-            },
-            "image_generation_network_retry",
-          );
-          await delay(retryDelay);
-          continue;
-        }
-        throw new Error(
-          normalizeImageGenerationErrorMessage(
-            message === "fetch failed" && lastUpstreamError
-              ? lastUpstreamError
-              : message,
-          ),
-        );
+        throw new Error(normalizeImageGenerationErrorMessage(message));
       }
 
       if (response.ok) {
@@ -464,13 +523,16 @@ export class ImageGenerationService {
       }
 
       const message = await readResponseError(response);
-      lastUpstreamError = message;
       if (includeResponseFormat && shouldRetryWithoutResponseFormat(message)) {
         includeResponseFormat = false;
         logger.warn(
           {
             label: params.label,
+            modelId: params.modelId,
+            hasInputImages: params.hasInputImages,
+            inputImageCount: params.inputImageCount,
             status: response.status,
+            elapsedMs,
             errorMessage: message,
           },
           "image_generation_retry_without_response_format",
@@ -478,35 +540,66 @@ export class ImageGenerationService {
         continue;
       }
 
-      if (
-        retryIndex < IMAGE_GENERATION_RETRY_DELAYS_MS.length &&
-        shouldRetryTransientImageError(response.status, message)
-      ) {
-        const retryDelay = IMAGE_GENERATION_RETRY_DELAYS_MS[retryIndex] ?? 0;
-        retryIndex += 1;
-        logger.warn(
-          {
-            label: params.label,
-            status: response.status,
-            retryIndex,
-            retryDelay,
-            errorMessage: message,
-          },
-          "image_generation_transient_retry",
-        );
-        await delay(retryDelay);
-        continue;
-      }
-
       logger.warn(
         {
           label: params.label,
+          modelId: params.modelId,
+          hasInputImages: params.hasInputImages,
+          inputImageCount: params.inputImageCount,
           status: response.status,
+          elapsedMs,
           errorMessage: message,
         },
         "image_generation_failed",
       );
       throw new Error(normalizeImageGenerationErrorMessage(message));
+    }
+  }
+
+  private async fetchImageCloudEndpoint(params: {
+    label: ImageEndpointLabel;
+    modelId: string;
+    hasInputImages: boolean;
+    inputImageCount: number;
+    includeResponseFormat: boolean;
+    url: string;
+    init: RequestInit & { timeoutMs: number };
+  }): Promise<{ response: Response; elapsedMs: number }> {
+    const startedAt = Date.now();
+    const baseDetails = {
+      label: params.label,
+      endpoint: summarizeImageEndpoint(params.url),
+      modelId: params.modelId,
+      hasInputImages: params.hasInputImages,
+      inputImageCount: params.inputImageCount,
+      includeResponseFormat: params.includeResponseFormat,
+      timeoutMs: params.init.timeoutMs,
+    };
+
+    try {
+      const response = await this.fetchImpl(params.url, params.init);
+      const elapsedMs = Date.now() - startedAt;
+      logger.info(
+        {
+          ...baseDetails,
+          status: response.status,
+          ok: response.ok,
+          elapsedMs,
+        },
+        "image_generation_cloud_response",
+      );
+      return { response, elapsedMs };
+    } catch (error) {
+      const elapsedMs = Date.now() - startedAt;
+      logger.warn(
+        {
+          ...baseDetails,
+          elapsedMs,
+          ...buildImageFetchErrorDetails(error),
+        },
+        "image_generation_response_lost",
+      );
+      throw error;
     }
   }
 
@@ -546,6 +639,9 @@ export class ImageGenerationService {
 
     return this.callImageEndpointWithRetries({
       label: "generations",
+      modelId: params.modelId,
+      hasInputImages: false,
+      inputImageCount: 0,
       buildRequest: (includeResponseFormat) => ({
         url: endpoint,
         init: {
@@ -578,6 +674,9 @@ export class ImageGenerationService {
 
     return this.callImageEndpointWithRetries({
       label: "edits",
+      modelId: params.modelId,
+      hasInputImages: true,
+      inputImageCount: params.inputImages.length,
       buildRequest: async (includeResponseFormat) => {
         const form = new FormData();
         form.set("model", params.modelId);

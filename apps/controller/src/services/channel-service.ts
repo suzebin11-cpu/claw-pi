@@ -1707,7 +1707,10 @@ export class ChannelService {
     const deadline = Date.now() + WHATSAPP_RUNTIME_RESTART_TIMEOUT_MS;
     while (Date.now() < deadline) {
       const health = await this.runtimeHealth.probe();
-      if (health.ok && this.gatewayService.isConnected()) {
+      if (
+        this.gatewayService.isConnected() &&
+        (health.ok || health.skipped === true)
+      ) {
         logger.info({ reason }, "whatsapp_runtime_restart_ready");
         return;
       }

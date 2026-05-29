@@ -3,6 +3,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rm,
   symlink,
@@ -284,5 +285,37 @@ describe("OpenClawRuntimePluginWriter", () => {
     await expect(
       access(path.join(env.openclawExtensionsDir, "plugin-a", "index.js")),
     ).resolves.toBeUndefined();
+  });
+
+  it("keeps copy staging outside the scanned extensions directory", async () => {
+    env = {
+      ...env,
+      openclawStateDir: path.join(rootDir, ".openclaw"),
+      openclawExtensionsDir: path.join(rootDir, ".openclaw", "extensions"),
+    } as ControllerEnv;
+    const legacyPluginDir = path.join(
+      env.runtimePluginTemplatesDir,
+      "plugin-a",
+    );
+    const staleStagingDir = path.join(
+      env.openclawExtensionsDir,
+      "plugin-a.staging-123",
+    );
+
+    await mkdir(legacyPluginDir, { recursive: true });
+    await writeFile(path.join(legacyPluginDir, "index.js"), "export {};\n");
+    await mkdir(staleStagingDir, { recursive: true });
+    await writeFile(path.join(staleStagingDir, "partial.txt"), "partial\n");
+
+    const writer = new OpenClawRuntimePluginWriter(env);
+    await writer.ensurePlugins();
+
+    await expect(
+      access(path.join(env.openclawExtensionsDir, "plugin-a", "index.js")),
+    ).resolves.toBeUndefined();
+    await expect(access(staleStagingDir)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(await readdir(env.openclawExtensionsDir)).toEqual(["plugin-a"]);
   });
 });

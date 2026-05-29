@@ -112,6 +112,7 @@ export class OpenClawRuntimePluginWriter {
 
   async ensurePlugins(opts?: EnsurePluginsOptions): Promise<void> {
     await mkdir(this.env.openclawExtensionsDir, { recursive: true });
+    await this.cleanupExtensionStagingDirs();
     const requestedBundled = this.resolveRequestedBundled(
       opts?.configuredChannelTypes,
     );
@@ -237,11 +238,20 @@ export class OpenClawRuntimePluginWriter {
     targetDir: string,
     pluginId: string,
   ): Promise<void> {
-    const stagingDir = `${targetDir}.staging-${process.pid}-${Date.now()}-${randomUUID()}`;
+    const stagingRoot = path.join(
+      this.env.openclawStateDir ?? path.dirname(this.env.openclawExtensionsDir),
+      "tmp",
+      "plugin-staging",
+    );
+    const stagingDir = path.join(
+      stagingRoot,
+      `${pluginId}.staging-${process.pid}-${Date.now()}-${randomUUID()}`,
+    );
     try {
       await withTransientPluginFsRetry(async () => {
         await this.rmForCopy(stagingDir);
         await mkdir(path.dirname(targetDir), { recursive: true });
+        await mkdir(stagingRoot, { recursive: true });
         await cp(sourceDir, stagingDir, {
           recursive: true,
           force: false,
@@ -269,6 +279,27 @@ export class OpenClawRuntimePluginWriter {
         "plugin_copy_failed_no_usable_target",
       );
       throw err;
+    }
+  }
+
+  private async cleanupExtensionStagingDirs(): Promise<void> {
+    let entries: import("node:fs").Dirent[];
+    try {
+      entries = await readdir(this.env.openclawExtensionsDir, {
+        withFileTypes: true,
+      });
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      throw err;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.includes(".staging-")) {
+        continue;
+      }
+      await this.safeRm(path.join(this.env.openclawExtensionsDir, entry.name));
     }
   }
 

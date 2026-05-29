@@ -95,6 +95,7 @@ type PdfJsModule = {
 };
 
 const AGENT_CHAT_TIMEOUT_MS = 300_000;
+const AGENT_CHAT_STREAM_KEEPALIVE_MS = 15_000;
 const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS = 6;
@@ -878,6 +879,7 @@ export class AgentChatService {
     let autoContinueTurns = 0;
     let pendingError: Error | null = null;
     let timeout: NodeJS.Timeout | null = null;
+    let keepalive: NodeJS.Timeout | null = null;
     let emptyFinalRetryTimeout: NodeJS.Timeout | null = null;
     let unsubscribe: (() => void) | null = null;
 
@@ -919,6 +921,10 @@ export class AgentChatService {
       if (timeout) {
         clearTimeout(timeout);
         timeout = null;
+      }
+      if (keepalive) {
+        clearInterval(keepalive);
+        keepalive = null;
       }
       if (emptyFinalRetryTimeout) {
         clearTimeout(emptyFinalRetryTimeout);
@@ -965,6 +971,10 @@ export class AgentChatService {
       if (timeout) {
         clearTimeout(timeout);
         timeout = null;
+      }
+      if (keepalive) {
+        clearInterval(keepalive);
+        keepalive = null;
       }
       if (emptyFinalRetryTimeout) {
         clearTimeout(emptyFinalRetryTimeout);
@@ -1353,6 +1363,12 @@ export class AgentChatService {
         if (pendingError) {
           controller.error(pendingError);
           return;
+        }
+        if (!settled) {
+          keepalive = setInterval(() => {
+            enqueue(toSseComment("openclaw-stream-keepalive"));
+          }, AGENT_CHAT_STREAM_KEEPALIVE_MS);
+          keepalive.unref?.();
         }
         for (const chunk of queuedChunks.splice(0)) {
           controller.enqueue(chunk);

@@ -4,9 +4,13 @@ import { proxyFetch } from "../lib/proxy-fetch.js";
 export class RuntimeHealth {
   constructor(private readonly env: ControllerEnv) {}
 
-  async probe(): Promise<{ ok: boolean; status: number | null }> {
+  async probe(): Promise<{
+    ok: boolean;
+    status: number | null;
+    skipped?: boolean;
+  }> {
     if (!this.env.gatewayProbeEnabled) {
-      return { ok: true, status: null };
+      return { ok: false, status: null, skipped: true };
     }
 
     try {

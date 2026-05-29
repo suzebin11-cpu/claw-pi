@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ControllerEnv } from "#controller/app/env";
 import {
   ImageGenerationService,
@@ -47,6 +47,7 @@ describe("ImageGenerationService", () => {
   let tempDir: string | null = null;
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     if (tempDir) {
       await rm(tempDir, { recursive: true, force: true });
       tempDir = null;
@@ -139,12 +140,89 @@ describe("ImageGenerationService", () => {
       normalizeImageGenerationErrorMessage("token quota is not enough"),
     ).toBe("余额不足，请及时充值");
     expect(normalizeImageGenerationErrorMessage("fetch failed")).toBe(
-      "图片生成服务连接失败，请稍后重试",
+      "图片生成请求可能已提交，但本地未收到图片结果；为避免重复扣费，已停止自动重试。",
     );
     expect(
       normalizeImageGenerationErrorMessage(
         "Request to https://yunwu.example timed out after 180000ms",
       ),
-    ).toBe("图片生成超时，请稍后重试");
+    ).toBe(
+      "图片生成请求可能已提交，但本地未收到图片结果；为避免重复扣费，已停止自动重试。",
+    );
+  });
+
+  it("does not retry non-idempotent image endpoint network failures", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
+    let requestCount = 0;
+
+    const service = new ImageGenerationService(
+      createConfigStore(),
+      createEnv(tempDir),
+      {
+        fetchImpl: async () => {
+          requestCount += 1;
+          throw new Error("fetch failed");
+        },
+      },
+    );
+
+    await expect(
+      service.generateImage({
+        prompt: "a small green robot",
+      }),
+    ).rejects.toThrow("本地未收到图片结果");
+    expect(requestCount).toBe(1);
+  });
+
+  it("logs image endpoint diagnostics when the cloud response is lost", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let requestCount = 0;
+    const cause = Object.assign(new Error("remote socket closed"), {
+      code: "UND_ERR_SOCKET",
+      syscall: "read",
+    });
+    const failure = new Error("fetch failed") as Error & { cause?: unknown };
+    failure.cause = cause;
+
+    const service = new ImageGenerationService(
+      createConfigStore(),
+      createEnv(tempDir),
+      {
+        fetchImpl: async () => {
+          requestCount += 1;
+          throw failure;
+        },
+      },
+    );
+
+    await expect(
+      service.generateImage({
+        prompt: "a small green robot",
+      }),
+    ).rejects.toThrow("本地未收到图片结果");
+
+    const logs = warnSpy.mock.calls
+      .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)
+      .filter((entry) => entry.message === "image_generation_response_lost");
+
+    expect(requestCount).toBe(1);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      label: "generations",
+      endpoint: "https://yunwu.example/v1/images/generations",
+      modelId: "gpt-image-1-mini",
+      hasInputImages: false,
+      inputImageCount: 0,
+      includeResponseFormat: false,
+      timeoutMs: 180_000,
+      errorName: "Error",
+      errorMessage: "fetch failed",
+      causeName: "Error",
+      causeMessage: "remote socket closed",
+      causeCode: "UND_ERR_SOCKET",
+      causeSyscall: "read",
+    });
+    expect(typeof logs[0]?.elapsedMs).toBe("number");
   });
 });

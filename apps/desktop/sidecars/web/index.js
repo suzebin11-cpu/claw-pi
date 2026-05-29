@@ -49,9 +49,21 @@ const HOP_BY_HOP = new Set([
 const PROXY_RETRY_ATTEMPTS = 10;
 const PROXY_RETRY_DELAY_MS = 500;
 const PROXY_TIMEOUT_MS = 120_000;
+const LONG_RUNNING_PROXY_TIMEOUT_MS = 420_000;
 
 async function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
+}
+
+function getProxyTimeoutMs(pathname) {
+  if (
+    pathname === "/api/internal/agent-chat/stream" ||
+    pathname === "/api/internal/desktop/images/generations"
+  ) {
+    return LONG_RUNNING_PROXY_TIMEOUT_MS;
+  }
+
+  return PROXY_TIMEOUT_MS;
 }
 
 function proxyOnce(inReq, outRes, pathname, pipeBody) {
@@ -77,7 +89,7 @@ function proxyOnce(inReq, outRes, pathname, pipeBody) {
         method: inReq.method,
         headers: forwardedHeaders,
         agent: proxyAgent,
-        timeout: PROXY_TIMEOUT_MS,
+        timeout: getProxyTimeoutMs(pathname),
       },
       (upRes) => {
         const responseHeaders = {};

@@ -146,9 +146,56 @@ async function probeIdlePort(options: {
     }
   }
 
-  throw new Error(
-    `Could not find an idle port for ${host} starting from ${preferredPort}.`,
-  );
+  return await probeEphemeralPort({ host, excludedPorts });
+}
+
+async function probeEphemeralPort(options: {
+  host: string;
+  excludedPorts?: ReadonlySet<number>;
+}): Promise<number> {
+  const { host, excludedPorts } = options;
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const server = createServer();
+
+    try {
+      const port = await new Promise<number>((resolvePort, rejectPort) => {
+        server.once("error", rejectPort);
+        server.listen(0, host, () => {
+          const address = server.address();
+          if (!address || typeof address === "string") {
+            rejectPort(new Error("Could not determine idle port."));
+            return;
+          }
+
+          resolvePort(address.port);
+        });
+      });
+
+      await new Promise<void>((resolveClose, rejectClose) => {
+        server.close((error) => {
+          if (error) {
+            rejectClose(error);
+            return;
+          }
+
+          resolveClose();
+        });
+      });
+
+      if (!excludedPorts?.has(port)) {
+        return port;
+      }
+    } catch (error) {
+      server.close();
+
+      if (attempt === 19) {
+        throw error;
+      }
+    }
+  }
+
+  throw new Error(`Could not find an idle ephemeral port for ${host}.`);
 }
 
 export async function requireIdlePort<T>(
