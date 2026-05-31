@@ -29,6 +29,34 @@ import {
   postApiInternalPaymentAlipayQueryOrder,
 } from "../../lib/api/sdk.gen";
 
+const SETUP_COMPLETE_KEY = "nexu_setup_complete";
+const AUTH_EXPIRED_MESSAGE = "登录已过期，请重新登录";
+
+function isAuthExpiredErrorMessage(
+  message: string | null | undefined,
+): boolean {
+  return /(?:token|jwt|登录|登陆|auth|authorization).{0,24}(?:过期|expired)|(?:unauthorized|not authenticated|未登录|未认证)/iu.test(
+    message ?? "",
+  );
+}
+
+function normalizeRechargeError(
+  message: string | null | undefined,
+  fallback: string,
+): string {
+  if (isAuthExpiredErrorMessage(message)) {
+    return AUTH_EXPIRED_MESSAGE;
+  }
+  return message?.trim() || fallback;
+}
+
+function redirectToActivationLogin(): void {
+  localStorage.removeItem(SETUP_COMPLETE_KEY);
+  window.setTimeout(() => {
+    window.location.href = "/";
+  }, 800);
+}
+
 // ── Pricing data ──────────────────────────────────────────────
 
 interface ModelPrice {
@@ -225,7 +253,9 @@ function findPricingModel(model: ApiModel): ModelPrice | undefined {
   );
 }
 
-function buildPricingProviders(models: ApiModel[] | undefined): ProviderGroup[] {
+function buildPricingProviders(
+  models: ApiModel[] | undefined,
+): ProviderGroup[] {
   const selected = new Map<string, ModelPrice>();
   if (models && models.length > 0) {
     for (const model of models) {
@@ -806,6 +836,18 @@ function AlipayPaymentSection() {
             queryClient.invalidateQueries({
               queryKey: ["pending-alipay-orders"],
             });
+          } else if (data && !data.ok && data.error) {
+            stopPolling();
+            setFlow({
+              phase: "error",
+              message: normalizeRechargeError(
+                data.error,
+                t("recharge.payFailed"),
+              ),
+            });
+            if (isAuthExpiredErrorMessage(data.error)) {
+              redirectToActivationLogin();
+            }
           } else if (
             data?.ok &&
             (data.status === "closed" || data.status === "failed")
@@ -839,10 +881,17 @@ function AlipayPaymentSection() {
         body: { amount_cents: effectiveAmountCents },
       });
       if (!data?.ok || !data.qr_code || !data.out_trade_no) {
+        const message = normalizeRechargeError(
+          data?.error,
+          t("recharge.payFailed"),
+        );
         setFlow({
           phase: "error",
-          message: data?.error ?? t("recharge.payFailed"),
+          message,
         });
+        if (isAuthExpiredErrorMessage(data?.error)) {
+          redirectToActivationLogin();
+        }
         return;
       }
       startPolling(data.out_trade_no, data.qr_code);
@@ -1025,6 +1074,9 @@ function PendingOrdersSection() {
     queryKey: ["pending-alipay-orders"],
     queryFn: async () => {
       const { data } = await getApiInternalPaymentAlipayPendingOrders();
+      if (data?.error && isAuthExpiredErrorMessage(data.error)) {
+        redirectToActivationLogin();
+      }
       return data;
     },
     refetchInterval: 30_000,
@@ -1124,6 +1176,7 @@ export function RechargePage() {
     data: balanceData,
     isLoading: balanceLoading,
     isError: balanceError,
+    error: balanceQueryError,
   } = useQuery({
     queryKey: ["user-balance"],
     queryFn: async () => {
@@ -1132,13 +1185,26 @@ export function RechargePage() {
         throw new Error("Failed to fetch balance");
       }
       if (!data.ok) {
-        throw new Error(data.error ?? "Balance unavailable");
+        throw new Error(
+          normalizeRechargeError(data.error, t("recharge.balanceUnavailable")),
+        );
       }
       return data;
     },
     refetchInterval: 30_000,
     retry: 2,
   });
+
+  const balanceErrorMessage =
+    balanceQueryError instanceof Error
+      ? balanceQueryError.message
+      : t("recharge.balanceUnavailable");
+
+  useEffect(() => {
+    if (balanceError && isAuthExpiredErrorMessage(balanceErrorMessage)) {
+      redirectToActivationLogin();
+    }
+  }, [balanceError, balanceErrorMessage]);
 
   // const redeemMutation = useMutation({
   //   mutationFn: async (rechargeCode: string) => {
@@ -1203,7 +1269,7 @@ export function RechargePage() {
               </div>
             ) : balanceError ? (
               <div className="text-[13px] text-red-500">
-                {t("recharge.balanceUnavailable")}
+                {balanceErrorMessage}
               </div>
             ) : (
               <div className="text-2xl font-bold text-text-primary tabular-nums">

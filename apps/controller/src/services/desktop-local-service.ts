@@ -14,9 +14,38 @@ type ActivationServerResponse = {
   error?: string;
 };
 
+const AUTH_EXPIRED_MESSAGE = "登录已过期，请重新登录";
+
 function maskActivationCode(code: string): string {
   if (code.length <= 8) return code;
   return `${code.slice(0, 4)}...${code.slice(-4)}`;
+}
+
+function isAuthExpiredError(message: string): boolean {
+  return /(?:token|jwt|登录|登陆|auth|authorization).{0,24}(?:过期|expired)|(?:unauthorized|not authenticated|未登录|未认证)/iu.test(
+    message,
+  );
+}
+
+async function readCloudError(res: Response): Promise<string> {
+  const text = await res.text().catch(() => "Unknown error");
+  if (!text) {
+    return "Unknown error";
+  }
+
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      return parsed.error;
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) {
+      return parsed.message;
+    }
+  } catch {
+    // Plain text error body.
+  }
+
+  return text;
 }
 
 export class DesktopLocalService {
@@ -26,6 +55,16 @@ export class DesktopLocalService {
     private readonly openclawProcess: OpenClawProcessManager,
     private readonly env?: ControllerEnv,
   ) {}
+
+  private async normalizeCloudAuthError(message: string): Promise<string> {
+    const trimmed = message.trim() || "Unknown error";
+    if (!isAuthExpiredError(trimmed)) {
+      return trimmed;
+    }
+
+    await this.configStore.clearActivation().catch(() => {});
+    return AUTH_EXPIRED_MESSAGE;
+  }
 
   async getCloudStatus() {
     return this.configStore.getDesktopCloudStatus();
@@ -254,13 +293,10 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
-      try {
-        const parsed = JSON.parse(text) as { error?: string };
-        return { ok: false, error: parsed.error ?? text };
-      } catch {
-        return { ok: false, error: text };
-      }
+      const error = await this.normalizeCloudAuthError(
+        await readCloudError(res),
+      );
+      return { ok: false, error };
     }
 
     const data = (await res.json()) as {
@@ -270,7 +306,10 @@ export class DesktopLocalService {
       error?: string;
     };
     if (data.error) {
-      return { ok: false, error: data.error };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(data.error),
+      };
     }
 
     return {
@@ -308,8 +347,10 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
-      return { ok: false, error: text };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(await readCloudError(res)),
+      };
     }
 
     const data = (await res.json()) as {
@@ -319,7 +360,10 @@ export class DesktopLocalService {
       error?: string;
     };
     if (data.error) {
-      return { ok: false, error: data.error };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(data.error),
+      };
     }
 
     return {
@@ -425,14 +469,16 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
+      const error = await this.normalizeCloudAuthError(
+        await readCloudError(res),
+      );
       return {
         success: false,
         transactions: [],
         total: 0,
         page,
         page_size: pageSize,
-        error: text,
+        error,
       };
     }
 
@@ -491,13 +537,10 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
-      try {
-        const parsed = JSON.parse(text) as { error?: string };
-        return { ok: false, error: parsed.error ?? text };
-      } catch {
-        return { ok: false, error: text };
-      }
+      const error = await this.normalizeCloudAuthError(
+        await readCloudError(res),
+      );
+      return { ok: false, error };
     }
 
     const data = (await res.json()) as {
@@ -506,7 +549,10 @@ export class DesktopLocalService {
       error?: string;
     };
     if (data.error) {
-      return { ok: false, error: data.error };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(data.error),
+      };
     }
 
     return {
@@ -547,13 +593,10 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
-      try {
-        const parsed = JSON.parse(text) as { error?: string };
-        return { ok: false, error: parsed.error ?? text };
-      } catch {
-        return { ok: false, error: text };
-      }
+      const error = await this.normalizeCloudAuthError(
+        await readCloudError(res),
+      );
+      return { ok: false, error };
     }
 
     const data = (await res.json()) as {
@@ -563,7 +606,10 @@ export class DesktopLocalService {
       error?: string;
     };
     if (data.error) {
-      return { ok: false, error: data.error };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(data.error),
+      };
     }
 
     return {
@@ -602,18 +648,18 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
-      try {
-        const parsed = JSON.parse(text) as { error?: string };
-        return { ok: false, error: parsed.error ?? text };
-      } catch {
-        return { ok: false, error: text };
-      }
+      const error = await this.normalizeCloudAuthError(
+        await readCloudError(res),
+      );
+      return { ok: false, error };
     }
 
     const data = (await res.json()) as { ok?: boolean; error?: string };
     if (data.error) {
-      return { ok: false, error: data.error };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(data.error),
+      };
     }
 
     return { ok: true };
@@ -651,8 +697,10 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
-      return { ok: false, error: text };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(await readCloudError(res)),
+      };
     }
 
     const data = (await res.json()) as {
@@ -665,7 +713,10 @@ export class DesktopLocalService {
       error?: string;
     };
     if (data.error) {
-      return { ok: false, error: data.error };
+      return {
+        ok: false,
+        error: await this.normalizeCloudAuthError(data.error),
+      };
     }
 
     return { ok: true, orders: data.orders ?? [] };
@@ -707,14 +758,16 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
-      const text = await res.text().catch(() => "Unknown error");
+      const error = await this.normalizeCloudAuthError(
+        await readCloudError(res),
+      );
       return {
         success: false,
         logs: [],
         total: 0,
         page,
         page_size: pageSize,
-        error: text,
+        error,
       };
     }
 
