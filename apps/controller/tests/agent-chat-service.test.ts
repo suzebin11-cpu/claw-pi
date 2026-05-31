@@ -43,6 +43,19 @@ class FakeOpenClawWsClient {
   }
 }
 
+class FakePreflightSyncService {
+  calls = 0;
+  shouldFail = false;
+
+  async syncAllImmediate(): Promise<{ configPushed: boolean }> {
+    this.calls += 1;
+    if (this.shouldFail) {
+      throw new Error("sync failed");
+    }
+    return { configPushed: false };
+  }
+}
+
 describe("AgentChatService", () => {
   let rootDir: string;
   let fakeWs: FakeOpenClawWsClient;
@@ -342,6 +355,86 @@ describe("AgentChatService", () => {
     const body = await response.text();
     expect(body).toContain("余额不足，请及时充值");
     expect(body).toContain("data: [DONE]");
+  });
+
+  it("surfaces missing link auth as a user-facing reply", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "main",
+      sessionId: "session-auth",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    const runId = String(send?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:main:workbench:session-auth",
+        runId,
+        state: "error",
+        errorMessage:
+          'No API key found for provider "link". Auth store: C:\\tmp\\auth-profiles.json',
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("模型账号未就绪，请重新登录或检查云雾连接。");
+    expect(body).toContain("data: [DONE]");
+  });
+
+  it("runs OpenClaw config/auth preflight before sending agent requests", async () => {
+    const preflight = new FakePreflightSyncService();
+    service = new AgentChatService(
+      fakeWs as never,
+      {
+        openclawStateDir: path.join(rootDir, ".openclaw"),
+      } as ControllerEnv,
+      preflight,
+    );
+
+    await service.createOpenAiCompatibleStream({
+      agentId: "main",
+      sessionId: "session-preflight",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      permissionMode: "full",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(preflight.calls).toBe(1);
+    expect(fakeWs.requests.some((request) => request.method === "agent")).toBe(
+      true,
+    );
+  });
+
+  it("surfaces OpenClaw preflight failures without a generic empty reply", async () => {
+    const preflight = new FakePreflightSyncService();
+    preflight.shouldFail = true;
+    service = new AgentChatService(
+      fakeWs as never,
+      {
+        openclawStateDir: path.join(rootDir, ".openclaw"),
+      } as ControllerEnv,
+      preflight,
+    );
+
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "main",
+      sessionId: "session-preflight-fail",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      permissionMode: "full",
+    });
+
+    const body = await response.text();
+    expect(body).toContain("OpenClaw 配置同步失败，请稍后重试。");
+    expect(body).toContain("data: [DONE]");
+    expect(fakeWs.requests.some((request) => request.method === "agent")).toBe(
+      false,
+    );
   });
 
   it("auto-continues observed workbench status finals that mention summarizing later", async () => {

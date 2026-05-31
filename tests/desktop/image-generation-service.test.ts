@@ -19,12 +19,15 @@ function createEnv(homeDir: string): ControllerEnv {
   } as unknown as ControllerEnv;
 }
 
-function createConfigStore(): NexuConfigStore {
+function createConfigStore(
+  options: { imageModelId?: string } = {},
+): NexuConfigStore {
   return {
     async getConfig() {
       return {
         runtime: {
-          defaultImageGenerationModelId: "clawpi-image/gpt-image-1-mini",
+          defaultImageGenerationModelId:
+            options.imageModelId ?? "clawpi-image/gpt-image-1-mini",
         },
         desktop: {
           cloud: {
@@ -132,6 +135,99 @@ describe("ImageGenerationService", () => {
 
     expect(requests).toHaveLength(1);
     expect(requests[0]?.body).not.toHaveProperty("response_format");
+    expect(result.filePath).toMatch(/generated-images[\\/].+\.png$/u);
+  });
+
+  it("uses streaming progress events for GPT Image 2 generations", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
+    const requests: Array<{
+      body: Record<string, unknown>;
+      accept: string | null;
+    }> = [];
+
+    const service = new ImageGenerationService(
+      createConfigStore({ imageModelId: "clawpi-image/gpt-image-2" }),
+      createEnv(tempDir),
+      {
+        fetchImpl: async (_url, options) => {
+          const headers = new Headers(options?.headers);
+          requests.push({
+            body: JSON.parse(String(options?.body ?? "{}")) as Record<
+              string,
+              unknown
+            >,
+            accept: headers.get("accept"),
+          });
+          return new Response(
+            [
+              "event: image_generation.partial_image\n",
+              `data: {"type":"image_generation.partial_image","partial_image_index":0,"b64_json":"${ONE_PIXEL_PNG}"}\n\n`,
+              "event: image_generation.completed\n",
+              `data: {"type":"image_generation.completed","b64_json":"${ONE_PIXEL_PNG}"}\n\n`,
+              "data: [DONE]\n\n",
+            ].join(""),
+            { status: 200, headers: { "Content-Type": "text/event-stream" } },
+          );
+        },
+      },
+    );
+
+    const result = await service.generateImage({
+      prompt: "a small green robot",
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]).toMatchObject({
+      accept: "text/event-stream",
+      body: {
+        model: "gpt-image-2",
+        stream: true,
+        partial_images: 1,
+      },
+    });
+    expect(requests[0]?.body).not.toHaveProperty("response_format");
+    expect(result.modelId).toBe("clawpi-image/gpt-image-2");
+    expect(result.filePath).toMatch(/generated-images[\\/].+\.png$/u);
+  });
+
+  it("falls back to the sync image endpoint when streaming is rejected before generation", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
+    const requests: Array<Record<string, unknown>> = [];
+
+    const service = new ImageGenerationService(
+      createConfigStore({ imageModelId: "clawpi-image/gpt-image-2" }),
+      createEnv(tempDir),
+      {
+        fetchImpl: async (_url, options) => {
+          const body = JSON.parse(String(options?.body ?? "{}")) as Record<
+            string,
+            unknown
+          >;
+          requests.push(body);
+          if (requests.length === 1) {
+            return new Response(
+              JSON.stringify({
+                error: { message: "Unsupported parameter: stream" },
+              }),
+              { status: 400, headers: { "Content-Type": "application/json" } },
+            );
+          }
+          return new Response(
+            JSON.stringify({ data: [{ b64_json: ONE_PIXEL_PNG }] }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    );
+
+    const result = await service.generateImage({
+      prompt: "a small green robot",
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({ stream: true, partial_images: 1 });
+    expect(requests[1]).not.toHaveProperty("stream");
+    expect(requests[1]).not.toHaveProperty("partial_images");
     expect(result.filePath).toMatch(/generated-images[\\/].+\.png$/u);
   });
 

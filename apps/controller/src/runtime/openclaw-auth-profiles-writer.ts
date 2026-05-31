@@ -22,6 +22,10 @@ type AuthProfileRecord =
     };
 
 type AuthProfileEntry = [string, AuthProfileRecord];
+type AuthProfileTarget = {
+  id: string;
+  authProfilesPath: string;
+};
 
 function isApiKeyProfile(profile: unknown): profile is { type: "api_key" } {
   return (
@@ -43,6 +47,19 @@ function getProfileProvider(profile: unknown): string | null {
 
   const provider = (profile as Record<string, unknown>).provider;
   return typeof provider === "string" ? provider : null;
+}
+
+function uniqueAuthProfileTargets(
+  targets: ReadonlyArray<AuthProfileTarget>,
+): AuthProfileTarget[] {
+  const seen = new Set<string>();
+  return targets.filter((target) => {
+    if (seen.has(target.authProfilesPath)) {
+      return false;
+    }
+    seen.add(target.authProfilesPath);
+    return true;
+  });
 }
 
 export class OpenClawAuthProfilesWriter {
@@ -156,17 +173,34 @@ export class OpenClawAuthProfilesWriter {
     const shouldKeepOpenAiCodexOAuth = Object.values(profiles).some(
       (profile) => getProfileProvider(profile) === "openai-codex",
     );
-    await Promise.all(
-      (config.agents?.list ?? []).map(async (agent) => {
+    const targets = uniqueAuthProfileTargets([
+      {
+        id: "main",
+        authProfilesPath:
+          this.authProfilesStore.authProfilesPathForAgentId("main"),
+      },
+      ...(config.agents?.list ?? []).flatMap((agent): AuthProfileTarget[] => {
         if (
           typeof agent.workspace !== "string" ||
           agent.workspace.length === 0
         ) {
-          return;
+          return [];
         }
+        return [
+          {
+            id: typeof agent.id === "string" ? agent.id : agent.workspace,
+            authProfilesPath:
+              this.authProfilesStore.authProfilesPathForWorkspace(
+                agent.workspace,
+              ),
+          },
+        ];
+      }),
+    ]);
 
-        const authProfilesPath =
-          this.authProfilesStore.authProfilesPathForWorkspace(agent.workspace);
+    await Promise.all(
+      targets.map(async (target) => {
+        const authProfilesPath = target.authProfilesPath;
         const preservedKeys: string[] = [];
         const droppedKeys: string[] = [];
 
@@ -202,7 +236,8 @@ export class OpenClawAuthProfilesWriter {
         if (preservedKeys.length > 0) {
           logger.debug(
             {
-              agent: agent.workspace,
+              agent: target.id,
+              authProfilesPath,
               preservedKeys,
             },
             "Preserved non-api_key auth profiles during config sync",
@@ -211,7 +246,8 @@ export class OpenClawAuthProfilesWriter {
         if (droppedKeys.length > 0) {
           logger.info(
             {
-              agent: agent.workspace,
+              agent: target.id,
+              authProfilesPath,
               droppedKeys,
             },
             "Dropped stale openai-codex auth profiles during config sync",

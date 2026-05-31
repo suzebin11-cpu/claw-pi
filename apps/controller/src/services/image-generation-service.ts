@@ -62,6 +62,7 @@ const DEFAULT_IMAGE_SIZE = "1024x1024";
 const IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 90_000;
 const IMAGE_GENERATION_RETRY_DELAYS_MS = [1_500, 3_000] as const;
+const IMAGE_STREAM_PARTIAL_IMAGES = 1;
 const MAX_INPUT_IMAGES = 4;
 const MAX_PROMPT_CHARS = 4000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
@@ -69,6 +70,7 @@ const IMAGE_RESPONSE_LOST_MESSAGE =
   "图片生成请求可能已提交，但本地未收到图片结果；为避免重复扣费，已停止自动重试。";
 
 type ImageEndpointLabel = "generations" | "edits";
+type ImageEndpointRequestMode = "sync" | "stream";
 
 function getGeneratedImagesDir(env: ControllerEnv): string {
   return path.join(env.nexuHomeDir, "generated-images");
@@ -160,6 +162,28 @@ function buildImageFetchErrorDetails(error: unknown): Record<string, unknown> {
   return details;
 }
 
+function isEventStreamResponse(response: Response): boolean {
+  return /(?:^|;)\s*text\/event-stream\b/iu.test(
+    response.headers.get("content-type") ?? "",
+  );
+}
+
+function shouldUseImageStreaming(modelId: string): boolean {
+  return modelId === "gpt-image-2";
+}
+
+function shouldRetryWithoutStreaming(message: string): boolean {
+  const normalized = message.toLowerCase();
+  return (
+    /(?:stream|streaming|partial_images|partial image|text\/event-stream)/u.test(
+      normalized,
+    ) &&
+    /(?:unknown|unsupported|unrecognized|invalid|not support|not allowed|不支持|未知|无效|不允许)/u.test(
+      normalized,
+    )
+  );
+}
+
 function normalizeSize(input: GenerateImageInput): string {
   const rawSize = input.size?.trim();
   if (rawSize) return rawSize;
@@ -234,6 +258,103 @@ function parseImageResponse(payload: OpenAiImageResponse): {
   throw new Error("生图接口返回格式不包含 url 或 b64_json");
 }
 
+function extractImageFromStreamPayload(
+  payload: unknown,
+  eventName: string,
+): {
+  image?: { b64Json?: string; url?: string };
+  isPartial: boolean;
+  errorMessage?: string;
+} {
+  if (typeof payload !== "object" || payload === null) {
+    return { isPartial: false };
+  }
+
+  const record = payload as Record<string, unknown>;
+  const error = record.error;
+  if (typeof error === "object" && error !== null) {
+    const message = (error as Record<string, unknown>).message;
+    if (typeof message === "string" && message.trim()) {
+      return { isPartial: false, errorMessage: message };
+    }
+  }
+
+  const payloadType =
+    typeof record.type === "string" ? record.type : eventName || "";
+  const isPartial =
+    /partial/iu.test(payloadType) ||
+    typeof record.partial_image_index === "number";
+
+  if (typeof record.b64_json === "string" && record.b64_json) {
+    return { image: { b64Json: record.b64_json }, isPartial };
+  }
+
+  if (typeof record.url === "string" && record.url) {
+    return { image: { url: record.url }, isPartial };
+  }
+
+  if (Array.isArray(record.data)) {
+    try {
+      const image = parseImageResponse({
+        data: record.data as OpenAiImageResponse["data"],
+      });
+      return { image, isPartial };
+    } catch {
+      return { isPartial };
+    }
+  }
+
+  for (const key of ["data", "response", "image"] as const) {
+    const nested = record[key];
+    if (
+      typeof nested === "object" &&
+      nested !== null &&
+      !Array.isArray(nested)
+    ) {
+      const nestedResult = extractImageFromStreamPayload(nested, eventName);
+      if (nestedResult.errorMessage || nestedResult.image) {
+        return {
+          ...nestedResult,
+          isPartial: isPartial || nestedResult.isPartial,
+        };
+      }
+    }
+  }
+
+  return { isPartial };
+}
+
+function parseSseBlock(
+  block: string,
+): { eventName: string; data: string } | null {
+  let eventName = "";
+  const dataLines: string[] = [];
+
+  for (const line of block.split("\n")) {
+    if (line.startsWith(":")) {
+      continue;
+    }
+    if (line.startsWith("event:")) {
+      eventName = line.slice("event:".length).trim();
+      continue;
+    }
+    if (line.startsWith("data:")) {
+      dataLines.push(line.slice("data:".length).trimStart());
+    }
+  }
+
+  if (dataLines.length > 0) {
+    return { eventName, data: dataLines.join("\n").trim() };
+  }
+
+  const raw = block.trim();
+  if (raw.startsWith("{") || raw.startsWith("[")) {
+    return { eventName, data: raw };
+  }
+
+  return null;
+}
+
 async function readResponseError(response: Response): Promise<string> {
   const text = await response.text().catch(() => "");
   if (!text) {
@@ -246,6 +367,121 @@ async function readResponseError(response: Response): Promise<string> {
   } catch {
     return text.slice(0, 500);
   }
+}
+
+async function parseImageStreamResponse(
+  response: Response,
+  details: {
+    label: ImageEndpointLabel;
+    modelId: string;
+    hasInputImages: boolean;
+    inputImageCount: number;
+  },
+): Promise<OpenAiImageResponse> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error("生图接口没有返回图片");
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let partialCount = 0;
+  let finalImage: { b64Json?: string; url?: string } | undefined;
+  let partialImage: { b64Json?: string; url?: string } | undefined;
+
+  const consumeBlock = (block: string): void => {
+    const parsedBlock = parseSseBlock(block);
+    if (!parsedBlock || !parsedBlock.data || parsedBlock.data === "[DONE]") {
+      return;
+    }
+
+    const payload = JSON.parse(parsedBlock.data) as unknown;
+    const parsedPayload = extractImageFromStreamPayload(
+      payload,
+      parsedBlock.eventName,
+    );
+    if (parsedPayload.errorMessage) {
+      throw new Error(parsedPayload.errorMessage);
+    }
+    if (!parsedPayload.image) {
+      return;
+    }
+
+    if (parsedPayload.isPartial) {
+      partialCount += 1;
+      partialImage = parsedPayload.image;
+      return;
+    }
+
+    finalImage = parsedPayload.image;
+  };
+
+  const consumeBuffer = (): void => {
+    buffer = buffer.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
+    while (true) {
+      const separatorIndex = buffer.indexOf("\n\n");
+      if (separatorIndex < 0) {
+        return;
+      }
+      const block = buffer.slice(0, separatorIndex);
+      buffer = buffer.slice(separatorIndex + 2);
+      consumeBlock(block);
+    }
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (value) {
+        buffer += decoder.decode(value, { stream: !done });
+        consumeBuffer();
+      }
+      if (done) {
+        buffer += decoder.decode();
+        consumeBuffer();
+        if (buffer.trim()) {
+          consumeBlock(buffer);
+        }
+        break;
+      }
+    }
+  } catch (error) {
+    if (!partialImage) {
+      throw error;
+    }
+
+    logger.warn(
+      {
+        ...details,
+        partialCount,
+        ...buildImageFetchErrorDetails(error),
+      },
+      "image_generation_stream_partial_fallback",
+    );
+  }
+
+  const image = finalImage ?? partialImage;
+  if (!image) {
+    throw new Error("生图接口没有返回图片");
+  }
+
+  logger.info(
+    {
+      ...details,
+      partialCount,
+      usedPartialFallback: finalImage === undefined,
+    },
+    "image_generation_stream_completed",
+  );
+
+  return {
+    data: [
+      {
+        ...(image.b64Json ? { b64_json: image.b64Json } : {}),
+        ...(image.url ? { url: image.url } : {}),
+      },
+    ],
+  };
 }
 
 function shouldRetryWithoutResponseFormat(message: string): boolean {
@@ -490,14 +726,23 @@ export class ImageGenerationService {
     inputImageCount: number;
     buildRequest: (
       includeResponseFormat: boolean,
+      requestMode: ImageEndpointRequestMode,
     ) =>
       | Promise<{ url: string; init: RequestInit & { timeoutMs: number } }>
       | { url: string; init: RequestInit & { timeoutMs: number } };
   }): Promise<OpenAiImageResponse> {
     let includeResponseFormat = false;
+    let requestMode: ImageEndpointRequestMode = shouldUseImageStreaming(
+      params.modelId,
+    )
+      ? "stream"
+      : "sync";
 
     while (true) {
-      const request = await params.buildRequest(includeResponseFormat);
+      const request = await params.buildRequest(
+        includeResponseFormat,
+        requestMode,
+      );
       let response: Response;
       let elapsedMs = 0;
 
@@ -508,6 +753,7 @@ export class ImageGenerationService {
           hasInputImages: params.hasInputImages,
           inputImageCount: params.inputImageCount,
           includeResponseFormat,
+          requestMode,
           url: request.url,
           init: request.init,
         });
@@ -519,10 +765,54 @@ export class ImageGenerationService {
       }
 
       if (response.ok) {
+        if (requestMode === "stream" && isEventStreamResponse(response)) {
+          try {
+            return await parseImageStreamResponse(response, {
+              label: params.label,
+              modelId: params.modelId,
+              hasInputImages: params.hasInputImages,
+              inputImageCount: params.inputImageCount,
+            });
+          } catch (error) {
+            logger.warn(
+              {
+                label: params.label,
+                modelId: params.modelId,
+                hasInputImages: params.hasInputImages,
+                inputImageCount: params.inputImageCount,
+                requestMode,
+                elapsedMs,
+                ...buildImageFetchErrorDetails(error),
+              },
+              "image_generation_stream_failed",
+            );
+            const message =
+              error instanceof Error ? error.message : String(error);
+            throw new Error(normalizeImageGenerationErrorMessage(message));
+          }
+        }
         return (await response.json()) as OpenAiImageResponse;
       }
 
       const message = await readResponseError(response);
+      if (requestMode === "stream" && shouldRetryWithoutStreaming(message)) {
+        requestMode = "sync";
+        includeResponseFormat = false;
+        logger.warn(
+          {
+            label: params.label,
+            modelId: params.modelId,
+            hasInputImages: params.hasInputImages,
+            inputImageCount: params.inputImageCount,
+            status: response.status,
+            elapsedMs,
+            errorMessage: message,
+          },
+          "image_generation_retry_without_streaming",
+        );
+        continue;
+      }
+
       if (includeResponseFormat && shouldRetryWithoutResponseFormat(message)) {
         includeResponseFormat = false;
         logger.warn(
@@ -546,6 +836,7 @@ export class ImageGenerationService {
           modelId: params.modelId,
           hasInputImages: params.hasInputImages,
           inputImageCount: params.inputImageCount,
+          requestMode,
           status: response.status,
           elapsedMs,
           errorMessage: message,
@@ -562,6 +853,7 @@ export class ImageGenerationService {
     hasInputImages: boolean;
     inputImageCount: number;
     includeResponseFormat: boolean;
+    requestMode: ImageEndpointRequestMode;
     url: string;
     init: RequestInit & { timeoutMs: number };
   }): Promise<{ response: Response; elapsedMs: number }> {
@@ -573,6 +865,7 @@ export class ImageGenerationService {
       hasInputImages: params.hasInputImages,
       inputImageCount: params.inputImageCount,
       includeResponseFormat: params.includeResponseFormat,
+      requestMode: params.requestMode,
       timeoutMs: params.init.timeoutMs,
     };
 
@@ -642,12 +935,15 @@ export class ImageGenerationService {
       modelId: params.modelId,
       hasInputImages: false,
       inputImageCount: 0,
-      buildRequest: (includeResponseFormat) => ({
+      buildRequest: (includeResponseFormat, requestMode) => ({
         url: endpoint,
         init: {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            ...(requestMode === "stream"
+              ? { Accept: "text/event-stream" }
+              : {}),
             Authorization: `Bearer ${params.settings.apiKey}`,
           },
           body: JSON.stringify({
@@ -655,6 +951,9 @@ export class ImageGenerationService {
             prompt: params.prompt,
             n: 1,
             size: params.size,
+            ...(requestMode === "stream"
+              ? { stream: true, partial_images: IMAGE_STREAM_PARTIAL_IMAGES }
+              : {}),
             ...(includeResponseFormat ? { response_format: "b64_json" } : {}),
           }),
           timeoutMs: IMAGE_GENERATION_TIMEOUT_MS,
@@ -677,12 +976,16 @@ export class ImageGenerationService {
       modelId: params.modelId,
       hasInputImages: true,
       inputImageCount: params.inputImages.length,
-      buildRequest: async (includeResponseFormat) => {
+      buildRequest: async (includeResponseFormat, requestMode) => {
         const form = new FormData();
         form.set("model", params.modelId);
         form.set("prompt", params.prompt);
         form.set("n", "1");
         form.set("size", params.size);
+        if (requestMode === "stream") {
+          form.set("stream", "true");
+          form.set("partial_images", String(IMAGE_STREAM_PARTIAL_IMAGES));
+        }
         if (includeResponseFormat) {
           form.set("response_format", "b64_json");
         }
@@ -697,6 +1000,9 @@ export class ImageGenerationService {
           init: {
             method: "POST",
             headers: {
+              ...(requestMode === "stream"
+                ? { Accept: "text/event-stream" }
+                : {}),
               Authorization: `Bearer ${params.settings.apiKey}`,
             },
             body: form,

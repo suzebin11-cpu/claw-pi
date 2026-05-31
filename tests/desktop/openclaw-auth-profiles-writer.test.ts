@@ -128,5 +128,23 @@ describe("OpenClawAuthProfilesWriter", () => {
       provider: "anthropic",
       key: "anthropic-key",
     });
+
+    const mainAuthProfilesPath = resolve(
+      env.openclawStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const mainParsed = JSON.parse(
+      readFileSync(mainAuthProfilesPath, "utf8"),
+    ) as {
+      profiles: Record<string, { type: string; provider: string; key: string }>;
+    };
+    expect(mainParsed.profiles["custom_abc:default"]).toEqual({
+      type: "api_key",
+      provider: "custom_abc",
+      key: "test-api-key",
+    });
   });
 });

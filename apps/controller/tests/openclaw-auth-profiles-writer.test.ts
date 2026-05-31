@@ -92,5 +92,21 @@ describe("OpenClawAuthProfilesWriter", () => {
       provider: "link",
       key: "sk-link",
     });
+
+    const mainAuthPath = path.join(
+      env.openclawStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const mainData = JSON.parse(await readFile(mainAuthPath, "utf8")) as {
+      profiles: Record<string, unknown>;
+    };
+    expect(mainData.profiles["link:default"]).toMatchObject({
+      type: "api_key",
+      provider: "link",
+      key: "sk-link",
+    });
   });
 });

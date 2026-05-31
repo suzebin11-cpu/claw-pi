@@ -178,6 +178,7 @@ const ASK_SESSIONS_STORAGE_KEY = "claw-pi.ask.sessions.v1";
 const ASK_ACTIVE_SESSION_STORAGE_KEY = "claw-pi.ask.activeSessionId.v1";
 const ASK_KNOWLEDGE_STORAGE_KEY = "claw-pi.ask.knowledge.v1";
 const ASK_LOCAL_PERMISSIONS_STORAGE_KEY = "claw-pi.ask.localPermissions.v1";
+const ASK_LOCAL_PERMISSIONS_STORAGE_VERSION = 2;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
 const AGENT_HISTORY_CONTEXT_CHARS = 5_000;
 const AGENT_HISTORY_CONTEXT_MESSAGES = 8;
@@ -413,22 +414,15 @@ function loadLocalPermissions(): LocalDesktopPermissionSettings {
     if (!parsed || typeof parsed !== "object") {
       return DEFAULT_LOCAL_PERMISSIONS;
     }
-    const candidate = parsed as Partial<LocalDesktopPermissionSettings>;
-    const legacy = parsed as Partial<{
-      enabled: boolean;
-      mode: string;
-    }>;
-    let mode: LocalDesktopPermissionMode = DEFAULT_LOCAL_PERMISSIONS.mode;
-    if (candidate.mode === "basic" || candidate.mode === "confirm") {
-      mode = candidate.mode;
-    } else if (candidate.mode === "full") {
-      mode = "full";
-    } else if (legacy.mode === "controlled" || legacy.enabled === true) {
-      mode = "confirm";
-    }
-    return {
-      mode,
+    const candidate = parsed as Partial<LocalDesktopPermissionSettings> & {
+      version?: unknown;
     };
+    const version =
+      typeof candidate.version === "number" ? candidate.version : 0;
+    if (version < ASK_LOCAL_PERMISSIONS_STORAGE_VERSION) {
+      return DEFAULT_LOCAL_PERMISSIONS;
+    }
+    return DEFAULT_LOCAL_PERMISSIONS;
   } catch {
     return DEFAULT_LOCAL_PERMISSIONS;
   }
@@ -438,7 +432,10 @@ function persistLocalPermissions(settings: LocalDesktopPermissionSettings) {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(
     ASK_LOCAL_PERMISSIONS_STORAGE_KEY,
-    JSON.stringify(settings),
+    JSON.stringify({
+      version: ASK_LOCAL_PERMISSIONS_STORAGE_VERSION,
+      ...settings,
+    }),
   );
 }
 
@@ -1047,7 +1044,6 @@ function hasRecentImageGenerationContext(messages: ChatMessage[]): boolean {
 function classifyWorkbenchRequest(input: {
   text: string;
   attachments: ChatAttachment[];
-  permissionMode: LocalDesktopPermissionMode;
   recentMessages: ChatMessage[];
 }): WorkbenchRequestRoute {
   const normalized = input.text.replace(/\s+/gu, " ").trim();
@@ -1292,6 +1288,14 @@ async function fetchAgentChatStream(input: {
       (await response.text()) || "OpenClaw agent chat failed",
     ),
   );
+}
+
+function resolveAgentExecutionMode(input: {
+  permissionMode: LocalDesktopPermissionMode;
+  route: WorkbenchRequestRoute;
+}): AgentExecutionMode {
+  void input;
+  return "write";
 }
 
 async function compactSessionContext(input: {
@@ -2251,7 +2255,6 @@ export function AskPage() {
     const workbenchRoute = classifyWorkbenchRequest({
       text,
       attachments,
-      permissionMode: localPermissions.mode,
       recentMessages: messages,
     });
 
@@ -2335,12 +2338,11 @@ export function AskPage() {
         modelId: currentModelId,
         message: agentWorkbenchMessage,
         attachments,
-        permissionMode: localPermissions.mode,
-        executionMode:
-          workbenchRoute === "write_agent" ||
-          workbenchRoute === "image_generation"
-            ? "write"
-            : "read_only",
+        permissionMode: "full",
+        executionMode: resolveAgentExecutionMode({
+          permissionMode: "full",
+          route: workbenchRoute,
+        }),
         signal: controller.signal,
       });
 
@@ -3076,18 +3078,6 @@ export function AskPage() {
                       </div>
                       <div className="mt-3 grid grid-cols-3 gap-1.5">
                         {[
-                          {
-                            key: "basic",
-                            label: t("ask.local.mode.basic"),
-                            desc: t("ask.local.mode.basicDesc"),
-                            icon: ShieldCheck,
-                          },
-                          {
-                            key: "confirm",
-                            label: t("ask.local.mode.confirm"),
-                            desc: t("ask.local.mode.confirmDesc"),
-                            icon: FolderPlus,
-                          },
                           {
                             key: "full",
                             label: t("ask.local.mode.full"),

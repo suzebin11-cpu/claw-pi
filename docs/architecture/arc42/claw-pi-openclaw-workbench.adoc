@@ -31,7 +31,8 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * 龙虾工作台通过 Controller 的 `AgentChatService` 调用 OpenClaw `agent` runner。
 * 默认对话模型固定使用 `link/gpt-5.5`。
 * 默认生图模型固定使用 `clawpi-image/gpt-image-2`。
-* 生图能力经 `clawpi-image-generation` runtime plugin 调回 Controller 生图接口。
+* 生图能力经 OpenClaw `image_generate` 工具和 `clawpi-image-generation` runtime plugin 调回 Controller 生图接口；`gpt-image-2` 使用流式图片请求和 `partial_images=1`，避免上游长时间无首包导致 60s socket 断连。
+* Web 龙虾大脑、龙虾工作台和微信端共享 OpenClaw 配置/凭证同步；agent 发送前进行短 TTL preflight，避免 `link` 凭证未写入时直接失败。
 * 工作台 SSE 响应头立即返回，避免 OpenClaw 冷启动期间前端表现为无响应。
 * 工作台 agent run 使用 `bootstrapContextMode="lightweight"`，跳过 AGENTS/SOUL/BOOTSTRAP/MEMORY 首轮注入，避免 onboarding 干扰普通问答。
 * Controller 会等待 OpenClaw 空 final 后的同 session 内层 run，避免过早结束导致 UI 显示“没有收到有效回复”。
@@ -114,6 +115,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * SSE compatibility：对前端保持 OpenAI-compatible stream 形态，内部事件来自 OpenClaw `chat` event。
 * Lightweight workbench turns：工作台请求显式传 `bootstrapContextMode="lightweight"` 和 `extraSystemPrompt`，保留 runner/tool 能力，同时避免新工作区 bootstrap 文档抢占用户消息。
 * 固定默认模型：测试和默认路径只使用 `link/gpt-5.5`；生图固定 `clawpi-image/gpt-image-2`。
+* GPT Image2 streaming：默认生图模型使用 `stream=true` 和 `partial_images=1`，服务端明确拒绝 streaming 参数时才退回同步调用；已提交后断连仍不自动重试。
 * Sidecar patch：OpenClaw 上游包通过 `prepare-openclaw-sidecar.mjs` 打补丁，确保打包产物可重复生成。
 * 冷启动体验修复：即使 OpenClaw WS 尚未 connected，Controller 也先返回 SSE stream，再在后台等待 gateway ready。
 * Readiness 分层：`desktopReady`/`webReady` 只表示本地壳和 Web 可打开；`openclawReady` 表示 health + gateway WS；`agentReady` 再叠加模型状态。OpenClaw 原生页可被 `openclawReady` gate，Web 工作台不能被它全局阻塞。
@@ -207,8 +209,9 @@ User asks image generation
   -> OpenClaw tool image_generate
   -> clawpi-image-generation runtime plugin
   -> Controller /api/internal/desktop/images/generations
-  -> cloud image model clawpi-image/gpt-image-2
+  -> cloud image model clawpi-image/gpt-image-2 with stream=true, partial_images=1
   -> Controller logs endpoint/model/input-image/count/duration/status for the cloud image call
+  -> parse final SSE image event; if the stream breaks after a partial image, save the latest partial as fallback
   -> Controller does not auto-retry generation/edit network failures because the request may already have been charged upstream
   -> generated image stored under nexu-home/generated-images
   -> markdown image URL returned to UI
@@ -311,7 +314,7 @@ pnpm --filter @nexu/desktop dist:win:portable
 
 === 8.1 权限模式
 
-工作台支持 `basic`、`confirm`、`full` 三档权限。默认 `full`，但破坏性操作仍需保护。权限约束由 Controller 注入到用户消息前面。
+工作台历史上支持 `basic`、`confirm`、`full` 三档权限；Web 龙虾大脑当前固定使用 OpenClaw 原生 `full` 权限和可写执行模式，旧版本地权限存储在新版本首次加载时迁移回 `full`。prompt 约束要求：用户只要求总结/分析时必须直接在聊天里回复，不额外创建文件；破坏性操作仍需保护。权限约束由 Controller 注入到用户消息前面。
 
 === 8.2 Session Key
 
@@ -366,6 +369,14 @@ agent:{agentId}:workbench:{sessionId}
 原因：上下文压缩、诊断工具、旧路径和第三方兼容调用仍依赖 OpenAI-compatible 接口。
 
 结果：工作台/网页龙虾用户发送路径走 OpenClaw-backed `/api/internal/agent-chat/stream`；迁移不删除 `/v1/chat/completions`，但不能把它当作主问答 runner。
+
+=== ADR-008: Web 龙虾大脑不做直连降级
+
+*状态：已采纳*
+
+原因：用户体验要求 Web 龙虾大脑、工作台和原生 OpenClaw 保持同一套 runner 语义，避免普通问答、文件处理和生图割裂。
+
+结果：Web 龙虾大脑所有请求统一走 OpenClaw `agent` runner，固定 `full` 权限和可写执行模式。明确生图/图生图仍由 OpenClaw 决策并调用 `image_generate`，最终落到 Controller `/api/internal/desktop/images/generations` 和 `clawpi-image/gpt-image-2`。不新增绕过 OpenClaw 的直连生图降级路径。
 
 === ADR-003: 禁用 OpenClaw pricing bootstrap
 
@@ -431,6 +442,22 @@ agent:{agentId}:workbench:{sessionId}
 
 结果：Windows release 将构建机 `node.exe` 复制到 `resources/runtime/node/bin/node.exe` 并签名；Controller 通过 `OPENCLAW_NODE_EXECUTABLE` 优先用该 Node 启动 OpenClaw，缺失时才回退 Electron-as-Node。Windows OpenClaw sidecar payload 改为 `payload.zip`，保留 `payload.7z` 解压兼容以支持旧包。
 
+=== ADR-012: Agent 请求前同步 OpenClaw 配置和 `main` 凭证
+
+*状态：已采纳*
+
+原因：Web 龙虾大脑使用 OpenClaw 隐式 `main` agent，工作台和微信端使用具体 bot agent。旧同步只给 `agents.list` 中的 bot workspace 写 `auth-profiles.json`，`main` agent 可能缺少 `link:default`，从而出现 `No API key found for provider "link"`。
+
+结果：`OpenClawAuthProfilesWriter` 永远给 `agents/main/agent/auth-profiles.json` 和所有 active bot workspace 写入同一套 provider profiles。`AgentChatService` 在发送 agent request 前执行短 TTL `syncAllImmediate()` preflight，确保 OpenClaw 配置、runtime plugin 和 auth profile 已落盘；若同步或凭证失败，SSE 返回明确中文错误，不再退化成“没有收到有效回复”。
+
+=== ADR-013: `gpt-image-2` 使用流式生图请求
+
+*状态：已采纳*
+
+原因：诊断包显示 `gpt-image-2` 同步 `/v1/images/generations` 请求多次在约 61s 后被对端关闭 socket，Controller 本地 180s 超时并未触发。这说明问题是上游/代理在长时间无首包时断开，而不是 OpenClaw 权限、插件注册或余额问题。
+
+结果：Controller 对 `gpt-image-2` generation/edit 请求默认添加 `stream=true` 和 `partial_images=1`，解析 SSE final image event 后保存图片。若云端明确返回 streaming 参数不支持，才退回原同步请求；若请求已经提交后网络断开，不自动重试，避免重复扣费。其他生图模型保持同步调用，降低影响面。
+
 == 10. 质量需求
 
 === 10.1 质量场景
@@ -447,17 +474,21 @@ agent:{agentId}:workbench:{sessionId}
 |OpenClaw 冷启动期间发送消息不会直接 502。
 |SSE 建立，后台等待 OpenClaw ready。
 
+|凭证就绪
+|Web 龙虾大脑、工作台或微信端首次请求时，`link/gpt-5.5` 凭证必须已同步到 `main` 和 bot agent。
+|请求前 preflight 日志出现 `agent_chat_preflight_sync_complete`；若缺失凭证，用户看到模型账号未就绪提示而非原始 OpenClaw 错误。
+
 |功能正确性
 |工作台回复来自 OpenClaw agent path。
 |日志出现 `agent` request、OpenClaw `chat` event、`nexu-runtime-model`。
 
 |生图正确性
-|OpenClaw 或 UI 生图使用 `gpt Image2`。
-|Controller image generation 返回 200 并生成 PNG；若网络在提交后断开，返回明确失败且不自动重试，避免重复扣费。
+|OpenClaw 原生/agent 生图和 Web 龙虾大脑生图都使用 `gpt Image2`。
+|Controller image generation 通过 streaming 避免 60s 无首包断连，返回 200 并生成 PNG；若网络在提交后断开且没有可用 partial，返回明确失败且不自动重试，避免重复扣费。
 
 |生图可诊断性
 |云端图片接口可能在 60s-180s 内断开本地响应，但上游已经扣费。
-|`image_generation_response_lost` 记录 endpoint、模型、是否图生图、输入图片数量、timeout、elapsedMs、error/cause code；`proxyFetch` 保留脱敏后的 fetch cause metadata。
+|`image_generation_cloud_response` 记录 `requestMode=stream/sync`；`image_generation_response_lost` 记录 endpoint、模型、是否图生图、输入图片数量、timeout、elapsedMs、error/cause code；`image_generation_stream_completed` 记录 partial/final 解析结果。
 
 |长任务流稳定性
 |工作台生图、图生图、文件处理等长任务可能超过 120s。
@@ -553,7 +584,7 @@ agent:{agentId}:workbench:{sessionId}
 
 |生图响应丢失
 |云端图片接口可能已经生成并扣费，但本地 fetch 在读取响应时断开，导致没有可保存图片。
-|生图/改图接口不做自动重试；日志记录 `image_generation_response_lost`、elapsedMs、endpoint、modelId、hasInputImages、inputImageCount、fetch cause/code，用户侧提示可能已提交但未收到结果，避免重复扣费。
+|`gpt-image-2` 使用 streaming + partial image progress 降低 60s 断连概率；若 stream 读取中断但已有 partial，则保存最新 partial；若没有可用图片，仍不自动重试，并记录 `image_generation_response_lost` 或 `image_generation_stream_failed`。
 
 |侧车补丁维护成本
 |OpenClaw dist 文件名和 anchor 可能随上游版本变化。

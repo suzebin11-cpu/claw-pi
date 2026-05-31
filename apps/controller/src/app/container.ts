@@ -171,7 +171,7 @@ export async function createContainer(): Promise<ControllerContainer> {
     gatewayClient,
     runtimeHealth,
     openclawProcess,
-    agentChatService: new AgentChatService(wsClient, env),
+    agentChatService: new AgentChatService(wsClient, env, openclawSyncService),
     agentService: new AgentService(configStore, openclawSyncService),
     channelService: new ChannelService(
       env,

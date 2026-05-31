@@ -55,6 +55,10 @@ type OpenClawImageAttachment = {
   content: string;
 };
 
+type AgentChatPreflightSyncService = {
+  syncAllImmediate(): Promise<{ configPushed: boolean }>;
+};
+
 type SavedWorkbenchFile = {
   name: string;
   path: string;
@@ -98,10 +102,15 @@ const AGENT_CHAT_TIMEOUT_MS = 300_000;
 const AGENT_CHAT_STREAM_KEEPALIVE_MS = 15_000;
 const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
+const AGENT_CHAT_PREFLIGHT_SYNC_TTL_MS = 10_000;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS = 6;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_FINAL_CHARS = 1600;
 const ATTACHMENT_EXTRACT_MAX_CHARS = 24_000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
+const MODEL_AUTH_NOT_READY_MESSAGE =
+  "模型账号未就绪，请重新登录或检查云雾连接。";
+const OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE =
+  "OpenClaw 配置同步失败，请稍后重试。";
 const AGENT_CHAT_AUTO_CONTINUE_PROMPT =
   "继续执行当前任务。不要只回复计划、状态或道歉；需要本机/文件/网页/生图操作时，立即调用 OpenClaw 可用工具完成。最终回复只能是完成结果、产物路径/图片链接，或明确阻塞原因与所需输入。";
 const AGENT_CHAT_EMPTY_ATTACHMENT_RETRY_PROMPT =
@@ -396,10 +405,28 @@ function isInsufficientBalanceError(message: string): boolean {
   );
 }
 
+function isModelAuthNotReadyError(message: string): boolean {
+  return /(?:No API key found for provider ["']?link["']?|auth-profiles\.json|Configure auth for this agent)/iu.test(
+    message,
+  );
+}
+
 function normalizeAgentErrorMessage(message: string): string {
-  return isInsufficientBalanceError(message)
-    ? INSUFFICIENT_BALANCE_MESSAGE
-    : message;
+  if (isInsufficientBalanceError(message)) {
+    return INSUFFICIENT_BALANCE_MESSAGE;
+  }
+  if (isModelAuthNotReadyError(message)) {
+    return MODEL_AUTH_NOT_READY_MESSAGE;
+  }
+  return message;
+}
+
+function isUserFacingAgentError(message: string): boolean {
+  return (
+    message === INSUFFICIENT_BALANCE_MESSAGE ||
+    message === MODEL_AUTH_NOT_READY_MESSAGE ||
+    message === OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE
+  );
 }
 
 function buildAutoContinuePrompt(executionMode: AgentExecutionMode): string {
@@ -468,6 +495,8 @@ function buildWorkbenchSystemPrompt(input: {
           "不要额外创建用户没有要求的文件；如果任务只是总结/分析，结果直接回复在聊天里。",
         ].join("\n"),
     "如果用户要求查找/读取/处理本机文件、运行命令、打开网页/应用、生成或修改图片，必须先调用可用工具执行；不要把“我会/我先/我正在/我准备”这类计划或进度说明作为最终答复。",
+    "如果用户要求生成图片、画图、做图、改图、修图、换背景或图生图，必须调用 image_generate 生成实际图片；不要只回复提示词、计划或说明。",
+    "如果图片任务基于上传附件，必须使用工作台提供的本机图片路径作为 image_generate.inputImages；不要只传原始文件名。",
     "最终答复必须包含实际结果、产物路径/图片链接，或明确阻塞原因与所需输入；任务没完成时继续执行。",
     buildPermissionDirective(input.permissionMode),
   ].join("\n\n");
@@ -757,9 +786,13 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export class AgentChatService {
+  private lastPreflightSyncAt = 0;
+  private preflightSyncPromise: Promise<{ configPushed: boolean }> | null = null;
+
   constructor(
     private readonly wsClient: OpenClawWsClient,
     private readonly env: ControllerEnv,
+    private readonly preflightSyncService?: AgentChatPreflightSyncService,
   ) {}
 
   async extractAttachments(input: {
@@ -1320,7 +1353,7 @@ export class AgentChatService {
             ? payload.errorMessage
             : "OpenClaw agent chat failed",
         );
-        if (errorMessage === INSUFFICIENT_BALANCE_MESSAGE) {
+        if (isUserFacingAgentError(errorMessage)) {
           writeText(errorMessage);
           finish();
           return;
@@ -1386,6 +1419,48 @@ export class AgentChatService {
     });
 
     void (async () => {
+      if (
+        this.preflightSyncService &&
+        Date.now() - this.lastPreflightSyncAt >=
+          AGENT_CHAT_PREFLIGHT_SYNC_TTL_MS
+      ) {
+        const syncStartedAt = Date.now();
+        try {
+          this.preflightSyncPromise ??=
+            this.preflightSyncService.syncAllImmediate();
+          const result = await this.preflightSyncPromise;
+          this.lastPreflightSyncAt = Date.now();
+          logger.info(
+            {
+              route: "agentChat.stream",
+              agentId: input.agentId,
+              sessionId: input.sessionId,
+              sessionKey,
+              runId,
+              configPushed: result.configPushed,
+              elapsedMs: Date.now() - syncStartedAt,
+            },
+            "agent_chat_preflight_sync_complete",
+          );
+        } catch (error) {
+          logger.warn(
+            {
+              route: "agentChat.stream",
+              agentId: input.agentId,
+              sessionId: input.sessionId,
+              sessionKey,
+              runId,
+              error: error instanceof Error ? error.message : String(error),
+              elapsedMs: Date.now() - syncStartedAt,
+            },
+            "agent_chat_preflight_sync_failed",
+          );
+          throw new Error(OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE);
+        } finally {
+          this.preflightSyncPromise = null;
+        }
+      }
+
       const gatewayWaitStartedAt = Date.now();
       while (!this.wsClient.isConnected()) {
         if (
@@ -1451,7 +1526,7 @@ export class AgentChatService {
         "agent_chat_send_failed",
       );
       if (!lastText) {
-        if (message === INSUFFICIENT_BALANCE_MESSAGE) {
+        if (isUserFacingAgentError(message)) {
           writeText(message);
           finish();
         } else {
