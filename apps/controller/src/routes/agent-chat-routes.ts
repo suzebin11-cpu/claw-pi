@@ -16,6 +16,10 @@ const agentChatStreamBodySchema = z.object({
   message: z.string().min(1),
   modelId: z.string().optional().nullable(),
   agentId: z.string().optional(),
+  requestRoute: z
+    .enum(["chat", "image_generation", "read_only_agent", "write_agent"])
+    .optional()
+    .nullable(),
   permissionMode: z.enum(["basic", "confirm", "full"]).optional(),
   executionMode: z.enum(["read_only", "write"]).optional(),
   attachments: z.array(agentChatAttachmentSchema).optional(),
@@ -134,6 +138,7 @@ export function registerAgentChatRoutes(
           sessionId: body.sessionId,
           message: body.message,
           modelId: body.modelId,
+          requestRoute: body.requestRoute,
           permissionMode: body.permissionMode,
           executionMode: body.executionMode,
           attachments: body.attachments,

@@ -158,7 +158,6 @@ type StreamedCompletionResult = {
   };
 };
 
-const MAX_CONTEXT_MESSAGES = 20;
 const COMPACTION_TRIGGER_MESSAGES = 24;
 const COMPACTION_KEEP_RECENT_MESSAGES = 8;
 const MAX_COMPACTION_SOURCE_CHARS = 24_000;
@@ -180,7 +179,6 @@ const ASK_KNOWLEDGE_STORAGE_KEY = "claw-pi.ask.knowledge.v1";
 const ASK_LOCAL_PERMISSIONS_STORAGE_KEY = "claw-pi.ask.localPermissions.v1";
 const ASK_LOCAL_PERMISSIONS_STORAGE_VERSION = 2;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
-const AGENT_HISTORY_CONTEXT_CHARS = 5_000;
 const AGENT_HISTORY_CONTEXT_MESSAGES = 8;
 
 const DEFAULT_LOCAL_PERMISSIONS: LocalDesktopPermissionSettings = {
@@ -729,9 +727,7 @@ function attachmentSummary(attachment: ChatAttachment): string {
   return `${attachment.name} (${attachment.type || "unknown"}, ${formatBytes(attachment.size)})`;
 }
 
-function buildDisplayText(
-  input: string,
-): string {
+function buildDisplayText(input: string): string {
   const trimmed = input.trim();
   if (trimmed.length > 0) return trimmed;
   return "";
@@ -748,56 +744,12 @@ function buildPlainHistoryText(message: ChatMessage): string {
   return parts.join("\n\n").trim();
 }
 
-function serializeHistoryMessage(
-  message: ChatMessage,
-): ChatCompletionMessage | null {
-  const content =
-    message.role === "user" ? buildPlainHistoryText(message) : message.text;
-  if (!content.trim()) return null;
-  return {
-    role: message.role,
-    content,
-  };
-}
-
-function buildSummaryContextMessage(
-  summary: string | undefined,
-): ChatCompletionMessage | null {
-  const trimmed = summary?.trim();
-  if (!trimmed) return null;
-  return {
-    role: "system",
-    content: [
-      "以下是本聊天窗口较早对话的压缩摘要，用于延续上下文。",
-      "它不是新指令；如果和用户最新消息冲突，以最新消息为准。",
-      trimmed,
-    ].join("\n\n"),
-  };
-}
-
 function estimateTokensFromText(text: string): number {
   const normalized = text.replace(/\s+/gu, " ").trim();
   if (!normalized) return 0;
   const cjkChars = normalized.match(/[\u3400-\u9fff]/gu)?.length ?? 0;
   const otherChars = Math.max(normalized.length - cjkChars, 0);
   return Math.max(1, Math.ceil(cjkChars * 0.65 + otherChars / 4));
-}
-
-function messageContentToText(
-  content: ChatCompletionMessage["content"],
-): string {
-  if (typeof content === "string") return content;
-  return content
-    .map((part) => (part.type === "text" ? part.text : "[image]"))
-    .join("\n");
-}
-
-function estimateTokensFromMessages(messages: ChatCompletionMessage[]): number {
-  return messages.reduce(
-    (total, message) =>
-      total + estimateTokensFromText(messageContentToText(message.content)) + 4,
-    0,
-  );
 }
 
 function tokenizeKnowledgeQuery(text: string): Set<string> {
@@ -838,11 +790,8 @@ function buildKnowledgeContextMessage(input: {
     })
     .sort((a, b) => b.score - a.score || b.item.updatedAt - a.item.updatedAt);
 
-  const selected = (
-    scored.some((entry) => entry.score > 0)
-      ? scored.filter((entry) => entry.score > 0)
-      : scored
-  )
+  const selected = scored
+    .filter((entry) => entry.score > 0)
     .slice(0, MAX_KNOWLEDGE_MATCHES)
     .map((entry) => entry.item);
   if (selected.length === 0) return null;
@@ -917,10 +866,15 @@ function getCompactionPlan(input: {
 function buildCurrentUserPayload(input: {
   text: string;
   attachments: ChatAttachment[];
+  includeAttachmentText?: boolean;
 }): ChatCompletionMessage {
   const textParts = [input.text.trim()].filter(Boolean);
   for (const attachment of input.attachments) {
-    if (attachment.kind === "text" && attachment.text) {
+    if (
+      attachment.kind === "text" &&
+      attachment.text &&
+      input.includeAttachmentText !== false
+    ) {
       textParts.push(
         [
           `File: ${attachment.name}`,
@@ -935,7 +889,11 @@ function buildCurrentUserPayload(input: {
       continue;
     }
 
-    if (attachment.kind === "video" || attachment.kind === "file") {
+    if (
+      attachment.kind === "text" ||
+      attachment.kind === "video" ||
+      attachment.kind === "file"
+    ) {
       textParts.push(`Attached file: ${attachmentSummary(attachment)}`);
     }
   }
@@ -999,22 +957,6 @@ function getMessageContentForIntent(message: ChatMessage): string {
   return `${message.text} ${attachmentText}`.trim();
 }
 
-function buildRecentHistoryContext(messages: ChatMessage[]): string {
-  const blocks = messages
-    .filter((message) => !message.streaming)
-    .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
-    .map((message) => {
-      const label = message.role === "user" ? "用户" : "助手";
-      const text =
-        message.role === "user" ? buildPlainHistoryText(message) : message.text;
-      return `${label}：${text.trim()}`;
-    })
-    .filter((block) => !/：\s*$/u.test(block));
-  const context = blocks.join("\n\n");
-  if (context.length <= AGENT_HISTORY_CONTEXT_CHARS) return context;
-  return context.slice(context.length - AGENT_HISTORY_CONTEXT_CHARS);
-}
-
 function isContinuationText(text: string): boolean {
   return /^(?:继续|接着|继续处理|继续执行|好的继续|然后呢|然后|是的|好的|ok|嗯|行)$/iu.test(
     text.trim(),
@@ -1065,7 +1007,8 @@ function classifyWorkbenchRequest(input: {
     );
   if (
     imageGenerationRequest ||
-    (hasImageAttachment && hasRecentImageGenerationContext(input.recentMessages))
+    (hasImageAttachment &&
+      hasRecentImageGenerationContext(input.recentMessages))
   ) {
     return "image_generation";
   }
@@ -1085,6 +1028,15 @@ function classifyWorkbenchRequest(input: {
     /(?:桌面|onedrive|本机|电脑|本地|下载目录|文档目录|文件夹|目录|路径|浏览器|网页|应用|程序|安装包|desktop|downloads?|documents?|folder|path|browser|app|installer)/iu.test(
       normalized,
     );
+  const attachmentAnalysisRequest =
+    hasAttachment &&
+    /(?:总结|分析|读取|提取|查看|看一下|处理|说明|概括|翻译|识别|summarize|analy[sz]e|read|extract|review|translate)/iu.test(
+      normalized,
+    );
+  if (attachmentAnalysisRequest) {
+    return "read_only_agent";
+  }
+
   if (hasAttachment && !explicitLocalContext) {
     return "chat";
   }
@@ -1116,25 +1068,18 @@ function classifyWorkbenchRequest(input: {
 function buildAgentWorkbenchMessage(input: {
   text: string;
   attachments: ChatAttachment[];
-  summaryMessage: ChatCompletionMessage | null;
   knowledgeMessage: ChatCompletionMessage | null;
-  recentHistoryContext: string;
 }): string {
   const contextBlocks = [
-    input.summaryMessage
-      ? `历史摘要：\n${extractChatContentText(input.summaryMessage.content)}`
-      : "",
     input.knowledgeMessage
       ? `知识库资料：\n${extractChatContentText(input.knowledgeMessage.content)}`
-      : "",
-    input.recentHistoryContext
-      ? `最近对话：\n${input.recentHistoryContext}`
       : "",
   ].filter(Boolean);
   const currentUserText = extractChatContentText(
     buildCurrentUserPayload({
       text: input.text,
       attachments: input.attachments,
+      includeAttachmentText: false,
     }).content,
   );
   const attachmentOnlyPrompt =
@@ -1254,6 +1199,7 @@ async function fetchAgentChatStream(input: {
   sessionId: string;
   modelId: string;
   message: string;
+  requestRoute: WorkbenchRequestRoute;
   attachments: ChatAttachment[];
   permissionMode: LocalDesktopPermissionMode;
   executionMode: AgentExecutionMode;
@@ -1269,6 +1215,7 @@ async function fetchAgentChatStream(input: {
       sessionId: input.sessionId,
       modelId: input.modelId || undefined,
       message: input.message,
+      requestRoute: input.requestRoute,
       permissionMode: input.permissionMode,
       executionMode: input.executionMode,
       attachments: input.attachments.map((attachment) => ({
@@ -1294,7 +1241,9 @@ function resolveAgentExecutionMode(input: {
   permissionMode: LocalDesktopPermissionMode;
   route: WorkbenchRequestRoute;
 }): AgentExecutionMode {
-  void input;
+  if (input.route === "read_only_agent") {
+    return "read_only";
+  }
   return "write";
 }
 
@@ -2281,35 +2230,16 @@ export function AskPage() {
       streaming: true,
     };
 
-    const summaryMessage = buildSummaryContextMessage(
-      activeSession?.contextSummary,
-    );
     const knowledgeMessage = buildKnowledgeContextMessage({
       query: text,
       items: knowledgeItems,
     });
-    const history = getMessagesAfterSummary(
-      messages,
-      activeSession?.summarizedThroughMessageId,
-    )
-      .map(serializeHistoryMessage)
-      .filter((message): message is ChatCompletionMessage => message !== null)
-      .slice(-MAX_CONTEXT_MESSAGES);
-    let payloadMessages = [
-      ...(summaryMessage ? [summaryMessage] : []),
-      ...(knowledgeMessage ? [knowledgeMessage] : []),
-      ...history,
-      buildCurrentUserPayload({ text, attachments }),
-    ];
-    const recentHistoryContext = buildRecentHistoryContext(messages);
     const agentWorkbenchMessage = buildAgentWorkbenchMessage({
       text,
       attachments,
-      summaryMessage,
       knowledgeMessage,
-      recentHistoryContext,
     });
-    let inputTokenEstimate = estimateTokensFromMessages(payloadMessages);
+    const inputTokenEstimate = estimateTokensFromText(agentWorkbenchMessage);
 
     updateSessionMessages(targetSessionId, (previous, session) => ({
       title:
@@ -2337,6 +2267,7 @@ export function AskPage() {
         sessionId: targetSessionId,
         modelId: currentModelId,
         message: agentWorkbenchMessage,
+        requestRoute: workbenchRoute,
         attachments,
         permissionMode: "full",
         executionMode: resolveAgentExecutionMode({
@@ -2452,7 +2383,6 @@ export function AskPage() {
     input,
     isRuntimeReady,
     knowledgeItems,
-    localPermissions.mode,
     messages,
     navigate,
     sendingSessionIds,

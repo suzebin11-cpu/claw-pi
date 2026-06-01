@@ -1,5 +1,5 @@
-import { existsSync, type Dirent } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { type Dirent, existsSync } from "node:fs";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ChannelType } from "@nexu/shared";
 import { selectPreferredModel } from "@nexu/shared";
@@ -143,6 +143,8 @@ export class OpenClawSyncService {
     resolve: (v: { configPushed: boolean }) => void;
     reject: (e: unknown) => void;
   }> = [];
+  private lastSuccessfulSyncAt: number | null = null;
+  private lastFailedSyncAt: number | null = null;
   private static readonly DEBOUNCE_MS = 100;
   private static readonly SETTLING_MIN_MS = 3000;
   private static readonly SETTLING_MAX_MS = 120000;
@@ -347,6 +349,26 @@ export class OpenClawSyncService {
     return this.doSync();
   }
 
+  getCurrentSyncPromise(): Promise<{ configPushed: boolean }> | null {
+    return this.pendingSync;
+  }
+
+  getSyncStatus(): {
+    hasSuccessfulSync: boolean;
+    lastSuccessfulSyncAt: number | null;
+    lastFailedSyncAt: number | null;
+  } {
+    const hasSuccessfulSync =
+      this.lastSuccessfulSyncAt !== null &&
+      (this.lastFailedSyncAt === null ||
+        this.lastSuccessfulSyncAt > this.lastFailedSyncAt);
+    return {
+      hasSuccessfulSync,
+      lastSuccessfulSyncAt: this.lastSuccessfulSyncAt,
+      lastFailedSyncAt: this.lastFailedSyncAt,
+    };
+  }
+
   async ensureRuntimeModelPlugin(): Promise<void> {
     const config = await this.configStore.getConfig();
     await this.runtimePluginWriter.ensurePlugins({
@@ -537,114 +559,125 @@ export class OpenClawSyncService {
 
   private async doSync(): Promise<{ configPushed: boolean }> {
     const seq = ++this.syncCounter;
-    const config = await this.configStore.getConfig();
-    const oauthState = await this.authProfilesStore.getOAuthConnectionState();
-    const installedSlugs = this.skillDb
-      ? this.skillDb
-          .getAllInstalled()
-          .filter((r) => r.source !== "workspace")
-          .map((r) => r.slug)
-      : undefined;
+    try {
+      const config = await this.configStore.getConfig();
+      const oauthState = await this.authProfilesStore.getOAuthConnectionState();
+      const installedSlugs = this.skillDb
+        ? this.skillDb
+            .getAllInstalled()
+            .filter((r) => r.source !== "workspace")
+            .map((r) => r.slug)
+        : undefined;
 
-    const workspaceMap = this.workspaceScanner
-      ? this.workspaceScanner.scanAll(
-          config.bots.filter((b) => b.status === "active").map((b) => b.id),
-        )
-      : undefined;
+      const workspaceMap = this.workspaceScanner
+        ? this.workspaceScanner.scanAll(
+            config.bots.filter((b) => b.status === "active").map((b) => b.id),
+          )
+        : undefined;
 
-    const compiled = compileOpenClawConfig(
-      config,
-      this.env,
-      oauthState,
-      installedSlugs,
-      workspaceMap,
-    );
+      const compiled = compileOpenClawConfig(
+        config,
+        this.env,
+        oauthState,
+        installedSlugs,
+        workspaceMap,
+      );
 
-    await this.templateWriter.write(config.bots);
-    await this.writeWorkspaceTemplates();
+      await this.templateWriter.write(config.bots);
+      await this.writeWorkspaceTemplates();
 
-    // Re-evaluate which bundled channel plugins should be present in the
-    // sidecar extensions directory. add/remove of a channel triggers
-    // syncAll(), so this naturally keeps the on-disk plugin set in sync
-    // with the user's actual configuration — preventing the sidecar from
-    // discovering and repeatedly registering plugins for channels the user
-    // never configured.
-    await this.runtimePluginWriter.ensurePlugins({
-      configuredChannelTypes: collectConfiguredChannelTypes(config),
-    });
+      // Re-evaluate which bundled channel plugins should be present in the
+      // sidecar extensions directory. add/remove of a channel triggers
+      // syncAll(), so this naturally keeps the on-disk plugin set in sync
+      // with the user's actual configuration — preventing the sidecar from
+      // discovering and repeatedly registering plugins for channels the user
+      // never configured.
+      await this.runtimePluginWriter.ensurePlugins({
+        configuredChannelTypes: collectConfiguredChannelTypes(config),
+      });
 
-    logger.info(
-      {
-        seq,
-        modelProviders: Object.keys(compiled.models?.providers ?? {}),
-        channels: Object.keys(compiled.channels ?? {}),
-        wsConnected: this.gatewayService.isConnected(),
-      },
-      "doSync: pushing config to OpenClaw",
-    );
+      logger.info(
+        {
+          seq,
+          modelProviders: Object.keys(compiled.models?.providers ?? {}),
+          channels: Object.keys(compiled.channels ?? {}),
+          wsConnected: this.gatewayService.isConnected(),
+        },
+        "doSync: pushing config to OpenClaw",
+      );
 
-    // 1. Decide whether this config differs from the last observed snapshot.
-    let configPushed = false;
-    if (this.gatewayService.isConnected()) {
-      try {
-        configPushed = await this.gatewayService.shouldPushConfig(compiled);
-      } catch (err) {
-        logger.warn(
-          { error: err instanceof Error ? err.message : String(err) },
-          "openclaw config diff check failed",
-        );
+      // 1. Decide whether this config differs from the last observed snapshot.
+      let configPushed = false;
+      if (this.gatewayService.isConnected()) {
+        try {
+          configPushed = await this.gatewayService.shouldPushConfig(compiled);
+        } catch (err) {
+          logger.warn(
+            { error: err instanceof Error ? err.message : String(err) },
+            "openclaw config diff check failed",
+          );
+        }
       }
-    }
 
-    // 2. Always write files once (persistence + watcher hot-reload path).
-    await this.configWriter.write(compiled);
-    await this.authProfilesWriter.writeForAgents(compiled, config.providers);
-    this.gatewayService.noteConfigWritten(compiled);
-    const runtimeModelRef = resolvePrimaryModelRef(
-      compiled.agents.defaults?.model,
-      config,
-      compiled,
-      this.env,
-      oauthState,
-    );
-    const availableRuntimeModelRefs = collectAvailableRuntimeModelRefs(
-      compiled,
-      config,
-      oauthState,
-    ).map((m) => m.id);
-    logger.info(
-      {
-        seq,
+      // 2. Always write files once (persistence + watcher hot-reload path).
+      await this.configWriter.write(compiled);
+      await this.authProfilesWriter.writeForAgents(compiled, config.providers);
+      this.gatewayService.noteConfigWritten(compiled);
+      const runtimeModelRef = resolvePrimaryModelRef(
+        compiled.agents.defaults?.model,
+        config,
+        compiled,
+        this.env,
+        oauthState,
+      );
+      const availableRuntimeModelRefs = collectAvailableRuntimeModelRefs(
+        compiled,
+        config,
+        oauthState,
+      ).map((m) => m.id);
+      logger.info(
+        {
+          seq,
+          runtimeModelRef,
+          availableCount: availableRuntimeModelRefs.length,
+        },
+        "doSync: resolved runtime model",
+      );
+      await this.runtimeModelWriter.write(
         runtimeModelRef,
-        availableCount: availableRuntimeModelRefs.length,
-      },
-      "doSync: resolved runtime model",
-    );
-    await this.runtimeModelWriter.write(
-      runtimeModelRef,
-      availableRuntimeModelRefs,
-    );
-    await this.compiledStore.saveConfig(compiled);
+        availableRuntimeModelRefs,
+      );
+      await this.compiledStore.saveConfig(compiled);
 
-    // 3. Nudge the file watcher when OpenClaw may not have seen the config:
-    //    - WS not connected: file watcher is the only reload path.
-    //    - configPushed (hash stale): gateway restarted and may have missed
-    //      writes that landed on disk while WS was down. Touch the file so
-    //      the watcher triggers a reload even when the content is identical.
-    if (!this.gatewayService.isConnected() || configPushed) {
-      await this.watchTrigger.touchConfig();
+      // 3. Nudge the file watcher when OpenClaw may not have seen the config:
+      //    - WS not connected: file watcher is the only reload path.
+      //    - configPushed (hash stale): gateway restarted and may have missed
+      //      writes that landed on disk while WS was down. Touch the file so
+      //      the watcher triggers a reload even when the content is identical.
+      if (!this.gatewayService.isConnected() || configPushed) {
+        await this.watchTrigger.touchConfig();
+      }
+
+      // 4. Nudge OpenClaw's skills chokidar watcher so it bumps snapshotVersion.
+      // Without this, existing sessions keep using a stale skills snapshot
+      // even after the allowlist changes, because OpenClaw's config-reload
+      // treats agents/skills changes as kind "none" (no hot-reload action).
+      if (configPushed) {
+        await this.touchAnySkillMarker();
+      }
+
+      this.lastSuccessfulSyncAt = Date.now();
+      this.lastFailedSyncAt = null;
+      logger.info({ seq, configPushed }, "doSync: complete");
+      return { configPushed };
+    } catch (error) {
+      this.lastFailedSyncAt = Date.now();
+      logger.warn(
+        { seq, error: error instanceof Error ? error.message : String(error) },
+        "doSync: failed",
+      );
+      throw error;
     }
-
-    // 4. Nudge OpenClaw's skills chokidar watcher so it bumps snapshotVersion.
-    // Without this, existing sessions keep using a stale skills snapshot
-    // even after the allowlist changes, because OpenClaw's config-reload
-    // treats agents/skills changes as kind "none" (no hot-reload action).
-    if (configPushed) {
-      await this.touchAnySkillMarker();
-    }
-
-    logger.info({ seq, configPushed }, "doSync: complete");
-    return { configPushed };
   }
 
   /**

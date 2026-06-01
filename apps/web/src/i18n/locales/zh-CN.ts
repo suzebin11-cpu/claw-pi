@@ -592,7 +592,8 @@ const zhCN = {
   // ── Channels Page ──
   "channels.pageTitle": "龙虾出没",
   "channels.pageSubtitle": "把小龙虾放到你的聊天平台里，让它帮你干活",
-  "channels.comingSoon": "微信、QQ、飞书已支持；Microsoft Teams、Line 等更多平台即将支持",
+  "channels.comingSoon":
+    "微信、QQ、飞书已支持；Microsoft Teams、Line 等更多平台即将支持",
   "channels.backToConfig": "返回配置",
   "channels.statusConnected": "{{platform}} 助手已连接",
   "channels.statusConnecting": "连接中...",
@@ -1016,6 +1017,8 @@ const zhCN = {
   "wechatSetup.connectFailed": "连接微信失败",
   "wechatSetup.finalizing": "正在确认微信已连接...",
   "wechatSetup.connectPending": "已扫码，但微信运行时还在启动，请稍后重试。",
+  "wechatSetup.waitingConfirm":
+    "仍在等待手机微信扫码/确认。如果手机端提示“请检查网络”，请重新生成二维码，或切换手机网络后再试。",
   "wechatSetup.timeout": "二维码已过期，请重试。",
   "wechatSetup.retry": "重试",
   "wechatSetup.gatewayError": "服务未连接，请先启动系统。",

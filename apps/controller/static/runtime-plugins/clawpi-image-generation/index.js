@@ -4,7 +4,7 @@ const CONTROLLER_FETCH_TIMEOUT_MS = 190_000;
 const CONTROLLER_FETCH_RETRY_DELAYS_MS = [500, 1_500, 3_000];
 
 const IMAGE_TOOL_PROMPT =
-  "Use image_generate for image generation and image editing requests. If reference image paths are provided, pass them through inputImages. After a successful tool call, include the generated image markdown from the tool result in web/workbench final replies so the client can render the image. In messaging channels such as WeChat, prefer sending attached media directly instead of only describing a link.";
+  "Use image_generate for image generation and image editing requests. If reference image paths, URLs, or data URLs are provided, pass them through inputImages. For image-to-image/edit requests based on an uploaded or visible image, never call image_generate with empty inputImages; if no usable image path/URL/data URL is available, ask for a local path or upload through the Claw-Pi workbench attachment flow instead of spending a pure text-to-image request. After a successful tool call, include the generated image markdown from the tool result in web/workbench final replies so the client can render the image. In messaging channels such as WeChat, prefer sending attached media directly instead of only describing a link.";
 
 function getPluginConfig(api) {
   const entry = api?.config?.plugins?.entries?.[PLUGIN_ID];
@@ -79,6 +79,26 @@ function sanitizeInputImages(value) {
     .slice(0, 4);
 }
 
+function looksLikeImageToImageRequest(input) {
+  const text = [
+    typeof input.prompt === "string" ? input.prompt : "",
+    typeof input.mode === "string" ? input.mode : "",
+    typeof input.task === "string" ? input.task : "",
+  ]
+    .join("\n")
+    .toLowerCase();
+
+  return /(?:uploaded|attached|reference|source|input image|image-to-image|img2img|edit image|based on (?:the|this) image|use (?:the|this) image|参考图|参考图片|上传图|上传图片|附件图|原图|这张图|这张图片|基于.*图|按照.*图|图生图|改图|修图|换背景|图片编辑|参考.*风格)/iu.test(
+    text,
+  );
+}
+
+function logToolCall(api, details) {
+  api?.logger?.info?.(
+    `[clawpi-image-generation] tool_call ${JSON.stringify(details)}`,
+  );
+}
+
 const ImageGenerateSchema = {
   type: "object",
   additionalProperties: false,
@@ -109,6 +129,11 @@ const ImageGenerateSchema = {
       description:
         "Optional reference image URLs, data URLs, or absolute local file paths for image-to-image/edit requests.",
     },
+    mode: {
+      type: "string",
+      description:
+        "Optional. Set to image_to_image or edit when the request depends on a reference/uploaded image.",
+    },
   },
   required: ["prompt"],
 };
@@ -138,6 +163,34 @@ const plugin = {
             return textResult("生图失败：缺少 prompt 参数。");
           }
 
+          const inputImages = sanitizeInputImages(input.inputImages);
+          const requiresInputImage = looksLikeImageToImageRequest(input);
+          logToolCall(api, {
+            promptChars: prompt.length,
+            inputImagesCount: inputImages.length,
+            requiresInputImage,
+            hasAspectRatio:
+              typeof input.aspectRatio === "string" &&
+              input.aspectRatio.trim().length > 0,
+            hasSize:
+              typeof input.size === "string" && input.size.trim().length > 0,
+            requestedModelId:
+              typeof input.modelId === "string" && input.modelId.trim()
+                ? input.modelId.trim()
+                : null,
+          });
+
+          if (requiresInputImage && inputImages.length === 0) {
+            return textResult(
+              "生图失败：这看起来是基于上传/参考图片的图生图或改图请求，但 image_generate 没有收到可用的 inputImages。请通过龙虾工作台附件上传，或提供本机图片路径/图片 URL 后再试；为避免误走纯文生图扣费，本次没有提交生图请求。",
+              {
+                code: "missing_input_images",
+                requiresInputImage: true,
+                inputImagesCount: 0,
+              },
+            );
+          }
+
           const body = {
             prompt,
             ...(typeof input.aspectRatio === "string" &&
@@ -150,7 +203,7 @@ const plugin = {
             ...(typeof input.modelId === "string" && input.modelId.trim()
               ? { modelId: input.modelId.trim() }
               : {}),
-            inputImages: sanitizeInputImages(input.inputImages),
+            inputImages,
           };
 
           let response;

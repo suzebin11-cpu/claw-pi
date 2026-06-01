@@ -260,7 +260,8 @@ const en = {
   "ask.local.capability.web": "Websites & apps",
   "ask.local.capability.workspace": "Files / sheets / decks",
   "ask.local.confirmTitle": "Run this local action?",
-  "ask.local.confirmHint": "Delete, overwrite, and arbitrary commands are not allowed.",
+  "ask.local.confirmHint":
+    "Delete, overwrite, and arbitrary commands are not allowed.",
   "ask.local.toast.enableFirst":
     "Basic mode is active. Switch to Confirm actions or Full access first.",
   "ask.local.toast.actionDisabled":
@@ -1080,6 +1081,8 @@ const en = {
   "wechatSetup.finalizing": "Confirming WeChat is connected...",
   "wechatSetup.connectPending":
     "Scanned, but the WeChat runtime is still starting. Please try again shortly.",
+  "wechatSetup.waitingConfirm":
+    "Still waiting for WeChat scan/confirmation on the phone. If the phone says to check the network, generate a new QR code or switch the phone network and try again.",
   "wechatSetup.timeout": "QR code expired. Please try again.",
   "wechatSetup.retry": "Try Again",
   "wechatSetup.gatewayError":

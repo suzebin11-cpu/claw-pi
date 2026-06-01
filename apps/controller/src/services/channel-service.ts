@@ -1151,7 +1151,8 @@ export class ChannelService {
     );
     return {
       connected: false,
-      message: "等待扫码中，请继续在手机微信确认。",
+      message:
+        "仍在等待手机微信扫码/确认。如果手机端提示“请检查网络”，请重新生成二维码，或切换手机网络后再试。",
       pending: true,
     };
   }

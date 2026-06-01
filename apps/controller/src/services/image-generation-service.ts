@@ -172,8 +172,14 @@ function shouldUseImageStreaming(modelId: string): boolean {
   return modelId === "gpt-image-2";
 }
 
-function shouldRetryWithoutStreaming(message: string): boolean {
+function shouldRetryWithoutStreaming(
+  message: string,
+  status?: number,
+): boolean {
   const normalized = message.toLowerCase();
+  if (status === 406 && /openai_error/u.test(normalized)) {
+    return true;
+  }
   return (
     /(?:stream|streaming|partial_images|partial image|text\/event-stream)/u.test(
       normalized,
@@ -795,12 +801,16 @@ export class ImageGenerationService {
       }
 
       const message = await readResponseError(response);
-      if (requestMode === "stream" && shouldRetryWithoutStreaming(message)) {
+      if (
+        requestMode === "stream" &&
+        shouldRetryWithoutStreaming(message, response.status)
+      ) {
         requestMode = "sync";
         includeResponseFormat = false;
         logger.warn(
           {
             label: params.label,
+            endpoint: summarizeImageEndpoint(request.url),
             modelId: params.modelId,
             hasInputImages: params.hasInputImages,
             inputImageCount: params.inputImageCount,
@@ -818,6 +828,7 @@ export class ImageGenerationService {
         logger.warn(
           {
             label: params.label,
+            endpoint: summarizeImageEndpoint(request.url),
             modelId: params.modelId,
             hasInputImages: params.hasInputImages,
             inputImageCount: params.inputImageCount,
@@ -833,6 +844,7 @@ export class ImageGenerationService {
       logger.warn(
         {
           label: params.label,
+          endpoint: summarizeImageEndpoint(request.url),
           modelId: params.modelId,
           hasInputImages: params.hasInputImages,
           inputImageCount: params.inputImageCount,

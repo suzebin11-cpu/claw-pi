@@ -46,13 +46,38 @@ class FakeOpenClawWsClient {
 class FakePreflightSyncService {
   calls = 0;
   shouldFail = false;
+  lastSuccessfulSyncAt: number | null = null;
+  lastFailedSyncAt: number | null = null;
+  currentSync: Promise<{ configPushed: boolean }> | null = null;
 
   async syncAllImmediate(): Promise<{ configPushed: boolean }> {
     this.calls += 1;
     if (this.shouldFail) {
+      this.lastFailedSyncAt = Date.now();
       throw new Error("sync failed");
     }
+    this.lastSuccessfulSyncAt = Date.now();
+    this.lastFailedSyncAt = null;
     return { configPushed: false };
+  }
+
+  getCurrentSyncPromise(): Promise<{ configPushed: boolean }> | null {
+    return this.currentSync;
+  }
+
+  getSyncStatus(): {
+    hasSuccessfulSync: boolean;
+    lastSuccessfulSyncAt: number | null;
+    lastFailedSyncAt: number | null;
+  } {
+    return {
+      hasSuccessfulSync:
+        this.lastSuccessfulSyncAt !== null &&
+        (this.lastFailedSyncAt === null ||
+          this.lastSuccessfulSyncAt > this.lastFailedSyncAt),
+      lastSuccessfulSyncAt: this.lastSuccessfulSyncAt,
+      lastFailedSyncAt: this.lastFailedSyncAt,
+    };
   }
 }
 
@@ -154,6 +179,47 @@ describe("AgentChatService", () => {
     expect(fakeWs.requests.some((request) => request.method === "agent")).toBe(
       true,
     );
+  });
+
+  it("uses a lightweight OpenClaw prompt for ordinary chat", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "chat-session",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      requestRoute: "chat",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    expect(String(send?.params.extraSystemPrompt)).toContain("普通对话请求");
+    expect(String(send?.params.extraSystemPrompt)).toContain(
+      "直接回答用户当前消息",
+    );
+    expect(String(send?.params.extraSystemPrompt)).not.toContain(
+      "必须先调用可用工具执行",
+    );
+
+    const runId = String(send?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:chat-session",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "我在。" }],
+        },
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("我在。");
+    expect(
+      fakeWs.requests.filter((request) => request.method === "agent"),
+    ).toHaveLength(1);
   });
 
   it("waits through an empty OpenClaw final and adopts the real session run", async () => {
@@ -287,6 +353,45 @@ describe("AgentChatService", () => {
     expect(body).toContain("data: [DONE]");
   });
 
+  it("does not auto-continue progress-like replies on ordinary chat route", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "chat-progress",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      requestRoute: "chat",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    const runId = String(send?.params.idempotencyKey);
+
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:chat-progress",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "我先看一下你的问题，然后继续处理。",
+            },
+          ],
+        },
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("我先看一下你的问题");
+    expect(
+      fakeWs.requests.filter((request) => request.method === "agent"),
+    ).toHaveLength(1);
+  });
+
   it("adds read-only constraints for analysis-only workbench agent tasks", async () => {
     await service.createOpenAiCompatibleStream({
       agentId: "bot-1",
@@ -311,8 +416,7 @@ describe("AgentChatService", () => {
     await service.createOpenAiCompatibleStream({
       agentId: "bot-1",
       sessionId: "session-row-edit",
-      message:
-        "帮我加一行 手机号13510396008，名称djj，地址是成都武侯",
+      message: "帮我加一行 手机号13510396008，名称djj，地址是成都武侯",
       modelId: "link/gpt-5.5",
       permissionMode: "full",
       executionMode: "read_only",
@@ -405,6 +509,33 @@ describe("AgentChatService", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(preflight.calls).toBe(1);
+    expect(fakeWs.requests.some((request) => request.method === "agent")).toBe(
+      true,
+    );
+  });
+
+  it("skips AgentChat preflight after a successful sync", async () => {
+    const preflight = new FakePreflightSyncService();
+    preflight.lastSuccessfulSyncAt = Date.now();
+    service = new AgentChatService(
+      fakeWs as never,
+      {
+        openclawStateDir: path.join(rootDir, ".openclaw"),
+      } as ControllerEnv,
+      preflight,
+    );
+
+    await service.createOpenAiCompatibleStream({
+      agentId: "main",
+      sessionId: "session-preflight-skip",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      requestRoute: "chat",
+      permissionMode: "full",
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(preflight.calls).toBe(0);
     expect(fakeWs.requests.some((request) => request.method === "agent")).toBe(
       true,
     );
@@ -513,7 +644,9 @@ describe("AgentChatService", () => {
     );
     const runId = String(initialSend?.params.idempotencyKey);
     const longProgress =
-      "正在桌面路径递归查找简历文件并等待搜索结果，这里先同步当前进度。".repeat(6);
+      "正在桌面路径递归查找简历文件并等待搜索结果，这里先同步当前进度。".repeat(
+        6,
+      );
 
     fakeWs.emit({
       type: "event",
@@ -897,6 +1030,7 @@ describe("AgentChatService", () => {
       sessionId: "image-session",
       message: "generate from uploaded image",
       permissionMode: "full",
+      requestRoute: "image_generation",
       attachments: [
         {
           name: "ref.png",
@@ -910,6 +1044,10 @@ describe("AgentChatService", () => {
 
     const send = fakeWs.requests.find((request) => request.method === "agent");
     const message = String(send?.params.message);
+    expect(String(send?.params.extraSystemPrompt)).toContain(
+      "执行模式=图片生成",
+    );
+    expect(String(send?.params.extraSystemPrompt)).toContain("image_generate");
     expect(message).toContain("工作台附件已保存到当前");
     expect(message).toContain("image_generate.inputImages");
     expect(send?.params.attachments).toMatchObject([

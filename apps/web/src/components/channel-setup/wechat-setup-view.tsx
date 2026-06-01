@@ -302,12 +302,20 @@ export function WechatSetupView({
           return;
         }
 
-        if (
-          waitData.expired ||
-          Date.now() - qrWaitStartedAt >= QR_LOGIN_MAX_WAIT_MS
-        ) {
+        if (waitData.expired) {
           setErrorMessage(waitData.message || t("wechatSetup.timeout"));
           setPhase("error");
+          return;
+        }
+
+        if (Date.now() - qrWaitStartedAt >= QR_LOGIN_MAX_WAIT_MS) {
+          setErrorMessage(
+            waitData.message ||
+              (waitData.pending
+                ? t("wechatSetup.waitingConfirm")
+                : t("wechatSetup.timeout")),
+          );
+          setPhase(waitData.pending ? "pending" : "error");
           return;
         }
 

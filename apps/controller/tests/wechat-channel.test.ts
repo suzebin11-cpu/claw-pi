@@ -363,7 +363,8 @@ describe("WeChat connect/disconnect lifecycle", () => {
 
     expect(result).toEqual({
       connected: false,
-      message: "等待扫码中，请继续在手机微信确认。",
+      message:
+        "仍在等待手机微信扫码/确认。如果手机端提示“请检查网络”，请重新生成二维码，或切换手机网络后再试。",
       pending: true,
     });
     expect(JSON.parse(readFileSync(indexPath, "utf-8"))).toEqual([]);
@@ -437,7 +438,8 @@ describe("WeChat connect/disconnect lifecycle", () => {
 
     await expect(waitPromise).resolves.toEqual({
       connected: false,
-      message: "等待扫码中，请继续在手机微信确认。",
+      message:
+        "仍在等待手机微信扫码/确认。如果手机端提示“请检查网络”，请重新生成二维码，或切换手机网络后再试。",
       pending: true,
     });
     expect(statusCalls).toBe(2);

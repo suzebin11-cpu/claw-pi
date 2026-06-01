@@ -22,6 +22,7 @@ export interface AgentChatStreamInput {
   sessionId: string;
   message: string;
   modelId?: string | null;
+  requestRoute?: AgentChatRequestRoute | null;
   permissionMode?: AgentPermissionMode | null;
   executionMode?: AgentExecutionMode | null;
   attachments?: AgentChatAttachment[];
@@ -40,6 +41,11 @@ export interface ExtractedAgentChatAttachment {
 
 type AgentPermissionMode = "basic" | "confirm" | "full";
 export type AgentExecutionMode = "read_only" | "write";
+export type AgentChatRequestRoute =
+  | "chat"
+  | "image_generation"
+  | "read_only_agent"
+  | "write_agent";
 
 type OpenClawChatEventPayload = {
   sessionKey?: unknown;
@@ -57,6 +63,12 @@ type OpenClawImageAttachment = {
 
 type AgentChatPreflightSyncService = {
   syncAllImmediate(): Promise<{ configPushed: boolean }>;
+  getCurrentSyncPromise?(): Promise<{ configPushed: boolean }> | null;
+  getSyncStatus?(): {
+    hasSuccessfulSync: boolean;
+    lastSuccessfulSyncAt: number | null;
+    lastFailedSyncAt: number | null;
+  };
 };
 
 type SavedWorkbenchFile = {
@@ -69,11 +81,7 @@ type SavedWorkbenchFile = {
   extractError?: string;
 };
 
-type AttachmentExtractStatus =
-  | "ok"
-  | "truncated"
-  | "unsupported"
-  | "failed";
+type AttachmentExtractStatus = "ok" | "truncated" | "unsupported" | "failed";
 
 type PdfJsTextItem = {
   str?: string;
@@ -102,8 +110,8 @@ const AGENT_CHAT_TIMEOUT_MS = 300_000;
 const AGENT_CHAT_STREAM_KEEPALIVE_MS = 15_000;
 const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
-const AGENT_CHAT_PREFLIGHT_SYNC_TTL_MS = 10_000;
-const AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS = 6;
+const AGENT_CHAT_PROGRESS_AUTO_CONTINUE_MAX_TURNS = 2;
+const AGENT_CHAT_EMPTY_FINAL_RETRY_MAX_TURNS = 1;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_FINAL_CHARS = 1600;
 const ATTACHMENT_EXTRACT_MAX_CHARS = 24_000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
@@ -180,7 +188,11 @@ function truncateExtractedText(text: string): {
   text: string;
   status: AttachmentExtractStatus;
 } {
-  const normalized = text.replace(/\r\n/gu, "\n").replace(/\u0000/gu, "").trim();
+  const normalized = text
+    .replace(/\r\n/gu, "\n")
+    .split("\u0000")
+    .join("")
+    .trim();
   if (normalized.length <= ATTACHMENT_EXTRACT_MAX_CHARS) {
     return { text: normalized, status: "ok" };
   }
@@ -236,7 +248,9 @@ function isTextLikeAttachment(input: {
 
 function isHtmlAttachment(input: { name: string; type: string }): boolean {
   const extension = path.extname(input.name).toLowerCase();
-  return input.type.includes("html") || extension === ".html" || extension === ".htm";
+  return (
+    input.type.includes("html") || extension === ".html" || extension === ".htm"
+  );
 }
 
 function isPdfAttachment(input: { name: string; type: string }): boolean {
@@ -311,7 +325,9 @@ async function extractAttachmentText(input: {
     }
 
     if (isPdfAttachment(input)) {
-      const extracted = truncateExtractedText(await extractPdfText(input.content));
+      const extracted = truncateExtractedText(
+        await extractPdfText(input.content),
+      );
       if (!extracted.text) {
         return {
           extractStatus: "failed",
@@ -374,6 +390,17 @@ function normalizeExecutionMode(
   mode: AgentExecutionMode | null | undefined,
 ): AgentExecutionMode {
   return mode === "read_only" ? "read_only" : "write";
+}
+
+function normalizeRequestRoute(
+  route: AgentChatRequestRoute | null | undefined,
+): AgentChatRequestRoute {
+  return route === "chat" ||
+    route === "image_generation" ||
+    route === "read_only_agent" ||
+    route === "write_agent"
+    ? route
+    : "write_agent";
 }
 
 function hasExplicitWriteIntent(message: string): boolean {
@@ -480,23 +507,40 @@ function buildPermissionDirective(mode: AgentPermissionMode): string {
 function buildWorkbenchSystemPrompt(input: {
   permissionMode: AgentPermissionMode;
   executionMode: AgentExecutionMode;
+  requestRoute: AgentChatRequestRoute;
 }): string {
+  if (input.requestRoute === "chat") {
+    return [
+      "你是 OpenClaw 龙虾 agent，所有回复仍必须通过 OpenClaw runner 产生。",
+      "这是龙虾工作台的普通对话请求。直接回答用户当前消息，保持自然、简洁、可执行。",
+      "不要主动调用本机、文件、网页、命令或生图工具；只有用户当前消息明确要求本机执行、文件处理、网页操作或图片生成时，才调用可用工具。",
+      buildPermissionDirective(input.permissionMode),
+    ].join("\n\n");
+  }
+
+  const modeDirective =
+    input.requestRoute === "image_generation"
+      ? [
+          "执行模式=图片生成：用户要求生成图片、画图、做图、改图、修图、换背景或图生图时，必须调用 image_generate 生成实际图片。",
+          "如果图片任务基于上传附件，必须使用工作台提供的本机图片路径作为 image_generate.inputImages；不要只传原始文件名。",
+          "最终答复必须包含实际图片链接/产物路径，或明确的上游/权限/输入阻塞原因。",
+        ].join("\n")
+      : input.executionMode === "read_only"
+        ? [
+            "执行模式=只读分析：用户只要求查找、读取、提取、总结或分析时，只允许读取/搜索/解析已有资料。",
+            "不要创建、写入、编辑、保存、导出或覆盖任何用户文件；用户没有明确要求写文件时，最终结果必须直接回复在聊天里。",
+            "如确需临时脚本解析文件，只能用于读取和提取内容，不得把总结另存为文件。",
+          ].join("\n")
+        : [
+            "执行模式=可写执行：只有用户明确要求创建、保存、导出、修改、删除、运行、安装、打开应用或生成图片/文件时，才进行对应写入或执行操作。",
+            "不要额外创建用户没有要求的文件；如果任务只是总结/分析，结果直接回复在聊天里。",
+          ].join("\n");
+
   return [
     "你是 OpenClaw 龙虾 agent，必须通过 OpenClaw runner 完成工作台任务；不要退化成普通聊天模型。",
     "这是龙虾工作台的直接对话请求，优先回答用户当前消息。",
-    input.executionMode === "read_only"
-      ? [
-          "执行模式=只读分析：用户只要求查找、读取、提取、总结或分析时，只允许读取/搜索/解析已有资料。",
-          "不要创建、写入、编辑、保存、导出或覆盖任何用户文件；用户没有明确要求写文件时，最终结果必须直接回复在聊天里。",
-          "如确需临时脚本解析文件，只能用于读取和提取内容，不得把总结另存为文件。",
-        ].join("\n")
-      : [
-          "执行模式=可写执行：只有用户明确要求创建、保存、导出、修改、删除、运行、安装、打开应用或生成图片/文件时，才进行对应写入或执行操作。",
-          "不要额外创建用户没有要求的文件；如果任务只是总结/分析，结果直接回复在聊天里。",
-        ].join("\n"),
+    modeDirective,
     "如果用户要求查找/读取/处理本机文件、运行命令、打开网页/应用、生成或修改图片，必须先调用可用工具执行；不要把“我会/我先/我正在/我准备”这类计划或进度说明作为最终答复。",
-    "如果用户要求生成图片、画图、做图、改图、修图、换背景或图生图，必须调用 image_generate 生成实际图片；不要只回复提示词、计划或说明。",
-    "如果图片任务基于上传附件，必须使用工作台提供的本机图片路径作为 image_generate.inputImages；不要只传原始文件名。",
     "最终答复必须包含实际结果、产物路径/图片链接，或明确阻塞原因与所需输入；任务没完成时继续执行。",
     buildPermissionDirective(input.permissionMode),
   ].join("\n\n");
@@ -506,12 +550,14 @@ function buildAgentMessage(input: {
   message: string;
   permissionMode: AgentPermissionMode;
   executionMode: AgentExecutionMode;
+  requestRoute: AgentChatRequestRoute;
 }): string {
   return [
     "以下为龙虾工作台注入的运行约束，优先级高于用户当前消息：",
     buildWorkbenchSystemPrompt({
       permissionMode: input.permissionMode,
       executionMode: input.executionMode,
+      requestRoute: input.requestRoute,
     }),
     "用户当前消息如下：",
     input.message,
@@ -618,12 +664,13 @@ function isLikelyWorkbenchActionRequest(input: {
 function shouldAutoContinueFinal(input: {
   finalText: string;
   autoContinueTurns: number;
+  maxTurns: number;
   userMessage: string;
   permissionMode: AgentPermissionMode;
   savedFileCount: number;
   toolActivitySeen: boolean;
 }): boolean {
-  if (input.autoContinueTurns >= AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS) {
+  if (input.autoContinueTurns >= input.maxTurns) {
     return false;
   }
 
@@ -786,8 +833,8 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 }
 
 export class AgentChatService {
-  private lastPreflightSyncAt = 0;
-  private preflightSyncPromise: Promise<{ configPushed: boolean }> | null = null;
+  private preflightSyncPromise: Promise<{ configPushed: boolean }> | null =
+    null;
 
   constructor(
     private readonly wsClient: OpenClawWsClient,
@@ -802,7 +849,8 @@ export class AgentChatService {
     for (const attachment of input.attachments ?? []) {
       const name = sanitizeFileName(attachment.name || "attachment");
       const parsed = parseDataUrl(attachment.dataUrl ?? "");
-      const type = attachment.type || parsed?.mimeType || "application/octet-stream";
+      const type =
+        attachment.type || parsed?.mimeType || "application/octet-stream";
       const kind = attachment.kind || "file";
       if (!parsed?.content) {
         extractedAttachments.push({
@@ -854,6 +902,7 @@ export class AgentChatService {
     const streamStartedAt = Date.now();
     const sessionKey = buildWorkbenchSessionKey(input.agentId, input.sessionId);
     const runId = randomUUID();
+    const requestRoute = normalizeRequestRoute(input.requestRoute);
     const imageAttachments = normalizeImageAttachments(input.attachments);
     const savedFiles = await this.saveWorkbenchFiles({
       agentId: input.agentId,
@@ -870,6 +919,7 @@ export class AgentChatService {
     const extraSystemPrompt = buildWorkbenchSystemPrompt({
       permissionMode,
       executionMode,
+      requestRoute,
     });
     const userMessage = input.message;
     const message = buildAgentMessage({
@@ -880,6 +930,7 @@ export class AgentChatService {
       }),
       permissionMode,
       executionMode,
+      requestRoute,
     });
     logger.info(
       {
@@ -889,6 +940,7 @@ export class AgentChatService {
         sessionKey,
         runId,
         modelId: input.modelId ?? null,
+        requestRoute,
         permissionMode,
         requestedExecutionMode,
         executionMode,
@@ -910,11 +962,16 @@ export class AgentChatService {
     let activeRunId: string | null = runId;
     let waitingForSessionContinuation = false;
     let autoContinueTurns = 0;
+    let emptyFinalRetries = 0;
     let pendingError: Error | null = null;
     let timeout: NodeJS.Timeout | null = null;
     let keepalive: NodeJS.Timeout | null = null;
     let emptyFinalRetryTimeout: NodeJS.Timeout | null = null;
     let unsubscribe: (() => void) | null = null;
+    let preflightMs: number | null = null;
+    let gatewayWaitMs: number | null = null;
+    let submitMs: number | null = null;
+    let firstTextMs: number | null = null;
 
     const sendAgentRun = async (
       requestRunId: string,
@@ -945,6 +1002,30 @@ export class AgentChatService {
         return;
       }
       queuedChunks.push(chunk);
+    };
+
+    const logLatencySummary = (outcome: "finish" | "fail") => {
+      logger.info(
+        {
+          route: "agentChat.stream",
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+          sessionKey,
+          runId,
+          requestRoute,
+          outcome,
+          preflightMs,
+          gatewayWaitMs,
+          submitMs,
+          firstTextMs,
+          finishMs: Date.now() - streamStartedAt,
+          inputChars: message.length,
+          savedFileCount: savedFiles.length,
+          autoContinueTurns,
+          emptyFinalRetries,
+        },
+        "agent_chat_latency_summary",
+      );
     };
 
     const finish = () => {
@@ -979,6 +1060,7 @@ export class AgentChatService {
         },
         "agent_chat_stream_finish",
       );
+      logLatencySummary("finish");
       try {
         if (controllerRef) {
           controllerRef.enqueue(toDoneChunk());
@@ -1027,6 +1109,7 @@ export class AgentChatService {
         },
         "agent_chat_stream_fail",
       );
+      logLatencySummary("fail");
       if (controllerRef) {
         controllerRef.error(error);
       } else {
@@ -1053,6 +1136,7 @@ export class AgentChatService {
 
       if (!firstTextLogged) {
         firstTextLogged = true;
+        firstTextMs = Date.now() - streamStartedAt;
         logger.info(
           {
             route: "agentChat.stream",
@@ -1060,7 +1144,7 @@ export class AgentChatService {
             sessionId: input.sessionId,
             sessionKey,
             runId,
-            elapsedMs: Date.now() - streamStartedAt,
+            elapsedMs: firstTextMs,
             textLength: normalizedNextText.length,
           },
           "agent_chat_first_text",
@@ -1173,8 +1257,8 @@ export class AgentChatService {
       if (state === "final") {
         writeText(messageText);
         if (!lastText) {
-          if (autoContinueTurns < AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS) {
-            autoContinueTurns += 1;
+          if (emptyFinalRetries < AGENT_CHAT_EMPTY_FINAL_RETRY_MAX_TURNS) {
+            emptyFinalRetries += 1;
             const continuationRunId = randomUUID();
             activeRunId = continuationRunId;
             waitingForSessionContinuation = true;
@@ -1198,7 +1282,7 @@ export class AgentChatService {
                 runId,
                 continuationRunId,
                 savedFileCount: savedFiles.length,
-                autoContinueTurns,
+                emptyFinalRetries,
                 eventRunId: payloadRunId,
                 elapsedMs: Date.now() - streamStartedAt,
               },
@@ -1206,10 +1290,7 @@ export class AgentChatService {
                 ? "agent_chat_empty_attachment_retry_start"
                 : "agent_chat_empty_final_retry_start",
             );
-            void sendAgentRun(
-              continuationRunId,
-              emptyFinalRetryMessage,
-            )
+            void sendAgentRun(continuationRunId, emptyFinalRetryMessage)
               .then(() => {
                 logger.info(
                   {
@@ -1219,7 +1300,7 @@ export class AgentChatService {
                     sessionKey,
                     runId,
                     continuationRunId,
-                    autoContinueTurns,
+                    emptyFinalRetries,
                     elapsedMs: Date.now() - streamStartedAt,
                   },
                   savedFiles.length > 0
@@ -1236,7 +1317,7 @@ export class AgentChatService {
                     sessionKey,
                     runId,
                     continuationRunId,
-                    autoContinueTurns,
+                    emptyFinalRetries,
                     error:
                       error instanceof Error ? error.message : String(error),
                   },
@@ -1258,7 +1339,7 @@ export class AgentChatService {
               sessionKey,
               runId,
               eventRunId: payloadRunId,
-              autoContinueTurns,
+              emptyFinalRetries,
               elapsedMs: Date.now() - streamStartedAt,
             },
             "agent_chat_empty_final_exhausted",
@@ -1274,6 +1355,10 @@ export class AgentChatService {
             permissionMode,
             savedFileCount: savedFiles.length,
             toolActivitySeen,
+            maxTurns:
+              requestRoute === "chat"
+                ? 0
+                : AGENT_CHAT_PROGRESS_AUTO_CONTINUE_MAX_TURNS,
           })
         ) {
           autoContinueTurns += 1;
@@ -1419,17 +1504,15 @@ export class AgentChatService {
     });
 
     void (async () => {
-      if (
-        this.preflightSyncService &&
-        Date.now() - this.lastPreflightSyncAt >=
-          AGENT_CHAT_PREFLIGHT_SYNC_TTL_MS
-      ) {
-        const syncStartedAt = Date.now();
-        try {
-          this.preflightSyncPromise ??=
-            this.preflightSyncService.syncAllImmediate();
-          const result = await this.preflightSyncPromise;
-          this.lastPreflightSyncAt = Date.now();
+      if (this.preflightSyncService) {
+        const currentSync =
+          this.preflightSyncService.getCurrentSyncPromise?.() ??
+          this.preflightSyncPromise;
+        const syncStatus = this.preflightSyncService.getSyncStatus?.();
+        const shouldSync =
+          Boolean(currentSync) || !syncStatus || !syncStatus.hasSuccessfulSync;
+
+        if (!shouldSync) {
           logger.info(
             {
               route: "agentChat.stream",
@@ -1437,27 +1520,55 @@ export class AgentChatService {
               sessionId: input.sessionId,
               sessionKey,
               runId,
-              configPushed: result.configPushed,
-              elapsedMs: Date.now() - syncStartedAt,
+              lastSuccessfulSyncAt: syncStatus.lastSuccessfulSyncAt,
             },
-            "agent_chat_preflight_sync_complete",
+            "agent_chat_preflight_sync_skipped",
           );
-        } catch (error) {
-          logger.warn(
-            {
-              route: "agentChat.stream",
-              agentId: input.agentId,
-              sessionId: input.sessionId,
-              sessionKey,
-              runId,
-              error: error instanceof Error ? error.message : String(error),
-              elapsedMs: Date.now() - syncStartedAt,
-            },
-            "agent_chat_preflight_sync_failed",
-          );
-          throw new Error(OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE);
-        } finally {
-          this.preflightSyncPromise = null;
+        } else {
+          const syncStartedAt = Date.now();
+          const waitingExistingSync = Boolean(currentSync);
+          try {
+            let syncPromise = currentSync ?? this.preflightSyncPromise;
+            if (!syncPromise) {
+              syncPromise = this.preflightSyncService.syncAllImmediate();
+              this.preflightSyncPromise = syncPromise;
+            }
+            const result = await syncPromise;
+            preflightMs = Date.now() - syncStartedAt;
+            logger.info(
+              {
+                route: "agentChat.stream",
+                agentId: input.agentId,
+                sessionId: input.sessionId,
+                sessionKey,
+                runId,
+                configPushed: result.configPushed,
+                waitingExistingSync,
+                elapsedMs: preflightMs,
+              },
+              "agent_chat_preflight_sync_complete",
+            );
+          } catch (error) {
+            preflightMs = Date.now() - syncStartedAt;
+            logger.warn(
+              {
+                route: "agentChat.stream",
+                agentId: input.agentId,
+                sessionId: input.sessionId,
+                sessionKey,
+                runId,
+                error: error instanceof Error ? error.message : String(error),
+                waitingExistingSync,
+                elapsedMs: preflightMs,
+              },
+              "agent_chat_preflight_sync_failed",
+            );
+            throw new Error(OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE);
+          } finally {
+            if (!currentSync) {
+              this.preflightSyncPromise = null;
+            }
+          }
         }
       }
 
@@ -1472,7 +1583,7 @@ export class AgentChatService {
         await sleep(OPENCLAW_GATEWAY_READY_POLL_MS, input.signal);
       }
 
-      const gatewayWaitMs = Date.now() - gatewayWaitStartedAt;
+      gatewayWaitMs = Date.now() - gatewayWaitStartedAt;
       if (gatewayWaitMs > 0) {
         logger.info(
           {
@@ -1499,6 +1610,7 @@ export class AgentChatService {
         "agent_chat_ws_request_start",
       );
       await sendAgentRun(runId, message);
+      submitMs = Date.now() - wsRequestStartedAt;
       logger.info(
         {
           route: "agentChat.stream",
@@ -1506,7 +1618,7 @@ export class AgentChatService {
           sessionId: input.sessionId,
           sessionKey,
           runId,
-          elapsedMs: Date.now() - wsRequestStartedAt,
+          elapsedMs: submitMs,
         },
         "agent_chat_ws_request_done",
       );
@@ -1563,10 +1675,7 @@ export class AgentChatService {
       "agents",
       sanitizeSessionPart(input.agentId || "main"),
       "wb",
-      createHash("sha256")
-        .update(input.sessionId)
-        .digest("hex")
-        .slice(0, 16),
+      createHash("sha256").update(input.sessionId).digest("hex").slice(0, 16),
     );
     await mkdir(uploadDir, { recursive: true });
 
@@ -1662,7 +1771,10 @@ function formatSavedFileList(
   return files.map((file) => formatSavedFile(file, includePath)).join("\n\n");
 }
 
-function formatSavedFile(file: SavedWorkbenchFile, includePath: boolean): string {
+function formatSavedFile(
+  file: SavedWorkbenchFile,
+  includePath: boolean,
+): string {
   const lines = [
     `- ${file.name} (${file.kind}, ${file.type})${includePath ? `: ${file.path}` : ""}`,
   ];
