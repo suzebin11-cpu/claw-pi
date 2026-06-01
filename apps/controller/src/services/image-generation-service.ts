@@ -67,7 +67,7 @@ const MAX_INPUT_IMAGES = 4;
 const MAX_PROMPT_CHARS = 4000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
 const IMAGE_RESPONSE_LOST_MESSAGE =
-  "图片生成请求可能已提交，但本地未收到图片结果；为避免重复扣费，已停止自动重试。";
+  "图片生成请求未返回完整图片结果，请稍后重试。";
 
 type ImageEndpointLabel = "generations" | "edits";
 type ImageEndpointRequestMode = "sync" | "stream";
@@ -730,6 +730,7 @@ export class ImageGenerationService {
     modelId: string;
     hasInputImages: boolean;
     inputImageCount: number;
+    initialRequestMode?: ImageEndpointRequestMode;
     buildRequest: (
       includeResponseFormat: boolean,
       requestMode: ImageEndpointRequestMode,
@@ -738,11 +739,9 @@ export class ImageGenerationService {
       | { url: string; init: RequestInit & { timeoutMs: number } };
   }): Promise<OpenAiImageResponse> {
     let includeResponseFormat = false;
-    let requestMode: ImageEndpointRequestMode = shouldUseImageStreaming(
-      params.modelId,
-    )
-      ? "stream"
-      : "sync";
+    let requestMode: ImageEndpointRequestMode =
+      params.initialRequestMode ??
+      (shouldUseImageStreaming(params.modelId) ? "stream" : "sync");
 
     while (true) {
       const request = await params.buildRequest(
@@ -988,6 +987,7 @@ export class ImageGenerationService {
       modelId: params.modelId,
       hasInputImages: true,
       inputImageCount: params.inputImages.length,
+      initialRequestMode: "sync",
       buildRequest: async (includeResponseFormat, requestMode) => {
         const form = new FormData();
         form.set("model", params.modelId);

@@ -1,14 +1,7 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ControllerEnv } from "../src/app/env.js";
 import { OpenClawWsClient } from "../src/runtime/openclaw-ws-client.js";
 
@@ -143,6 +136,47 @@ describe("OpenClawWsClient", () => {
     await vi.advanceTimersByTimeAsync(15_001);
     expect(socket?.closed).toBeNull();
     expect(FakeWebSocket.instances).toHaveLength(1);
+
+    client.stop();
+  });
+
+  it("sends stored device token even when a gateway token is configured", async () => {
+    const client = createClient();
+    const identityDir = path.join(rootDir, "identity");
+    const identity = JSON.parse(
+      await readFile(path.join(identityDir, "device.json"), "utf8"),
+    ) as { deviceId: string };
+    await writeFile(
+      path.join(identityDir, "device-auth.json"),
+      JSON.stringify({
+        version: 1,
+        deviceId: identity.deviceId,
+        tokens: {
+          operator: {
+            token: "stored-device-token",
+            role: "operator",
+            scopes: ["operator.admin"],
+            updatedAtMs: Date.now(),
+          },
+        },
+      }),
+    );
+
+    client.connect();
+    const socket = FakeWebSocket.instances[0];
+    socket?.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-1" },
+    });
+
+    const connectRequest = JSON.parse(socket?.sent[0] ?? "{}") as {
+      params?: { auth?: { token?: string; deviceToken?: string } };
+    };
+    expect(connectRequest.params?.auth?.token).toBe("test-token");
+    expect(connectRequest.params?.auth?.deviceToken).toBe(
+      "stored-device-token",
+    );
 
     client.stop();
   });

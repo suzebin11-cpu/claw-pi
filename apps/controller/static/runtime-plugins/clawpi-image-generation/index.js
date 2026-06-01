@@ -4,7 +4,7 @@ const CONTROLLER_FETCH_TIMEOUT_MS = 190_000;
 const CONTROLLER_FETCH_RETRY_DELAYS_MS = [500, 1_500, 3_000];
 
 const IMAGE_TOOL_PROMPT =
-  "Use image_generate for image generation and image editing requests. If reference image paths, URLs, or data URLs are provided, pass them through inputImages. For image-to-image/edit requests based on an uploaded or visible image, never call image_generate with empty inputImages; if no usable image path/URL/data URL is available, ask for a local path or upload through the Claw-Pi workbench attachment flow instead of spending a pure text-to-image request. After a successful tool call, include the generated image markdown from the tool result in web/workbench final replies so the client can render the image. In messaging channels such as WeChat, prefer sending attached media directly instead of only describing a link.";
+  "Use image_generate for image generation and image editing requests. If reference image paths, URLs, or data URLs are provided, pass them through inputImages. For image-to-image/edit requests based on an uploaded or visible image, never call image_generate with empty inputImages; if no usable image path/URL/data URL is available, ask for a local path or upload through the Claw-Pi workbench attachment flow. If image_generate returns a transient upstream or network error, do not invent quota/limit protection unless the tool error explicitly says balance, quota, or rate limit. After a successful tool call, include the generated image markdown from the tool result in web/workbench final replies so the client can render the image. In messaging channels such as WeChat, prefer sending attached media directly instead of only describing a link.";
 
 function getPluginConfig(api) {
   const entry = api?.config?.plugins?.entries?.[PLUGIN_ID];
@@ -182,7 +182,7 @@ const plugin = {
 
           if (requiresInputImage && inputImages.length === 0) {
             return textResult(
-              "生图失败：这看起来是基于上传/参考图片的图生图或改图请求，但 image_generate 没有收到可用的 inputImages。请通过龙虾工作台附件上传，或提供本机图片路径/图片 URL 后再试；为避免误走纯文生图扣费，本次没有提交生图请求。",
+              "生图失败：这看起来是基于上传/参考图片的图生图或改图请求，但 image_generate 没有收到可用的 inputImages。请通过龙虾工作台附件上传，或提供本机图片路径/图片 URL 后再试；本次没有提交生图请求。",
               {
                 code: "missing_input_images",
                 requiresInputImage: true,

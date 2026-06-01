@@ -236,15 +236,13 @@ describe("ImageGenerationService", () => {
       normalizeImageGenerationErrorMessage("token quota is not enough"),
     ).toBe("余额不足，请及时充值");
     expect(normalizeImageGenerationErrorMessage("fetch failed")).toBe(
-      "图片生成请求可能已提交，但本地未收到图片结果；为避免重复扣费，已停止自动重试。",
+      "图片生成请求未返回完整图片结果，请稍后重试。",
     );
     expect(
       normalizeImageGenerationErrorMessage(
         "Request to https://yunwu.example timed out after 180000ms",
       ),
-    ).toBe(
-      "图片生成请求可能已提交，但本地未收到图片结果；为避免重复扣费，已停止自动重试。",
-    );
+    ).toBe("图片生成请求未返回完整图片结果，请稍后重试。");
   });
 
   it("does not retry non-idempotent image endpoint network failures", async () => {
@@ -266,7 +264,7 @@ describe("ImageGenerationService", () => {
       service.generateImage({
         prompt: "a small green robot",
       }),
-    ).rejects.toThrow("本地未收到图片结果");
+    ).rejects.toThrow("未返回完整图片结果");
     expect(requestCount).toBe(1);
   });
 
@@ -296,7 +294,7 @@ describe("ImageGenerationService", () => {
       service.generateImage({
         prompt: "a small green robot",
       }),
-    ).rejects.toThrow("本地未收到图片结果");
+    ).rejects.toThrow("未返回完整图片结果");
 
     const logs = warnSpy.mock.calls
       .map(([line]) => JSON.parse(String(line)) as Record<string, unknown>)

@@ -674,9 +674,7 @@ export class OpenClawWsClient {
       deviceId: this.deviceIdentity.deviceId,
       role,
     });
-    const resolvedDeviceToken = explicitGatewayToken
-      ? undefined
-      : (storedDeviceToken ?? undefined);
+    const resolvedDeviceToken = storedDeviceToken ?? undefined;
     const authToken = explicitGatewayToken ?? resolvedDeviceToken;
 
     // Build v3 auth payload and sign with device identity

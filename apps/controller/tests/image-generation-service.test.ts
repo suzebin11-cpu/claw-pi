@@ -125,6 +125,16 @@ describe("ImageGenerationService", () => {
     ): Promise<Response> => {
       urls.push(String(url));
       expect(init?.body).toBeInstanceOf(FormData);
+      const form = init?.body as FormData;
+      expect(form.get("stream")).toBeNull();
+      expect(form.get("partial_images")).toBeNull();
+      expect(
+        Object.entries((init?.headers ?? {}) as Record<string, string>).some(
+          ([key, value]) =>
+            key.toLowerCase() === "accept" &&
+            value.toLowerCase().includes("text/event-stream"),
+        ),
+      ).toBe(false);
       return jsonResponse({
         data: [{ b64_json: PNG_BASE64 }],
       });
