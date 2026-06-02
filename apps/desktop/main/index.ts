@@ -1,5 +1,7 @@
+import { execFile } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import * as Sentry from "@sentry/electron/main";
 import {
   BrowserWindow,
@@ -73,10 +75,171 @@ import { UpdateManager } from "./updater/update-manager";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
+const execFileAsync = promisify(execFile);
 
 // Set display name early (matches productName in package.json).
 app.setName("Claw-Pi");
 nativeTheme.themeSource = "dark";
+
+type WindowsProcessSnapshot = {
+  pid: number;
+  executablePath: string;
+  commandLine: string;
+};
+
+function parseWmicProcessRows(stdout: string): WindowsProcessSnapshot[] {
+  const snapshots: WindowsProcessSnapshot[] = [];
+
+  for (const rawLine of stdout.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("Node,")) {
+      continue;
+    }
+
+    const pidMatch = line.match(/,(\d+)$/);
+    if (!pidMatch) {
+      continue;
+    }
+
+    const pid = Number.parseInt(pidMatch[1], 10);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      continue;
+    }
+
+    const payload = line.slice(0, -pidMatch[0].length).toLowerCase();
+    snapshots.push({
+      pid,
+      executablePath: payload,
+      commandLine: payload,
+    });
+  }
+
+  return snapshots;
+}
+
+async function readClawPiProcessesViaWmic(): Promise<WindowsProcessSnapshot[]> {
+  const { stdout } = await execFileAsync(
+    "wmic",
+    [
+      "process",
+      "where",
+      "name='Claw-Pi.exe'",
+      "get",
+      "ProcessId,ExecutablePath,CommandLine",
+      "/format:csv",
+    ],
+    { encoding: "utf8", timeout: 5_000, windowsHide: true },
+  );
+
+  return parseWmicProcessRows(stdout);
+}
+
+async function readClawPiProcessesViaPowerShell(): Promise<
+  WindowsProcessSnapshot[]
+> {
+  const script = [
+    "$ErrorActionPreference = 'SilentlyContinue';",
+    "$items = Get-CimInstance Win32_Process -Filter \"Name='Claw-Pi.exe'\" |",
+    "  Select-Object ProcessId,ExecutablePath,CommandLine;",
+    "$items | ConvertTo-Json -Compress",
+  ].join(" ");
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { encoding: "utf8", timeout: 5_000, windowsHide: true },
+  );
+  const trimmed = stdout.trim();
+  if (!trimmed) {
+    return [];
+  }
+
+  const parsed = JSON.parse(trimmed) as
+    | Record<string, unknown>
+    | Array<Record<string, unknown>>;
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+
+  return rows.flatMap((row) => {
+    const pid = Number.parseInt(String(row.ProcessId ?? ""), 10);
+    if (!Number.isFinite(pid) || pid <= 0) {
+      return [];
+    }
+
+    return [
+      {
+        pid,
+        executablePath:
+          typeof row.ExecutablePath === "string"
+            ? row.ExecutablePath.toLowerCase()
+            : "",
+        commandLine:
+          typeof row.CommandLine === "string"
+            ? row.CommandLine.toLowerCase()
+            : "",
+      },
+    ];
+  });
+}
+
+async function readClawPiMainProcesses(): Promise<WindowsProcessSnapshot[]> {
+  try {
+    const wmicRows = await readClawPiProcessesViaWmic();
+    if (wmicRows.length > 0) {
+      return wmicRows;
+    }
+  } catch {
+    // WMIC is removed or disabled on some Windows builds; try PowerShell below.
+  }
+
+  try {
+    return await readClawPiProcessesViaPowerShell();
+  } catch {
+    return [];
+  }
+}
+
+async function reclaimStaleWindowsMainProcesses(): Promise<void> {
+  if (process.platform !== "win32") {
+    return;
+  }
+
+  const disabled = process.env.NEXU_DESKTOP_DISABLE_MAIN_PROCESS_RECLAIM;
+  if (disabled === "1" || disabled?.toLowerCase() === "true") {
+    return;
+  }
+
+  try {
+    const currentExe = process.execPath.toLowerCase();
+    const installRoot = dirname(process.execPath).toLowerCase();
+    const pids = new Set<number>();
+
+    for (const processInfo of await readClawPiMainProcesses()) {
+      if (processInfo.pid === process.pid) {
+        continue;
+      }
+
+      const lowerLine =
+        `${processInfo.executablePath}\n${processInfo.commandLine}`.toLowerCase();
+      if (
+        lowerLine.includes(currentExe) ||
+        lowerLine.includes(installRoot) ||
+        lowerLine.includes("claw-pi-desktop")
+      ) {
+        pids.add(processInfo.pid);
+      }
+    }
+
+    for (const pid of pids) {
+      await execFileAsync("taskkill", ["/PID", String(pid), "/F", "/T"], {
+        windowsHide: true,
+      }).catch(() => undefined);
+    }
+  } catch {
+    // Best-effort only: if WMIC is unavailable or blocked, continue with the
+    // normal single-instance path.
+  }
+}
+
+await reclaimStaleWindowsMainProcesses();
 
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 

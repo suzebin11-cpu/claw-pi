@@ -262,6 +262,101 @@ function resolveArchiveStamp(
   return `${archiveStat.size}:${archiveStat.mtimeMs}`;
 }
 
+const OPENCLAW_ARCHIVE_STAMP_FILE = ".archive-stamp";
+const OPENCLAW_EXTRACT_COMPLETE_FILE = ".extract-complete.json";
+const OPENCLAW_ENTRY_RELATIVE_PATH = "node_modules/openclaw/openclaw.mjs";
+
+function getOpenclawExtractedEntry(sidecarRoot: string): string {
+  return path.resolve(sidecarRoot, OPENCLAW_ENTRY_RELATIVE_PATH);
+}
+
+function getOpenclawStampPath(sidecarRoot: string): string {
+  return path.resolve(sidecarRoot, OPENCLAW_ARCHIVE_STAMP_FILE);
+}
+
+function getOpenclawCompleteMarkerPath(sidecarRoot: string): string {
+  return path.resolve(sidecarRoot, OPENCLAW_EXTRACT_COMPLETE_FILE);
+}
+
+function buildOpenclawCompleteMarker(
+  archive: ArchiveInfo,
+  archiveStamp: string,
+): string {
+  const archiveStat = statSync(archive.archivePath);
+  return `${JSON.stringify(
+    {
+      schemaVersion: 1,
+      archiveStamp,
+      archiveFormat: archive.format,
+      archiveFile: path.basename(archive.archivePath),
+      archiveSize: archiveStat.size,
+      archiveMtimeMs: archiveStat.mtimeMs,
+      entry: OPENCLAW_ENTRY_RELATIVE_PATH,
+      completedAt: new Date().toISOString(),
+    },
+    null,
+    2,
+  )}\n`;
+}
+
+function hasValidOpenclawExtraction(
+  sidecarRoot: string,
+  archiveStamp: string,
+  opts: { repairLegacyMarker: boolean; archive?: ArchiveInfo },
+): boolean {
+  const stampPath = getOpenclawStampPath(sidecarRoot);
+  const markerPath = getOpenclawCompleteMarkerPath(sidecarRoot);
+  const extractedEntry = getOpenclawExtractedEntry(sidecarRoot);
+
+  if (
+    !existsSync(stampPath) ||
+    !existsSync(extractedEntry) ||
+    readFileSync(stampPath, "utf8") !== archiveStamp
+  ) {
+    return false;
+  }
+
+  try {
+    const marker = JSON.parse(readFileSync(markerPath, "utf8")) as {
+      schemaVersion?: unknown;
+      archiveStamp?: unknown;
+      entry?: unknown;
+    };
+
+    if (
+      marker.schemaVersion === 1 &&
+      marker.archiveStamp === archiveStamp &&
+      marker.entry === OPENCLAW_ENTRY_RELATIVE_PATH
+    ) {
+      return true;
+    }
+  } catch {
+    // Missing/unreadable legacy marker is repaired below when allowed.
+  }
+
+  if (opts.repairLegacyMarker && opts.archive) {
+    writeFileSync(
+      markerPath,
+      buildOpenclawCompleteMarker(opts.archive, archiveStamp),
+    );
+    return true;
+  }
+
+  return false;
+}
+
+function writeOpenclawExtractionComplete(
+  sidecarRoot: string,
+  archive: ArchiveInfo,
+  archiveStamp: string,
+): void {
+  writeFileSync(getOpenclawStampPath(sidecarRoot), archiveStamp);
+  writeFileSync(
+    getOpenclawCompleteMarkerPath(sidecarRoot),
+    buildOpenclawCompleteMarker(archive, archiveStamp),
+  );
+}
+
 /**
  * Resolve the bundled 7za.exe / 7za binary that ships alongside the app in
  * packaged mode. `electronRoot` in packaged builds points at
@@ -442,18 +537,12 @@ export function ensurePackagedOpenclawSidecar(
   const extractedSidecarRoot = ensureDir(
     path.resolve(runtimeRoot, "openclaw-sidecar"),
   );
-  const stampPath = path.resolve(extractedSidecarRoot, ".archive-stamp");
   const archiveStamp = resolveArchiveStamp(packagedSidecarRoot, archive);
-  const extractedOpenclawEntry = path.resolve(
-    extractedSidecarRoot,
-    "node_modules/openclaw/openclaw.mjs",
-  );
 
-  if (
-    existsSync(stampPath) &&
-    existsSync(extractedOpenclawEntry) &&
-    readFileSync(stampPath, "utf8") === archiveStamp
-  ) {
+  if (hasValidOpenclawExtraction(extractedSidecarRoot, archiveStamp, {
+    repairLegacyMarker: true,
+    archive,
+  })) {
     // Run lift on every boot so users upgrading from a pre-lift build
     // pick up the workaround without re-extracting. Idempotent.
     liftBundledExtensionDepsSync(extractedSidecarRoot);
@@ -471,21 +560,21 @@ export function ensurePackagedOpenclawSidecar(
       mkdirSync(stagingRoot, { recursive: true });
       extractArchiveSync(archive, stagingRoot);
 
-      const stagingEntry = path.resolve(
-        stagingRoot,
-        "node_modules/openclaw/openclaw.mjs",
-      );
+      const stagingEntry = getOpenclawExtractedEntry(stagingRoot);
       if (!existsSync(stagingEntry)) {
         throw new Error(
           `Extraction verification failed: ${stagingEntry} not found`,
         );
       }
 
-      writeFileSync(path.resolve(stagingRoot, ".archive-stamp"), archiveStamp);
-
       removeDirectorySync(extractedSidecarRoot);
       robustRenameSync(stagingRoot, extractedSidecarRoot);
       liftBundledExtensionDepsSync(extractedSidecarRoot);
+      writeOpenclawExtractionComplete(
+        extractedSidecarRoot,
+        archive,
+        archiveStamp,
+      );
       break;
     } catch (err) {
       if (attempt === MAX_RETRIES - 1) throw err;
@@ -519,19 +608,12 @@ export function checkOpenclawExtractionNeeded(
   if (!archive) return false;
 
   const extractedSidecarRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
-  const stampPath = path.resolve(extractedSidecarRoot, ".archive-stamp");
-  const extractedEntry = path.resolve(
-    extractedSidecarRoot,
-    "node_modules/openclaw/openclaw.mjs",
-  );
 
   try {
     const archiveStamp = resolveArchiveStamp(packagedSidecarRoot, archive);
-    return !(
-      existsSync(stampPath) &&
-      existsSync(extractedEntry) &&
-      readFileSync(stampPath, "utf8") === archiveStamp
-    );
+    return !hasValidOpenclawExtraction(extractedSidecarRoot, archiveStamp, {
+      repairLegacyMarker: false,
+    });
   } catch {
     return true;
   }
@@ -569,20 +651,14 @@ export async function extractOpenclawSidecarAsync(
 
   const extractedSidecarRoot = path.resolve(runtimeRoot, "openclaw-sidecar");
   const archiveStamp = resolveArchiveStamp(packagedSidecarRoot, archive);
-  const stampPath = path.resolve(extractedSidecarRoot, ".archive-stamp");
-  const extractedEntry = path.resolve(
-    extractedSidecarRoot,
-    "node_modules/openclaw/openclaw.mjs",
-  );
 
   // Fast path: archive already extracted and stamp matches. Still run
   // the lift step because a prior extraction from a pre-lift build may
   // have left extension deps un-lifted. Idempotent.
-  if (
-    existsSync(stampPath) &&
-    existsSync(extractedEntry) &&
-    readFileSync(stampPath, "utf8") === archiveStamp
-  ) {
+  if (hasValidOpenclawExtraction(extractedSidecarRoot, archiveStamp, {
+    repairLegacyMarker: true,
+    archive,
+  })) {
     liftBundledExtensionDepsSync(extractedSidecarRoot);
     return;
   }
@@ -598,21 +674,21 @@ export async function extractOpenclawSidecarAsync(
       mkdirSync(stagingRoot, { recursive: true });
       await extractArchiveAsync(archive, stagingRoot);
 
-      const stagingEntry = path.resolve(
-        stagingRoot,
-        "node_modules/openclaw/openclaw.mjs",
-      );
+      const stagingEntry = getOpenclawExtractedEntry(stagingRoot);
       if (!existsSync(stagingEntry)) {
         throw new Error(
           `Extraction verification failed: ${stagingEntry} not found`,
         );
       }
 
-      writeFileSync(path.resolve(stagingRoot, ".archive-stamp"), archiveStamp);
-
       await removeDirectoryAsync(extractedSidecarRoot);
       await robustRenameAsync(stagingRoot, extractedSidecarRoot);
       liftBundledExtensionDepsSync(extractedSidecarRoot);
+      writeOpenclawExtractionComplete(
+        extractedSidecarRoot,
+        archive,
+        archiveStamp,
+      );
       return;
     } catch (err) {
       if (attempt === MAX_RETRIES - 1) throw err;

@@ -131,7 +131,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * Replace-mode catalog fast path：当 Claw-Pi 已经把云雾/Link 模型写进 OpenClaw config 的显式 providers 时，OpenClaw 不再扫描隐式供应商或 provider plugin catalog，直接使用显式列表。
 * Runtime plugin atomic staging：Controller 写入 runtime plugins 时，临时 staging 放在 OpenClaw `extensions` 扫描目录之外，并清理历史 `.staging-*` 残留，避免 OpenClaw 把半成品目录当插件加载。
 * Desktop surface lifecycle：用户主流程 Web 工作台活跃时保持挂载；inactive 超过保留窗口后释放 webview 进程。OpenClaw 原生页只在被激活时挂载。
-* Cold-start branded wait：桌面壳优先停留在龙虾工作台启动界面。端口区间耗尽时回退 OS ephemeral port；ready 超时不自动切到诊断/修复页，启动状态和诊断能力保留为手动入口；启动等待页按 Web/Controller/OpenClaw/模型 ready blockers 和本地 runtime unit phase 给出用户可读状态，并提供“重试启动”和“导出诊断包”。连续冷启动失败时重置已解压 OpenClaw sidecar。所有用户可见兜底界面必须保持 Claw-Pi/龙虾品牌，不暴露 `nexu` 等内部工程名。
+* Cold-start branded wait：桌面壳优先停留在龙虾工作台启动界面。Windows 在申请 single-instance lock 前先清理同安装目录/同 `claw-pi-desktop` 上下文的旧 `Claw-Pi.exe`，随后固定清理 `50800`、`50810`、`18789` 的占用 PID，并继续使用固定端口；ready 超时不自动切到诊断/修复页，启动状态和诊断能力保留为手动入口；启动等待页按 Web/Controller/OpenClaw/模型 ready blockers 和本地 runtime unit phase 给出用户可读状态，并提供“重试启动”和“导出诊断包”。连续冷启动失败或 OpenClaw sidecar 完整性标记缺失时重置/重解压可重建 sidecar。所有用户可见兜底界面必须保持 Claw-Pi/龙虾品牌，不暴露 `nexu` 等内部工程名。
 
 == 5. 构建块视图
 
@@ -289,8 +289,10 @@ Controller compileModelsConfig
 [source,text]
 ----
 Electron main
+  -> Windows 在 requestSingleInstanceLock() 前清理同安装目录旧 Claw-Pi.exe
   -> allocateDesktopRuntimePorts()
-  -> preferred range 被占用时回退 OS ephemeral port
+  -> Windows 检查并清理 50800 / 50810 / 18789 的占用 PID
+  -> 固定使用 Controller/Web/OpenClaw 默认端口
   -> createMainWindow()
   -> renderer 等待 /api/internal/desktop/ready
   -> web/desktop 未 ready 时停留在龙虾工作台启动界面继续等待
@@ -301,6 +303,11 @@ Electron main
   StartupHealthCheck unhealthy
   -> packaged mode 重置 data/user-data/runtime/openclaw-sidecar
   -> 下次 extractOpenclawSidecarAsync() 从 resources/runtime/openclaw 重新解压
+
+OpenClaw sidecar 完整性:
+  -> 解压到 staging 目录并验证 openclaw.mjs
+  -> 替换目标目录后写入 .archive-stamp 和 .extract-complete.json
+  -> 标记缺失、归档指纹不匹配或入口文件缺失时重新解压
 ----
 
 该恢复路径只清理可重建的 OpenClaw sidecar 解压目录，不清理 `nexu-home`、聊天状态、模型配置或用户上传文件。
@@ -449,7 +456,7 @@ agent:{agentId}:workbench:{sessionId}
 
 原因：部分用户无法打开时，问题可能发生在 Web sidecar、OpenClaw sidecar、ready 接口或端口分配阶段。自动切到诊断/修复页虽然方便排查，但会让普通用户看到内部启动控制界面，误以为进入了错误软件。
 
-结果：非显式端口配置在首选区间耗尽后回退 OS ephemeral port；renderer 获取 runtimeConfig 后持续轮询 `/api/internal/desktop/ready`，未 ready 时继续停留在龙虾工作台启动界面，不自动切到启动状态或诊断页。等待页额外读取 `runtime:get-state`，把本地 unit phase 和 ready blockers 翻译成“正在启动/本地服务未响应/OpenClaw 网关正在连接/默认模型正在同步/组件启动异常”等用户可读状态，并提供手动“重试启动”和“导出诊断包”。启动状态、日志导出和 runtime 单元操作能力仍作为手动入口保留；这些页面使用 Claw-Pi/龙虾用户可见文案，runtime 单元 label 不暴露 `nexu Web Surface`、`nexu Controller` 等内部名。
+结果：Windows 启动前固定清理 `50800`、`50810`、`18789` 的监听进程，并继续使用固定端口，不再静默漂移到 OS ephemeral port；renderer 获取 runtimeConfig 后持续轮询 `/api/internal/desktop/ready`，未 ready 时继续停留在龙虾工作台启动界面，不自动切到启动状态或诊断页。等待页额外读取 `runtime:get-state`，把本地 unit phase 和 ready blockers 翻译成“正在启动/本地服务未响应/OpenClaw 网关正在连接/默认模型正在同步/组件启动异常”等用户可读状态，并提供手动“重试启动”和“导出诊断包”。启动状态、日志导出和 runtime 单元操作能力仍作为手动入口保留；这些页面使用 Claw-Pi/龙虾用户可见文案，runtime 单元 label 不暴露 `nexu Web Surface`、`nexu Controller` 等内部名。
 
 === ADR-010: 连续失败后重置可重建 sidecar
 
@@ -457,7 +464,7 @@ agent:{agentId}:workbench:{sessionId}
 
 原因：覆盖安装或异常退出可能留下损坏的 `data/user-data/runtime/openclaw-sidecar` 解压目录，但 `.archive-stamp` 仍匹配，导致后续启动持续复用损坏 runtime。
 
-结果：`StartupHealthCheck` 判定连续冷启动失败后，packaged mode 删除可重建的 `openclaw-sidecar` 和 `.staging` 目录；下一次 `extractOpenclawSidecarAsync()` 从随包资源重新解压。用户配置、聊天、模型和附件目录不被清理。
+结果：`StartupHealthCheck` 判定连续冷启动失败后，packaged mode 删除可重建的 `openclaw-sidecar` 和 `.staging` 目录；正常启动时要求 `.archive-stamp` 和 `.extract-complete.json` 同时有效，缺失或不匹配则从随包资源重新解压。用户配置、聊天、模型和附件目录不被清理。
 
 === ADR-011: Packaged OpenClaw 使用 standalone Node 和 ZIP payload
 
@@ -615,13 +622,13 @@ agent:{agentId}:workbench:{sessionId}
 |如果 OOM 根因来自主 Web 工作台本身，卸载 OpenClaw 原生页只能降低概率，不能完全消除。
 |保留 `render-process-gone` 可见错误态，并对长期 hidden Web surface 做延迟释放；继续用诊断包统计 `reason=oom` 频率，必要时进一步拆分工作台资源或实现 Web surface 安全恢复。
 
-|端口区间耗尽
-|本机已有服务占用默认 Controller/Web/OpenClaw 端口区间时，主进程可能在创建窗口前失败。
-|非显式端口配置允许回退 OS ephemeral port；显式用户配置仍严格失败，避免静默覆盖用户指定端口。
+|Windows 旧进程或固定端口被占用
+|旧 `Claw-Pi.exe` 若仍持有 single-instance lock，新实例会在端口清理前退出；残留 Controller/Web/OpenClaw 进程也可能占用固定端口，导致组件互相连接到旧进程。
+|Windows 在 `requestSingleInstanceLock()` 前用 `wmic` 查找同安装目录或 `claw-pi-desktop` 上下文的旧 `Claw-Pi.exe` 并 `taskkill /F /T`；随后使用 `netstat -ano -p tcp` 定位 `50800`、`50810`、`18789` 的监听 PID 并清理。提供 `NEXU_DESKTOP_DISABLE_MAIN_PROCESS_RECLAIM=1` 和 `NEXU_DESKTOP_DISABLE_PORT_RECLAIM=1` 作为调试逃生开关。
 
 |Sidecar 解压目录损坏
 |`.archive-stamp` 匹配但实际 node_modules 或 OpenClaw 文件损坏时，普通快速路径会继续复用损坏目录。
-|连续冷启动失败后只删除可重建 `openclaw-sidecar` 解压目录，保留用户配置和数据。
+|解压完成后写入 `.extract-complete.json`；标记缺失、归档指纹不匹配或入口文件缺失时重新解压。连续冷启动失败后只删除可重建 `openclaw-sidecar` 解压目录，保留用户配置和数据。
 
 |Packaged Node 体积和平台匹配
 |随包发布 `node.exe` 会增加 Windows 包体积，且必须匹配目标架构。
