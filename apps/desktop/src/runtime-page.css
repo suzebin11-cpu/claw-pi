@@ -236,6 +236,120 @@ body,
   border-radius: 22px;
 }
 
+.startup-status-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #11161d;
+}
+
+.startup-status-panel {
+  display: flex;
+  width: min(560px, calc(100vw - 48px));
+  flex-direction: column;
+  gap: 18px;
+  padding: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: rgba(17, 22, 29, 0.94);
+  color: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 18px 44px rgba(0, 0, 0, 0.28);
+}
+
+.startup-status-mark {
+  display: inline-flex;
+  width: fit-content;
+  min-width: 86px;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 10px;
+  border: 1px solid rgba(194, 248, 78, 0.34);
+  border-radius: 8px;
+  background: rgba(194, 248, 78, 0.08);
+  color: #c2f84e;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.startup-status-eyebrow {
+  color: rgba(194, 248, 78, 0.84);
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+.startup-status-panel h2 {
+  margin: 6px 0 0;
+  font-size: 1.32rem;
+  line-height: 1.3;
+}
+
+.startup-status-panel p {
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 0.92rem;
+  line-height: 1.7;
+}
+
+.startup-status-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.startup-status-list li {
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 0.82rem;
+}
+
+.startup-status-panel.is-warning .startup-status-mark {
+  border-color: rgba(255, 202, 97, 0.38);
+  background: rgba(255, 202, 97, 0.08);
+  color: #ffca61;
+}
+
+.startup-status-panel.is-error .startup-status-mark {
+  border-color: rgba(255, 108, 108, 0.42);
+  background: rgba(255, 108, 108, 0.1);
+  color: #ff8585;
+}
+
+.startup-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.startup-status-actions button {
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.9);
+  cursor: pointer;
+}
+
+.startup-status-actions button:first-child {
+  border-color: rgba(194, 248, 78, 0.42);
+  background: rgba(194, 248, 78, 0.14);
+  color: #e8ffd0;
+}
+
+.startup-status-actions button:disabled {
+  opacity: 0.56;
+  cursor: wait;
+}
+
 .desktop-shell--mac .desktop-web-frame {
   background: transparent;
 }

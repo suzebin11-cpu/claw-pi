@@ -55,11 +55,10 @@ export function RuntimePage() {
     <div className="runtime-page">
       <header className="runtime-header">
         <div>
-          <span className="runtime-eyebrow">Desktop Runtime</span>
-          <h1>Claw-Pi local cold-start control room</h1>
+          <span className="runtime-eyebrow">Claw-Pi Startup</span>
+          <h1>Claw-Pi 启动修复中心</h1>
           <p>
-            Renderer keeps the browser mental model. Electron main orchestrates
-            local runtime units.
+            正在检查本地工作台、控制器和 OpenClaw 运行状态。若启动异常，可在这里查看状态并重新启动组件。
           </p>
         </div>
       </header>
@@ -76,7 +75,7 @@ export function RuntimePage() {
 
       <section className="component-update-section">
         <div className="component-update-head">
-          <strong>Component Updates</strong>
+          <strong>组件更新</strong>
           <button
             disabled={componentBusy}
             onClick={() => {

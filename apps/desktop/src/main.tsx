@@ -6,7 +6,6 @@ import React, {
   useCallback,
   useEffect,
   useMemo,
-  useRef,
   useState,
 } from "react";
 import ReactDOM from "react-dom/client";
@@ -31,6 +30,7 @@ import { UpdateBanner } from "./components/update-banner";
 import { useAutoUpdate } from "./hooks/use-auto-update";
 import {
   checkComponentUpdates,
+  exportDiagnostics,
   getAppInfo,
   getDiagnosticsInfo,
   getRuntimeConfig,
@@ -40,6 +40,7 @@ import {
   onDesktopCommand,
   onRuntimeEvent,
   reportStartupProbe,
+  startAllUnits,
   showRuntimeLogFile,
   startUnit,
   stopUnit,
@@ -626,11 +627,10 @@ function RuntimePage() {
     <div className="runtime-page">
       <header className="runtime-header">
         <div>
-          <span className="runtime-eyebrow">Desktop Runtime</span>
-          <h1>nexu local cold-start control room</h1>
+          <span className="runtime-eyebrow">Claw-Pi Startup</span>
+          <h1>Claw-Pi 启动修复中心</h1>
           <p>
-            Renderer keeps the browser mental model. Electron main orchestrates
-            local runtime units.
+            正在检查本地工作台、控制器和 OpenClaw 运行状态。若启动异常，可在这里查看状态并重新启动组件。
           </p>
         </div>
       </header>
@@ -929,7 +929,7 @@ function DiagnosticsPage({
           }
         />
         <SummaryCard
-          label="nexu Home"
+          label="Claw-Pi 数据目录"
           className="diagnostics-summary-wide"
           value={runtimeConfig?.paths.nexuHome ?? "-"}
         />
@@ -999,6 +999,13 @@ type DesktopReadyPayload = {
   desktopReady?: boolean;
   webReady?: boolean;
   openclawReady?: boolean;
+  agentReady?: boolean;
+  channelsReady?: boolean;
+  blockers?: Array<{
+    scope: "desktop" | "web" | "openclaw" | "agent" | "channels";
+    code: string;
+    message: string;
+  }>;
   runtime?: {
     ok?: boolean;
     status?: number | null;
@@ -1008,11 +1015,257 @@ type DesktopReadyPayload = {
   gatewayConnected?: boolean;
 };
 
-const DESKTOP_READY_CONTROL_FALLBACK_MS = 12_000;
 const WEB_SURFACE_INACTIVE_UNMOUNT_MS = 120_000;
+
+type ReadyFetchState = {
+  status: "idle" | "reachable" | "unreachable";
+  message: string | null;
+};
+
+type StartupAction = "restart" | "diagnostics";
+
+type StartupStatusSummary = {
+  tone: "waiting" | "warning" | "error";
+  title: string;
+  description: string;
+  details: string[];
+};
+
+const STARTUP_UNIT_ORDER: RuntimeUnitId[] = [
+  "web",
+  "controller",
+  "openclaw",
+  "control-plane",
+];
+
+function runtimeUnitUserLabel(id: RuntimeUnitId): string {
+  switch (id) {
+    case "web":
+      return "龙虾工作台界面";
+    case "controller":
+      return "本地控制服务";
+    case "openclaw":
+      return "OpenClaw 执行服务";
+    case "control-plane":
+      return "启动状态服务";
+  }
+}
+
+function runtimePhaseLabel(phase: RuntimeUnitPhase): string {
+  switch (phase) {
+    case "running":
+      return "已启动";
+    case "starting":
+      return "启动中";
+    case "failed":
+      return "异常";
+    case "stopped":
+      return "已停止";
+    case "stopping":
+      return "停止中";
+    case "idle":
+      return "等待启动";
+  }
+}
+
+function blockerUserMessage(blocker: NonNullable<DesktopReadyPayload["blockers"]>[number]): string {
+  switch (blocker.code) {
+    case "openclaw_ws_disconnected":
+    case "gateway_probe_disabled_no_ws":
+      return "OpenClaw 网关正在连接";
+    case "openclaw_health_unreachable":
+      return "OpenClaw 执行服务还未响应";
+    case "model_not_ready":
+      return "默认模型正在同步";
+    default:
+      if (blocker.code.startsWith("openclaw_health_http_")) {
+        return "OpenClaw 健康检查暂未通过";
+      }
+      return blocker.scope === "channels"
+        ? "外部渠道正在连接"
+        : "本地组件正在准备";
+  }
+}
+
+function summarizeStartupUnits(runtimeState: RuntimeState | null): string[] {
+  if (!runtimeState) {
+    return ["正在读取本地组件状态"];
+  }
+
+  return STARTUP_UNIT_ORDER.map((id) => {
+    const unit = runtimeState.units.find((candidate) => candidate.id === id);
+    if (!unit) {
+      return `${runtimeUnitUserLabel(id)}：等待状态`;
+    }
+    return `${runtimeUnitUserLabel(id)}：${runtimePhaseLabel(unit.phase)}`;
+  });
+}
+
+function getPrimaryStartupUnit(runtimeState: RuntimeState | null) {
+  const units = runtimeState?.units ?? [];
+  const importantUnits = STARTUP_UNIT_ORDER.map((id) =>
+    units.find((unit) => unit.id === id),
+  ).filter((unit): unit is RuntimeUnitState => Boolean(unit));
+
+  return (
+    importantUnits.find((unit) => unit.phase === "failed") ??
+    importantUnits.find((unit) => unit.phase === "starting") ??
+    importantUnits.find((unit) => unit.phase !== "running") ??
+    null
+  );
+}
+
+function buildStartupStatus(input: {
+  runtimeConfig: DesktopRuntimeConfig | null;
+  runtimeState: RuntimeState | null;
+  readyPayload: DesktopReadyPayload | null;
+  readyFetch: ReadyFetchState;
+  controllerReady: boolean;
+}): StartupStatusSummary {
+  const primaryUnit = getPrimaryStartupUnit(input.runtimeState);
+  const failedUnit =
+    primaryUnit?.phase === "failed" ? primaryUnit : null;
+  const details = summarizeStartupUnits(input.runtimeState);
+
+  if (failedUnit) {
+    return {
+      tone: "error",
+      title: `${runtimeUnitUserLabel(failedUnit.id)}启动异常`,
+      description:
+        "可以先重试启动；如果仍然停在这里，请导出诊断包发给客服排查。",
+      details,
+    };
+  }
+
+  if (!input.runtimeConfig) {
+    return {
+      tone: "waiting",
+      title: "正在启动龙虾工作台",
+      description: primaryUnit
+        ? `正在准备${runtimeUnitUserLabel(primaryUnit.id)}。`
+        : "正在准备本地运行组件，请稍候。",
+      details,
+    };
+  }
+
+  if (input.readyFetch.status === "unreachable") {
+    return {
+      tone: "warning",
+      title: "正在连接本地工作台服务",
+      description:
+        input.readyFetch.message ??
+        "本地服务还没有响应，系统会继续自动等待。",
+      details,
+    };
+  }
+
+  const blockers = input.readyPayload?.blockers ?? [];
+  if (!input.controllerReady && blockers.length > 0) {
+    return {
+      tone: "warning",
+      title: blockerUserMessage(blockers[0]),
+      description: "本地组件正在继续启动，工作台就绪后会自动打开。",
+      details: blockers.slice(0, 3).map(blockerUserMessage),
+    };
+  }
+
+  return {
+    tone: "waiting",
+    title: "正在打开龙虾工作台",
+    description: "工作台页面正在加载，完成后会自动进入主界面。",
+    details,
+  };
+}
 
 function isDesktopApiReady(payload: DesktopReadyPayload): boolean {
   return Boolean(payload.ready || payload.desktopReady || payload.webReady);
+}
+
+function DesktopStartupStatusPanel({
+  diagnosticsLabel = "导出诊断包",
+  status,
+  busyAction,
+  retryLabel = "重试启动",
+  onExportDiagnostics,
+  onRetryStartup,
+}: {
+  diagnosticsLabel?: string;
+  status: StartupStatusSummary;
+  busyAction: StartupAction | null;
+  retryLabel?: string;
+  onExportDiagnostics: () => Promise<void>;
+  onRetryStartup: () => Promise<void>;
+}) {
+  return (
+    <div className={`startup-status-panel is-${status.tone}`}>
+      <div className="startup-status-mark">Claw-Pi</div>
+      <div>
+        <span className="startup-status-eyebrow">龙虾工作台</span>
+        <h2>{status.title}</h2>
+        <p>{status.description}</p>
+      </div>
+
+      {status.details.length > 0 ? (
+        <ul className="startup-status-list">
+          {status.details.map((detail) => (
+            <li key={detail}>{detail}</li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="startup-status-actions">
+        <button
+          disabled={busyAction !== null}
+          onClick={() => void onRetryStartup()}
+          type="button"
+        >
+          {busyAction === "restart" ? "正在重试" : retryLabel}
+        </button>
+        <button
+          disabled={busyAction !== null}
+          onClick={() => void onExportDiagnostics()}
+          type="button"
+        >
+          {busyAction === "diagnostics" ? "正在导出" : diagnosticsLabel}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function DesktopWebviewCrashPanel({
+  exitCode,
+  onExportDiagnostics,
+  onReload,
+  reason,
+}: {
+  exitCode: number | null;
+  onExportDiagnostics: () => Promise<void>;
+  onReload: () => void;
+  reason: string;
+}) {
+  const status: StartupStatusSummary = {
+    tone: "error",
+    title: "工作台页面异常退出",
+    description: "可以先重新加载页面；如果反复出现，请导出诊断包发给客服排查。",
+    details: [
+      `页面进程：${reason || "异常退出"}`,
+      exitCode === null ? "退出码：无" : `退出码：${exitCode}`,
+    ],
+  };
+
+  return (
+    <div className="startup-status-overlay">
+      <DesktopStartupStatusPanel
+        busyAction={null}
+        diagnosticsLabel="导出诊断包"
+        onExportDiagnostics={onExportDiagnostics}
+        onRetryStartup={async () => onReload()}
+        retryLabel="重新加载"
+        status={status}
+      />
+    </div>
+  );
 }
 
 function DesktopShell() {
@@ -1024,8 +1277,20 @@ function DesktopShell() {
   const webSurfaceVersion = 0;
   const [runtimeConfig, setRuntimeConfig] =
     useState<DesktopRuntimeConfig | null>(null);
+  const [startupRuntimeState, setStartupRuntimeState] =
+    useState<RuntimeState | null>(null);
+  const [readyPayload, setReadyPayload] = useState<DesktopReadyPayload | null>(
+    null,
+  );
+  const [readyFetch, setReadyFetch] = useState<ReadyFetchState>({
+    status: "idle",
+    message: null,
+  });
+  const [startupBusyAction, setStartupBusyAction] =
+    useState<StartupAction | null>(null);
+  const [controllerReady, setControllerReady] = useState(false);
+  const [openclawReady, setOpenclawReady] = useState(false);
   const update = useAutoUpdate();
-  const activeSurfaceRef = useRef(activeSurface);
 
   // Setup animation phases:
   // "playing" → main video (23s) plays once
@@ -1073,24 +1338,41 @@ function DesktopShell() {
     });
   }, [update]);
 
+  const loadStartupRuntimeState = useCallback(async () => {
+    try {
+      const nextState = await getRuntimeState();
+      setStartupRuntimeState(nextState);
+    } catch {
+      // The branded startup panel can still show a generic waiting state.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (controllerReady) return;
+
+    void loadStartupRuntimeState();
+    const unsubscribe = onRuntimeEvent((event) => {
+      setStartupRuntimeState((current) =>
+        current ? applyRuntimeEvent(current, event) : current,
+      );
+    });
+    const timer = window.setInterval(() => {
+      void loadStartupRuntimeState();
+    }, 4000);
+
+    return () => {
+      unsubscribe();
+      window.clearInterval(timer);
+    };
+  }, [controllerReady, loadStartupRuntimeState]);
+
   // Poll the controller ready endpoint through the web sidecar proxy before mounting the webview.
   // Note: getRuntimeConfig() IPC handler waits for cold-start to complete, so
   // runtimeConfig always has the final ports (including any fallback).
-  const [controllerReady, setControllerReady] = useState(false);
-  const [openclawReady, setOpenclawReady] = useState(false);
-  const [, setControllerReadyFailed] = useState(false);
-
-  useEffect(() => {
-    activeSurfaceRef.current = activeSurface;
-  }, [activeSurface]);
-
   useEffect(() => {
     if (!runtimeConfig) return;
 
     let cancelled = false;
-    const startedAt = Date.now();
-    let apiReadySeen = false;
-    let fallbackShown = false;
     const readyUrl = new URL(
       "/api/internal/desktop/ready",
       runtimeConfig.urls.web,
@@ -1104,31 +1386,30 @@ function DesktopShell() {
           });
           if (res.ok) {
             const data = (await res.json()) as DesktopReadyPayload;
+            if (!cancelled) {
+              setReadyPayload(data);
+              setReadyFetch({ status: "reachable", message: null });
+            }
 
             if (typeof data.openclawReady === "boolean" && !cancelled) {
               setOpenclawReady(data.openclawReady);
             }
 
             if (!cancelled && isDesktopApiReady(data)) {
-              apiReadySeen = true;
               setControllerReady(true);
-              setControllerReadyFailed(false);
             }
+          } else if (!cancelled) {
+            setReadyFetch({
+              status: "unreachable",
+              message: `本地服务返回 HTTP ${res.status}，正在继续等待。`,
+            });
           }
         } catch {
-          // Controller or web sidecar not ready yet — keep polling
-        }
-        if (
-          !cancelled &&
-          !fallbackShown &&
-          !apiReadySeen &&
-          Date.now() - startedAt >= DESKTOP_READY_CONTROL_FALLBACK_MS
-        ) {
-          fallbackShown = true;
-          setControllerReadyFailed(true);
-          if (activeSurfaceRef.current === "web") {
-            setActiveSurface("control");
-            setChromeMode("full");
+          if (!cancelled) {
+            setReadyFetch({
+              status: "unreachable",
+              message: "本地服务暂未响应，正在继续等待。",
+            });
           }
         }
         await new Promise((r) => setTimeout(r, 1000));
@@ -1140,6 +1421,61 @@ function DesktopShell() {
       cancelled = true;
     };
   }, [runtimeConfig]);
+
+  const startupStatus = useMemo(
+    () =>
+      buildStartupStatus({
+        controllerReady,
+        readyFetch,
+        readyPayload,
+        runtimeConfig,
+        runtimeState: startupRuntimeState,
+      }),
+    [
+      controllerReady,
+      readyFetch,
+      readyPayload,
+      runtimeConfig,
+      startupRuntimeState,
+    ],
+  );
+
+  const handleRetryStartup = useCallback(async () => {
+    setStartupBusyAction("restart");
+    try {
+      const nextState = await startAllUnits();
+      setStartupRuntimeState(nextState);
+      setControllerReady(false);
+      setReadyFetch({ status: "idle", message: null });
+      toast.success("已重新启动本地组件。");
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "重新启动本地组件失败。",
+      );
+    } finally {
+      setStartupBusyAction(null);
+    }
+  }, []);
+
+  const handleExportStartupDiagnostics = useCallback(async () => {
+    setStartupBusyAction("diagnostics");
+    try {
+      const result = await exportDiagnostics("diagnostics-page");
+      if (result.status === "success") {
+        toast.success("诊断包已导出。");
+      } else if (result.status === "cancelled") {
+        toast.info("已取消导出诊断包。");
+      } else {
+        toast.error(result.errorMessage ?? "导出诊断包失败。");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "导出诊断包失败。",
+      );
+    } finally {
+      setStartupBusyAction(null);
+    }
+  }, []);
 
   const desktopWebUrl =
     runtimeConfig && controllerReady
@@ -1162,52 +1498,51 @@ function DesktopShell() {
       <div className="window-drag-bar" />
       <aside className="desktop-sidebar">
         <div className="desktop-sidebar-brand">
-          <span className="desktop-shell-eyebrow">nexu desktop</span>
-          <h1>Runtime Console</h1>
+          <span className="desktop-shell-eyebrow">Claw-Pi Desktop</span>
+          <h1>启动修复中心</h1>
           <p>
-            One local shell for bootstrap health, web verification, and gateway
-            inspection.
+            用于检查龙虾工作台启动状态、组件健康和本地 OpenClaw 连接。
           </p>
         </div>
 
         <nav className="desktop-nav" aria-label="Desktop surfaces">
           <SurfaceButton
             active={activeSurface === "control"}
-            label="Control Plane"
-            meta="Bootstrap status and per-unit intervention"
+            label="启动状态"
+            meta="查看组件状态并处理启动异常"
             onClick={() => setActiveSurface("control")}
           />
           <SurfaceButton
             active={activeSurface === "cloud-profile"}
-            label="Cloud Profile"
-            meta="Switch cloud endpoints and reset auth state"
+            label="云端账号"
+            meta="切换云端服务并重置登录状态"
             onClick={() => setActiveSurface("cloud-profile")}
           />
           <SurfaceButton
             active={activeSurface === "web"}
             disabled={!desktopWebUrl}
-            label="Web"
-            meta="Workspace surface via local HTTP sidecar"
+            label="龙虾工作台"
+            meta="打开主工作台界面"
             onClick={() => setActiveSurface("web")}
           />
           <SurfaceButton
             active={activeSurface === "openclaw"}
             disabled={!desktopOpenClawUrl}
             label="OpenClaw"
-            meta="Chat with the local OpenClaw assistant"
+            meta="打开 OpenClaw 原生调试页"
             onClick={() => setActiveSurface("openclaw")}
           />
           <SurfaceButton
             active={activeSurface === "diagnostics"}
-            label="Diagnostics"
-            meta="Crash and exception test bench"
+            label="诊断"
+            meta="导出日志并检查异常"
             onClick={() => setActiveSurface("diagnostics")}
           />
         </nav>
 
         {runtimeConfig ? (
           <div className="desktop-sidebar-config">
-            <span className="desktop-shell-eyebrow">Build Info</span>
+            <span className="desktop-shell-eyebrow">版本信息</span>
             <dl className="desktop-config-list">
               <div>
                 <dt>Source</dt>
@@ -1264,9 +1599,25 @@ function DesktopShell() {
         >
           <SurfaceFrame
             active={activeSurface === "web"}
-            description="Authenticated workspace surface served by the repo-local web sidecar."
+            description="Claw-Pi workspace surface."
+            crashContent={({ exitCode, reason, reload }) => (
+              <DesktopWebviewCrashPanel
+                exitCode={exitCode}
+                onExportDiagnostics={handleExportStartupDiagnostics}
+                onReload={reload}
+                reason={reason}
+              />
+            )}
+            loadingContent={
+              <DesktopStartupStatusPanel
+                busyAction={startupBusyAction}
+                onExportDiagnostics={handleExportStartupDiagnostics}
+                onRetryStartup={handleRetryStartup}
+                status={startupStatus}
+              />
+            }
             src={desktopWebUrl}
-            title="nexu Web"
+            title="龙虾工作台"
             version={webSurfaceVersion}
             preload={getWebviewPreloadUrl()}
             inactiveUnmountDelayMs={WEB_SURFACE_INACTIVE_UNMOUNT_MS}

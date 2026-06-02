@@ -25,9 +25,7 @@ export function DesktopShell() {
   const isPackaged = window.clawpiHost.bootstrap.isPackaged;
   const isMacOS =
     typeof navigator !== "undefined" && navigator.platform?.startsWith("Mac");
-  const [activeSurface, setActiveSurface] = useState<DesktopSurface>(
-    isPackaged ? "web" : "control",
-  );
+  const [activeSurface, setActiveSurface] = useState<DesktopSurface>("web");
   const [chromeMode, setChromeMode] = useState<DesktopChromeMode>(
     isPackaged ? "immersive" : "full",
   );
@@ -63,46 +61,45 @@ export function DesktopShell() {
       {isMacOS && <div className="window-drag-bar" />}
       <aside className="desktop-sidebar">
         <div className="desktop-sidebar-brand">
-          <span className="desktop-shell-eyebrow">nexu desktop</span>
-          <h1>Runtime Console</h1>
+          <span className="desktop-shell-eyebrow">Claw-Pi Desktop</span>
+          <h1>启动修复中心</h1>
           <p>
-            One local shell for bootstrap health, web verification, and gateway
-            inspection.
+            用于检查龙虾工作台启动状态、组件健康和本地 OpenClaw 连接。
           </p>
         </div>
 
         <nav className="desktop-nav" aria-label="Desktop surfaces">
           <SurfaceButton
             active={activeSurface === "control"}
-            label="Control Plane"
-            meta="Bootstrap status and per-unit intervention"
+            label="启动状态"
+            meta="查看组件状态并处理启动异常"
             onClick={() => setActiveSurface("control")}
           />
           <SurfaceButton
             active={activeSurface === "web"}
             disabled={!desktopWebUrl}
-            label="Web"
-            meta="Workspace surface via local HTTP sidecar"
+            label="龙虾工作台"
+            meta="打开主工作台界面"
             onClick={() => setActiveSurface("web")}
           />
           <SurfaceButton
             active={activeSurface === "openclaw"}
             disabled={!openclawReady}
             label="OpenClaw"
-            meta="Chat with the local OpenClaw assistant"
+            meta="打开 OpenClaw 原生调试页"
             onClick={() => setActiveSurface("openclaw")}
           />
           <SurfaceButton
             active={activeSurface === "diagnostics"}
-            label="Diagnostics"
-            meta="Crash and exception test bench"
+            label="诊断"
+            meta="导出日志并检查异常"
             onClick={() => setActiveSurface("diagnostics")}
           />
         </nav>
 
         {runtimeConfig ? (
           <div className="desktop-sidebar-config">
-            <span className="desktop-shell-eyebrow">Build Info</span>
+            <span className="desktop-shell-eyebrow">版本信息</span>
             <dl className="desktop-config-list">
               <div>
                 <dt>Source</dt>
@@ -143,9 +140,9 @@ export function DesktopShell() {
         <div style={{ display: activeSurface === "web" ? "contents" : "none" }}>
           <SurfaceFrame
             active={activeSurface === "web"}
-            description="Authenticated workspace surface served by the repo-local web sidecar."
+            description="Claw-Pi workspace surface."
             src={desktopWebUrl}
-            title="nexu Web"
+            title="龙虾工作台"
             version={webSurfaceVersion}
             preload={getWebviewPreloadUrl()}
           />

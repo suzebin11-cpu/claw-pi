@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 
 const WEBVIEW_RETRY_DELAY_MS = 1000;
 const WEBVIEW_MAX_RETRIES = 120;
@@ -49,6 +50,8 @@ export function SurfaceFrame({
   version,
   preload,
   inactiveUnmountDelayMs,
+  loadingContent,
+  crashContent,
 }: {
   title: string;
   description: string;
@@ -58,6 +61,12 @@ export function SurfaceFrame({
   version: number;
   preload?: string;
   inactiveUnmountDelayMs?: number;
+  loadingContent?: ReactNode;
+  crashContent?: (input: {
+    reason: string;
+    exitCode: number | null;
+    reload: () => void;
+  }) => ReactNode;
 }) {
   void _title;
   void _description;
@@ -270,11 +279,19 @@ export function SurfaceFrame({
             transition: "opacity 0.3s ease-out",
           }}
         >
-          <ClawPiLoader size={96} />
+          {loadingContent ?? <ClawPiLoader size={96} />}
         </div>
       )}
 
-      {webviewCrash && active && (
+      {webviewCrash && active && crashContent ? (
+        crashContent({
+          reason: webviewCrash.reason,
+          exitCode: webviewCrash.exitCode,
+          reload: reloadWebview,
+        })
+      ) : null}
+
+      {webviewCrash && active && !crashContent && (
         <div
           style={{
             position: "absolute",

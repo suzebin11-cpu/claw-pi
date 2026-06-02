@@ -719,7 +719,7 @@ export function createRuntimeUnitManifests(
   return [
     {
       id: "web",
-      label: "nexu Web Surface",
+      label: "龙虾工作台",
       kind: "surface",
       launchStrategy: "managed",
       runner: "spawn",
@@ -740,7 +740,7 @@ export function createRuntimeUnitManifests(
     },
     {
       id: "control-plane",
-      label: "Desktop Control Plane",
+      label: "启动修复中心",
       kind: "surface",
       launchStrategy: "embedded",
       port: null,
@@ -749,7 +749,7 @@ export function createRuntimeUnitManifests(
     },
     {
       id: "controller",
-      label: "nexu Controller",
+      label: "Claw-Pi Controller",
       kind: "service",
       launchStrategy: "managed",
       // Use spawn instead of utility-process due to Electron bugs:

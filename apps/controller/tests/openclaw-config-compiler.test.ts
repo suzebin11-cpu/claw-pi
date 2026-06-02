@@ -203,7 +203,7 @@ describe("compileOpenClawConfig", () => {
       bootstrapPromptTruncationWarning: "off",
       compaction: {
         maxHistoryShare: 0.5,
-        keepRecentTokens: 20000,
+        keepRecentTokens: 8000,
         recentTurnsPreserve: 5,
         memoryFlush: {
           enabled: true,
