@@ -99,6 +99,16 @@ export const wechatQrWaitResponseSchema = z.object({
   accountId: z.string().optional(),
   pending: z.boolean().optional(),
   expired: z.boolean().optional(),
+  status: z
+    .enum([
+      "waiting_scan",
+      "scanned_waiting_confirm",
+      "connected",
+      "expired",
+      "network_error",
+      "account_error",
+    ])
+    .optional(),
 });
 
 export const whatsappQrStartResponseSchema = z.object({

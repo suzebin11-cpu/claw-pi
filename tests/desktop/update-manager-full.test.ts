@@ -9,7 +9,7 @@
  *  - downloadUpdate: delegates to autoUpdater
  *  - startPeriodicCheck / stopPeriodicCheck: timer lifecycle
  *  - setChannel / setSource: reconfigures feed URL
- *  - configureFeedUrl: generic vs github provider
+ *  - configureFeedUrl: managed generic update feed
  *  - send: forwards to main window + webviews, skips destroyed
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -75,7 +75,7 @@ vi.mock("../../apps/desktop/main/services/launchd-manager", () => ({
 }));
 
 vi.mock("../../apps/desktop/main/updater/component-updater", () => ({
-  R2_BASE_URL: "https://desktop-releases.nexu.io",
+  R2_BASE_URL: "https://api.claw-pi.cn/updates",
 }));
 
 // ---------------------------------------------------------------------------
@@ -700,7 +700,7 @@ describe("setChannel", () => {
 });
 
 describe("setSource", () => {
-  it("reconfigures feed URL to github provider when source is github", async () => {
+  it("keeps using the managed generic feed when source is github", async () => {
     const { mgr } = await createManager();
 
     mockAutoUpdater.setFeedURL.mockClear();
@@ -708,9 +708,8 @@ describe("setSource", () => {
     mgr.setSource("github");
 
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
-      provider: "github",
-      owner: "nexu-io",
-      repo: "nexu",
+      provider: "generic",
+      url: expect.stringContaining("https://api.claw-pi.cn/updates/stable/"),
     });
   });
 
@@ -724,7 +723,7 @@ describe("setSource", () => {
 
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
       provider: "generic",
-      url: expect.stringContaining("desktop-releases.nexu.io"),
+      url: expect.stringContaining("https://api.claw-pi.cn/updates"),
     });
   });
 });
@@ -741,19 +740,18 @@ describe("configureFeedUrl (via constructor)", () => {
 
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
       provider: "generic",
-      url: expect.stringContaining("desktop-releases.nexu.io/stable/"),
+      url: expect.stringContaining("https://api.claw-pi.cn/updates/stable/"),
     });
   });
 
-  it("sets github provider when resolved feed URL is github://", async () => {
+  it("sets generic provider when source is github", async () => {
     mockAutoUpdater.setFeedURL.mockClear();
 
     await createManager(undefined, { source: "github", channel: "stable" });
 
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
-      provider: "github",
-      owner: "nexu-io",
-      repo: "nexu",
+      provider: "generic",
+      url: expect.stringContaining("https://api.claw-pi.cn/updates/stable/"),
     });
   });
 
@@ -884,10 +882,10 @@ describe("constructor", () => {
     expect(mockAutoUpdater.autoDownload).toBe(true);
   });
 
-  it("sets autoInstallOnAppQuit to true", async () => {
-    mockAutoUpdater.autoInstallOnAppQuit = false;
+  it("disables autoInstallOnAppQuit so updates use managed teardown", async () => {
+    mockAutoUpdater.autoInstallOnAppQuit = true;
     await createManager();
-    expect(mockAutoUpdater.autoInstallOnAppQuit).toBe(true);
+    expect(mockAutoUpdater.autoInstallOnAppQuit).toBe(false);
   });
 
   it("sets forceDevUpdateConfig based on app.isPackaged", async () => {
@@ -906,7 +904,7 @@ describe("constructor", () => {
 
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
       provider: "generic",
-      url: expect.stringContaining("desktop-releases.nexu.io/stable/"),
+      url: expect.stringContaining("https://api.claw-pi.cn/updates/stable/"),
     });
   });
 });

@@ -37,6 +37,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * 工作台 SSE 响应头立即返回，避免 OpenClaw 冷启动期间前端表现为无响应。
 * 工作台 agent run 使用 `bootstrapContextMode="lightweight"`，跳过 AGENTS/SOUL/BOOTSTRAP/MEMORY 首轮注入，避免 onboarding 干扰普通问答。
 * Controller 会等待 OpenClaw 空 final 后的同 session 内层 run，避免过早结束导致 UI 显示“没有收到有效回复”。
+* OpenClaw `chat` event 返回模型/网络错误时，Controller 将其标准化为用户可见错误并结束 SSE，避免上游 `Connection error` 被前端误判为空回复。
 * 工作台请求显式区分 `chat`、`read_only_agent`、`write_agent`、`image_generation`，普通聊天仍走 OpenClaw runner，但使用轻量提示并禁用进度类自动续跑。
 * OpenClaw agent 上下文预算采用保守默认：最近上下文保留 `keepRecentTokens=8000`，工作台附件提取正文最多注入 12000 字符，执行类任务进度自动续跑最多 1 次，空回复重试仍保留 1 次。
 * OpenClaw pricing bootstrap 可通过 `OPENCLAW_SKIP_MODEL_PRICING=1` 禁用，避免首条请求被 OpenRouter 价格表超时拖慢。
@@ -132,6 +133,8 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * Runtime plugin atomic staging：Controller 写入 runtime plugins 时，临时 staging 放在 OpenClaw `extensions` 扫描目录之外，并清理历史 `.staging-*` 残留，避免 OpenClaw 把半成品目录当插件加载。
 * Desktop surface lifecycle：用户主流程 Web 工作台活跃时保持挂载；inactive 超过保留窗口后释放 webview 进程。OpenClaw 原生页只在被激活时挂载。
 * Cold-start branded wait：桌面壳优先停留在龙虾工作台启动界面。Windows 在申请 single-instance lock 前先清理同安装目录/同 `claw-pi-desktop` 上下文的旧 `Claw-Pi.exe`，随后固定清理 `50800`、`50810`、`18789` 的占用 PID，并继续使用固定端口；ready 超时不自动切到诊断/修复页，启动状态和诊断能力保留为手动入口；启动等待页按 Web/Controller/OpenClaw/模型 ready blockers 和本地 runtime unit phase 给出用户可读状态，并提供“重试启动”和“导出诊断包”。连续冷启动失败或 OpenClaw sidecar 完整性标记缺失时重置/重解压可重建 sidecar。所有用户可见兜底界面必须保持 Claw-Pi/龙虾品牌，不暴露 `nexu` 等内部工程名。
+* User-facing error taxonomy：Controller、Web 和诊断导出使用统一错误分类，把模型网络、上游饱和、余额不足、登录过期、模型认证缺失、OpenClaw 未就绪、图片返回丢失、附件解析失败、微信扫码等待等已知失败映射为明确中文文案；已知失败不得退化为“没有收到有效回复”。诊断包根目录写入 `diagnosticsSummary.json`，供售后直接判断本地、账号、余额、上游、图片或微信链路问题。
+* Recharge UX policy：用户侧充值页只展示余额、充值入口、待支付订单和充值记录，不展示模型定价、token 明细或消费日志；余额接口失败统一提示“余额暂时无法显示，请检查网络后重试”，并提供手动刷新。
 
 == 5. 构建块视图
 
@@ -334,6 +337,24 @@ $env:NEXU_DESKTOP_USE_EXISTING_RUNTIME_INSTALL='1'
 pnpm --filter @nexu/desktop dist:win:portable
 ----
 
+Windows 自动更新发布形态使用 NSIS 安装包，而不是 portable 包。发布命令为：
+
+[source,powershell]
+----
+pnpm --filter @nexu/desktop dist:win
+----
+
+发布到更新源时必须同时上传 `claw-pi-setup-<version>-x64.exe`、对应 `.blockmap` 和 `latest.yml` 到 `https://api.claw-pi.cn/updates/stable/x64/`。Windows 打包脚本会把默认更新源写入 `build-config.json`，避免客户端回落到旧的 `api.clawpi.app:9443` 更新源。上传后执行：
+
+[source,powershell]
+----
+pnpm verify:update-feed -- --expected-version <version>
+----
+
+该检查会读取远端 `latest.yml`，验证安装包和 blockmap 可访问，并在完整模式下下载安装包计算 sha512，避免用户侧更新失败或下载到损坏安装包。
+
+Windows 自动更新安装必须经过桌面端 `UpdateManager.quitAndInstall()` 的托管流程：先停止周期检查、关闭 runtime sidecar、清理 Claw-Pi 旧进程、检查关键目录锁，再触发 NSIS 安装。`autoInstallOnAppQuit` 必须保持关闭，避免用户下载更新后直接退出软件时绕过托管停服流程，导致安装器遇到文件锁或残留进程而更新后打不开。
+
 == 8. 横切概念
 
 === 8.1 权限模式
@@ -534,6 +555,22 @@ agent:{agentId}:workbench:{sessionId}
 |Web 龙虾大脑、工作台或微信端首次请求时，`link/gpt-5.5` 凭证必须已同步到 `main` 和 bot agent。
 |首次或失败后请求前出现 `agent_chat_preflight_sync_complete`；稳定态可出现 `agent_chat_preflight_sync_skipped`；若缺失凭证，用户看到模型账号未就绪提示而非原始 OpenClaw 错误。
 
+|上游错误可见性
+|OpenClaw `chat` event 返回 `state=error`，错误为 `network connection error` 或 `Connection error`。
+|Controller SSE 输出标准化错误“模型连接失败，请稍后重试。”并正常结束，不再显示“没有收到有效回复”。
+
+|错误可解释性
+|OpenClaw、云雾、图片、充值或微信链路返回已知失败。
+|Web 和 Controller 按统一分类显示“模型连接失败，请稍后重试。”、“上游分组负载饱和，请稍后再试”、“余额不足，请及时充值”、“登录状态已过期，请重新登录”、“模型账号未就绪，请重新登录或检查云雾连接。”、“OpenClaw 本地服务未就绪，正在重试。”或“图片生成已提交但结果返回失败，请查看诊断。”，不暴露原始堆栈和内部服务名。
+
+|售后诊断性
+|用户导出诊断包后，售后需要无需复现就判断大方向。
+|诊断包包含 `diagnosticsSummary.json`，字段包括 version、lastRunId、lastErrorCategory、startupStatus、openclawReady、modelAuthReady、imagePluginReady、balanceStatus 和 wechatStatus，并给出一句话结论。摘要分类必须覆盖生图 `openai_error`、余额接口不可用、登录过期、微信扫码等待和微信网络异常，避免售后只能看到 `unknown`。
+
+|余额可用性
+|充值页余额接口因为网络、登录状态或云端短暂异常加载失败。
+|页面显示“余额暂时无法显示，请检查网络后重试”，保留刷新余额按钮；登录过期则引导重新登录；用户侧不展示 token、模型定价和消费日志。
+
 |功能正确性
 |工作台回复来自 OpenClaw agent path。
 |日志出现 `agent` request、OpenClaw `chat` event、`nexu-runtime-model`。
@@ -649,6 +686,10 @@ agent:{agentId}:workbench:{sessionId}
 |上下文预算降低
 |`keepRecentTokens=8000`、附件正文 12000 字符和 1 次自动续跑会降低余额消耗，但长对话可能忘记更早背景，长文档可能漏掉后半段细节，复杂执行任务可能需要用户手动继续。
 |优先保持普通聊天和常见文件任务成本可控；后续可按 route 区分预算，例如只读长文档任务允许显式扩展附件提取，普通 chat 保持低预算。
+
+|错误分类误判
+|统一错误分类依赖上游返回文本和本地日志特征。若上游文案变化，可能把未知错误归入相邻类别，影响用户提示和售后判断。
+|分类只对高置信关键字生效，未知错误保留原始摘要到日志和诊断包；新增上游错误样本后补测试，避免把真实链路故障误报成余额或用户操作问题。
 
 |OpenClaw 原生上传图片不能直接变成 `inputImages`
 |原生聊天页上传图片可能只进入对话模型视觉上下文，而不会暴露给 `image_generate` 工具为本机路径/URL。

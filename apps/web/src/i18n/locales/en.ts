@@ -270,8 +270,16 @@ const en = {
   "ask.usage.tokens": "Tokens",
   "ask.usage.cost": "Cost",
   "ask.usage.duration": "Time",
-  "ask.defaultAttachmentPrompt": "Please analyze these attachments.",
-  "ask.emptyResponse": "No usable response received.",
+  "ask.defaultAttachmentPrompt":
+    "Attachments uploaded. Use the current context to handle them.",
+  "ask.emptyResponse":
+    "The task returned no visible result. Please retry or export diagnostics.",
+  "ask.attachment.status.saved": "Saved",
+  "ask.attachment.status.ok": "Text extracted",
+  "ask.attachment.status.truncated": "Text extracted (truncated)",
+  "ask.attachment.status.failed": "Parse failed",
+  "ask.attachment.status.failedWithReason": "Parse failed: {{reason}}",
+  "ask.attachment.status.unsupported": "Parsed after sending",
   "ask.stopped": "Stopped.",
   "ask.requestFailed": "Request failed: {{message}}",
   "ask.imageFailed": "Image generation failed: {{message}}",
@@ -1211,12 +1219,14 @@ const en = {
 
   // ── Recharge Page ──
   "recharge.pageTitle": "Feed",
-  "recharge.pageSubtitle": "Check balance, recharge, and model pricing",
+  "recharge.pageSubtitle": "Check your balance and recharge",
   "recharge.balance": "Current Balance",
   "recharge.balanceCurrency": "¥{{amount}}",
   "recharge.totalRecharged": "Total recharged",
   "recharge.loadingBalance": "Loading balance...",
-  "recharge.balanceUnavailable": "Unable to load balance",
+  "recharge.balanceUnavailable":
+    "Balance is temporarily unavailable. Check your network and retry.",
+  "recharge.retryBalance": "Refresh balance",
   "recharge.codePlaceholder": "Enter recharge code",
   "recharge.codeHint":
     "Enter the recharge code you purchased to add balance to your account",
@@ -1254,9 +1264,8 @@ const en = {
   "tour.step1.title": "Connect a chat platform first",
   "tour.step1.desc":
     "Pick WeChat, QQ Bot, or Feishu so that your bot can start replying to messages automatically.",
-  "tour.step2.title": "Recharge & Usage",
-  "tour.step2.desc":
-    "Top up tokens, check your balance, and review usage details here.",
+  "tour.step2.title": "Recharge & Balance",
+  "tour.step2.desc": "Check your balance and recharge here.",
   "tour.step3.title": "Web Lobster",
   "tour.step3.desc":
     "Once a chat platform is connected, this button lights up. Click it to open the Q&A chat.",

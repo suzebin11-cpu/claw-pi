@@ -79,6 +79,8 @@ type ChatAttachment = {
   dataUrl?: string;
   text?: string;
   truncated?: boolean;
+  extractStatus?: "saved" | "ok" | "truncated" | "failed" | "unsupported";
+  extractError?: string;
 };
 
 type MessageUsage = {
@@ -179,6 +181,17 @@ const ASK_KNOWLEDGE_STORAGE_KEY = "claw-pi.ask.knowledge.v1";
 const ASK_LOCAL_PERMISSIONS_STORAGE_KEY = "claw-pi.ask.localPermissions.v1";
 const ASK_LOCAL_PERMISSIONS_STORAGE_VERSION = 2;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
+const MODEL_NETWORK_ERROR_MESSAGE = "模型连接失败，请稍后重试。";
+const MODEL_AUTH_NOT_READY_MESSAGE =
+  "模型账号未就绪，请重新登录或检查云雾连接。";
+const UPSTREAM_SATURATED_MESSAGE = "上游分组负载饱和，请稍后再试";
+const AUTH_EXPIRED_MESSAGE = "登录状态已过期，请重新登录";
+const OPENCLAW_NOT_READY_MESSAGE = "OpenClaw 本地服务未就绪，正在重试。";
+const OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE =
+  "OpenClaw 配置同步失败，请稍后重试。";
+const IMAGE_RESPONSE_LOST_MESSAGE =
+  "图片生成已提交但结果返回失败，请查看诊断。";
+const EMPTY_RESPONSE_MESSAGE = "任务没有返回可见结果，请重试或导出诊断包。";
 const AGENT_HISTORY_CONTEXT_MESSAGES = 8;
 
 const DEFAULT_LOCAL_PERMISSIONS: LocalDesktopPermissionSettings = {
@@ -671,6 +684,7 @@ async function readAttachment(
     return {
       ...attachment,
       dataUrl: await readAsDataUrl(file),
+      extractStatus: "saved",
     };
   }
 
@@ -692,6 +706,7 @@ async function readAttachment(
       dataUrl,
       text: truncated ? rawText.slice(0, MAX_TEXT_CHARS) : rawText,
       truncated,
+      extractStatus: truncated ? "truncated" : "ok",
     };
   }
 
@@ -703,6 +718,7 @@ async function readAttachment(
   return {
     ...attachment,
     dataUrl: await readAsDataUrl(file),
+    extractStatus: "saved",
   };
 }
 
@@ -725,6 +741,31 @@ function getClipboardFiles(dataTransfer: DataTransfer): File[] {
 
 function attachmentSummary(attachment: ChatAttachment): string {
   return `${attachment.name} (${attachment.type || "unknown"}, ${formatBytes(attachment.size)})`;
+}
+
+function getAttachmentStatusLabel(
+  attachment: ChatAttachment,
+  t: (key: string, options?: Record<string, unknown>) => string,
+): string {
+  if (attachment.extractError) {
+    return t("ask.attachment.status.failedWithReason", {
+      reason: attachment.extractError,
+    });
+  }
+
+  switch (attachment.extractStatus) {
+    case "ok":
+      return t("ask.attachment.status.ok");
+    case "truncated":
+      return t("ask.attachment.status.truncated");
+    case "failed":
+      return t("ask.attachment.status.failed");
+    case "unsupported":
+      return t("ask.attachment.status.unsupported");
+    case "saved":
+    default:
+      return t("ask.attachment.status.saved");
+  }
 }
 
 function buildDisplayText(input: string): string {
@@ -941,10 +982,77 @@ function isInsufficientBalanceError(message: string): boolean {
   );
 }
 
+function isAuthExpiredError(message: string): boolean {
+  return /(?:token|jwt|登录|登陆|auth|authorization).{0,24}(?:过期|expired)|(?:unauthorized|not authenticated|未登录|未认证)/iu.test(
+    message,
+  );
+}
+
+function isUpstreamSaturatedError(message: string): boolean {
+  return /(?:上游.*(?:负载|分组).*(?:饱和|繁忙)|当前分组上游负载已饱和|upstream.*(?:saturat|overload|busy)|rate limit|too many requests|HTTP 429|\b429\b)/iu.test(
+    message,
+  );
+}
+
+function isModelNetworkError(message: string): boolean {
+  return /(?:LLM request failed:\s*)?(?:network connection error|connection error|fetch failed|failed to fetch|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)/iu.test(
+    message,
+  );
+}
+
+function isOpenClawNotReadyError(message: string): boolean {
+  return /(?:openclaw gateway not connected|gateway not connected|not paired|pairing required|device token mismatch|device signature invalid|OpenClaw agent chat timed out)/iu.test(
+    message,
+  );
+}
+
+function isModelAuthNotReadyError(message: string): boolean {
+  return /(?:No API key found|模型账号未就绪|auth-profiles|auth profiles|云雾连接)/iu.test(
+    message,
+  );
+}
+
+function isOpenClawConfigSyncFailedError(message: string): boolean {
+  return /(?:OpenClaw 配置同步失败|config sync failed|sync.*auth.*profile)/iu.test(
+    message,
+  );
+}
+
+function isImageResponseLostError(message: string): boolean {
+  return /(?:图片生成请求未返回完整图片结果|图片生成.*返回失败|image generation.*(?:timed out|timeout|response.*lost|failed)|生图.*(?:超时|返回失败|未返回))/iu.test(
+    message,
+  );
+}
+
 function normalizeWorkbenchErrorMessage(message: string): string {
-  return isInsufficientBalanceError(message)
-    ? INSUFFICIENT_BALANCE_MESSAGE
-    : message;
+  if (isInsufficientBalanceError(message)) return INSUFFICIENT_BALANCE_MESSAGE;
+  if (isAuthExpiredError(message)) return AUTH_EXPIRED_MESSAGE;
+  if (isUpstreamSaturatedError(message)) return UPSTREAM_SATURATED_MESSAGE;
+  if (isImageResponseLostError(message)) return IMAGE_RESPONSE_LOST_MESSAGE;
+  if (isModelAuthNotReadyError(message)) return MODEL_AUTH_NOT_READY_MESSAGE;
+  if (isOpenClawConfigSyncFailedError(message)) {
+    return OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE;
+  }
+  if (isOpenClawNotReadyError(message)) return OPENCLAW_NOT_READY_MESSAGE;
+  if (isModelNetworkError(message)) return MODEL_NETWORK_ERROR_MESSAGE;
+  if (/没有收到有效回复|No usable response received/iu.test(message)) {
+    return EMPTY_RESPONSE_MESSAGE;
+  }
+  return message;
+}
+
+function isStandaloneWorkbenchErrorMessage(message: string): boolean {
+  return [
+    INSUFFICIENT_BALANCE_MESSAGE,
+    MODEL_NETWORK_ERROR_MESSAGE,
+    MODEL_AUTH_NOT_READY_MESSAGE,
+    UPSTREAM_SATURATED_MESSAGE,
+    AUTH_EXPIRED_MESSAGE,
+    OPENCLAW_NOT_READY_MESSAGE,
+    OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE,
+    IMAGE_RESPONSE_LOST_MESSAGE,
+    EMPTY_RESPONSE_MESSAGE,
+  ].includes(message);
 }
 
 function getMessageContentForIntent(message: ChatMessage): string {
@@ -978,8 +1086,44 @@ function hasRecentImageGenerationContext(messages: ChatMessage[]): boolean {
     .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
     .map(getMessageContentForIntent)
     .join("\n");
-  return /(?:生图|生成图片|画一张|画个|改图|修图|图生图|换背景|生成.*海报|image_generate|generate (?:an? )?image|create (?:an? )?image|edit (?:the )?image)/iu.test(
+  return /(?:生图|生成(?:一张|一个|个)?图片|画一张|画个|改图|修图|图生图|换背景|生成.*海报|image_generate|generate (?:an? )?image|create (?:an? )?image|edit (?:the )?image)/iu.test(
     recent,
+  );
+}
+
+function hasRecentOpenableArtifactContext(messages: ChatMessage[]): boolean {
+  const recent = messages
+    .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
+    .map(getMessageContentForIntent)
+    .join("\n");
+  return /(?:网页|浏览器|网址|链接|html|文件|目录|路径|桌面|本机|电脑|生成(?:的|好)?(?:网页|文件|html)|webpage|browser|url|link|html|file|folder|path|desktop|local)/iu.test(
+    recent,
+  );
+}
+
+function isExplicitOpenExecutionRequest(input: {
+  normalized: string;
+  haystack: string;
+  recentMessages: ChatMessage[];
+}): boolean {
+  if (
+    /(?:帮我|请|麻烦|替我|为我)?[^。！？.!?\n]{0,20}打开(?:刚才|之前|上面|这个|那个|你(?:刚才|之前)?(?:做|生成|保存)?(?:好)?的)?[^。！？.!?\n]{0,40}(?:网页|浏览器|文件|链接|网址|路径|html|应用|程序|报告|文档|图片|webpage|browser|file|link|url|path|html|app)/iu.test(
+      input.haystack,
+    ) ||
+    /(?:直接打开|帮我打开|请打开|麻烦打开|打开刚才那个|打开刚才你做好的|打开刚才做好的)/iu.test(
+      input.normalized,
+    ) ||
+    /\bopen\b(?:[^.!?\n]{0,60})\b(?:webpage|browser|file|link|url|path|html|app)\b/iu.test(
+      input.haystack,
+    )
+  ) {
+    return true;
+  }
+
+  return (
+    /^(?:直接打开|打开|帮我打开|请打开|打开一下)$/iu.test(
+      input.normalized,
+    ) && hasRecentOpenableArtifactContext(input.recentMessages)
   );
 }
 
@@ -1002,7 +1146,7 @@ function classifyWorkbenchRequest(input: {
   );
 
   const imageGenerationRequest =
-    /(?:生图|生成图片|画一张|画个|改图|修图|图生图|换背景|生成.*海报|generate (?:an? )?image|create (?:an? )?image|edit (?:the )?image)/iu.test(
+    /(?:生图|生成(?:一张|一个|个)?图片|画一张|画个|改图|修图|图生图|换背景|生成.*海报|generate (?:an? )?image|create (?:an? )?image|edit (?:the )?image)/iu.test(
       haystack,
     );
   if (
@@ -1011,6 +1155,16 @@ function classifyWorkbenchRequest(input: {
       hasRecentImageGenerationContext(input.recentMessages))
   ) {
     return "image_generation";
+  }
+
+  if (
+    isExplicitOpenExecutionRequest({
+      normalized,
+      haystack,
+      recentMessages: input.recentMessages,
+    })
+  ) {
+    return "write_agent";
   }
 
   const writeRequest =
@@ -1064,6 +1218,10 @@ function classifyWorkbenchRequest(input: {
 
   return "chat";
 }
+
+export const __test__ = {
+  classifyWorkbenchRequest,
+};
 
 function buildAgentWorkbenchMessage(input: {
   text: string;
@@ -1448,7 +1606,8 @@ function MessageBubble({
                     isUser ? "text-text-muted" : "text-text-muted",
                   )}
                 >
-                  {formatBytes(attachment.size)}
+                  {formatBytes(attachment.size)} ·{" "}
+                  {getAttachmentStatusLabel(attachment, t)}
                 </div>
                 {attachment.kind === "image" && attachment.dataUrl ? (
                   <div className="mt-1.5 flex items-center gap-1">
@@ -2287,7 +2446,9 @@ export function AskPage() {
         }));
       });
 
-      const finalAssistantText = completion.text || t("ask.emptyResponse");
+      const finalAssistantText = normalizeWorkbenchErrorMessage(
+        completion.text || t("ask.emptyResponse"),
+      );
       const outputTokenEstimate = estimateTokensFromText(finalAssistantText);
       const inputTokens = completion.usage?.promptTokens ?? inputTokenEstimate;
       const outputTokens =
@@ -2341,7 +2502,7 @@ export function AskPage() {
           ? normalizeWorkbenchErrorMessage(error.message.trim())
           : t("ask.toast.sendFailed");
       const failedText =
-        errorMessage === INSUFFICIENT_BALANCE_MESSAGE
+        isStandaloneWorkbenchErrorMessage(errorMessage)
           ? errorMessage
           : workbenchRoute === "image_generation"
             ? t("ask.imageFailed", { message: errorMessage })
@@ -2868,7 +3029,7 @@ export function AskPage() {
                         {attachment.name}
                       </span>
                       <span className="shrink-0 text-text-muted">
-                        {formatBytes(attachment.size)}
+                        {getAttachmentStatusLabel(attachment, t)}
                       </span>
                       <button
                         type="button"

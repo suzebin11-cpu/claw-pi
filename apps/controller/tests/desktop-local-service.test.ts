@@ -42,7 +42,7 @@ describe("DesktopLocalService billing auth errors", () => {
 
     await expect(service.getBalance()).resolves.toMatchObject({
       ok: false,
-      error: "登录已过期，请重新登录",
+      error: "登录状态已过期，请重新登录",
     });
     expect(clearActivation).toHaveBeenCalledTimes(1);
   });
@@ -56,7 +56,7 @@ describe("DesktopLocalService billing auth errors", () => {
 
     await expect(service.createAlipayOrder(1000)).resolves.toMatchObject({
       ok: false,
-      error: "登录已过期，请重新登录",
+      error: "登录状态已过期，请重新登录",
     });
     expect(clearActivation).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(1);

@@ -14,7 +14,8 @@ type ActivationServerResponse = {
   error?: string;
 };
 
-const AUTH_EXPIRED_MESSAGE = "登录已过期，请重新登录";
+const AUTH_EXPIRED_MESSAGE = "登录状态已过期，请重新登录";
+const BALANCE_UNAVAILABLE_MESSAGE = "余额暂时无法显示，请检查网络后重试";
 
 function maskActivationCode(code: string): string {
   if (code.length <= 8) return code;
@@ -271,7 +272,7 @@ export class DesktopLocalService {
   }> {
     const jwt = await this.configStore.getActivationJwt();
     if (!jwt) {
-      return { ok: false, error: "Not authenticated" };
+      return { ok: false, error: AUTH_EXPIRED_MESSAGE };
     }
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
@@ -327,7 +328,7 @@ export class DesktopLocalService {
   }> {
     const jwt = await this.configStore.getActivationJwt();
     if (!jwt) {
-      return { ok: false, error: "Not authenticated" };
+      return { ok: false, error: AUTH_EXPIRED_MESSAGE };
     }
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
@@ -343,7 +344,7 @@ export class DesktopLocalService {
         timeoutMs: 10_000,
       });
     } catch {
-      return { ok: false, error: "Server unreachable" };
+      return { ok: false, error: BALANCE_UNAVAILABLE_MESSAGE };
     }
 
     if (!res.ok) {
@@ -442,7 +443,7 @@ export class DesktopLocalService {
         total: 0,
         page,
         page_size: pageSize,
-        error: "Not authenticated",
+        error: AUTH_EXPIRED_MESSAGE,
       };
     }
 
@@ -509,7 +510,7 @@ export class DesktopLocalService {
   }> {
     const jwt = await this.configStore.getActivationJwt();
     if (!jwt) {
-      return { ok: false, error: "Not authenticated" };
+      return { ok: false, error: AUTH_EXPIRED_MESSAGE };
     }
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
@@ -571,7 +572,7 @@ export class DesktopLocalService {
   }> {
     const jwt = await this.configStore.getActivationJwt();
     if (!jwt) {
-      return { ok: false, error: "Not authenticated" };
+      return { ok: false, error: AUTH_EXPIRED_MESSAGE };
     }
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
@@ -626,7 +627,7 @@ export class DesktopLocalService {
   }> {
     const jwt = await this.configStore.getActivationJwt();
     if (!jwt) {
-      return { ok: false, error: "Not authenticated" };
+      return { ok: false, error: AUTH_EXPIRED_MESSAGE };
     }
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
@@ -677,7 +678,7 @@ export class DesktopLocalService {
   }> {
     const jwt = await this.configStore.getActivationJwt();
     if (!jwt) {
-      return { ok: false, error: "Not authenticated" };
+      return { ok: false, error: AUTH_EXPIRED_MESSAGE };
     }
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
@@ -731,7 +732,7 @@ export class DesktopLocalService {
         total: 0,
         page,
         page_size: pageSize,
-        error: "Not authenticated",
+        error: AUTH_EXPIRED_MESSAGE,
       };
     }
 

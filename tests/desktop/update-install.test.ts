@@ -73,7 +73,7 @@ vi.mock("../../apps/desktop/main/services/launchd-manager", () => ({
 }));
 
 vi.mock("../../apps/desktop/main/updater/component-updater", () => ({
-  R2_BASE_URL: "https://desktop-releases.nexu.io",
+  R2_BASE_URL: "https://api.claw-pi.cn/updates",
 }));
 
 // ---------------------------------------------------------------------------

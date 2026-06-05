@@ -290,9 +290,8 @@ async function ensureBuildConfig() {
     ...(merged.NEXU_SENTRY_ENV
       ? { NEXU_SENTRY_ENV: merged.NEXU_SENTRY_ENV }
       : {}),
-    ...(merged.CLAWPI_UPDATE_FEED_URL
-      ? { CLAWPI_UPDATE_FEED_URL: merged.CLAWPI_UPDATE_FEED_URL }
-      : {}),
+    CLAWPI_UPDATE_FEED_URL:
+      merged.CLAWPI_UPDATE_FEED_URL ?? "https://api.claw-pi.cn/updates",
     ...(merged.NEXU_DESKTOP_AUTO_UPDATE_ENABLED
       ? {
           NEXU_DESKTOP_AUTO_UPDATE_ENABLED:

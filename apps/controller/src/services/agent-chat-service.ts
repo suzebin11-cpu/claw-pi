@@ -61,6 +61,19 @@ type OpenClawImageAttachment = {
   content: string;
 };
 
+export type AgentChatErrorCategory =
+  | "model_network_error"
+  | "upstream_saturated"
+  | "insufficient_balance"
+  | "auth_expired"
+  | "model_auth_not_ready"
+  | "openclaw_not_ready"
+  | "image_response_lost"
+  | "attachment_extract_failed"
+  | "wechat_qr_pending"
+  | "update_failed"
+  | "unknown";
+
 type AgentChatPreflightSyncService = {
   syncAllImmediate(): Promise<{ configPushed: boolean }>;
   getCurrentSyncPromise?(): Promise<{ configPushed: boolean }> | null;
@@ -115,10 +128,20 @@ const AGENT_CHAT_EMPTY_FINAL_RETRY_MAX_TURNS = 1;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_FINAL_CHARS = 1600;
 const ATTACHMENT_EXTRACT_MAX_CHARS = 12_000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
+const AUTH_EXPIRED_MESSAGE = "登录状态已过期，请重新登录";
+const UPSTREAM_SATURATED_MESSAGE = "上游分组负载饱和，请稍后再试";
 const MODEL_AUTH_NOT_READY_MESSAGE =
   "模型账号未就绪，请重新登录或检查云雾连接。";
+const MODEL_NETWORK_ERROR_MESSAGE = "模型连接失败，请稍后重试。";
 const OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE =
   "OpenClaw 配置同步失败，请稍后重试。";
+const OPENCLAW_NOT_READY_MESSAGE = "OpenClaw 本地服务未就绪，正在重试。";
+const IMAGE_RESPONSE_LOST_MESSAGE =
+  "图片生成已提交但结果返回失败，请查看诊断。";
+const AGENT_CHAT_EMPTY_RESPONSE_MESSAGE =
+  "任务没有返回可见结果，请重试或导出诊断包。";
+const LOCAL_EXECUTION_BLOCKED_MESSAGE =
+  "本地执行工具未返回结果，请重试或导出诊断包。";
 const AGENT_CHAT_AUTO_CONTINUE_PROMPT =
   "继续执行当前任务。不要只回复计划、状态或道歉；需要本机/文件/网页/生图操作时，立即调用 OpenClaw 可用工具完成。最终回复只能是完成结果、产物路径/图片链接，或明确阻塞原因与所需输入。";
 const AGENT_CHAT_EMPTY_ATTACHMENT_RETRY_PROMPT =
@@ -131,6 +154,17 @@ const WORKBENCH_ACTION_REQUEST_PATTERNS = [
   /(?:帮我|请|麻烦|替我|为我)(?:[^。！？.!?\n]{0,60})(?:找|查|搜|打开|创建|新建|读取|提取|总结|分析|运行|执行|重启|安装|下载|生成|生图|改图|处理|修复|验证|测试|修改|编辑|添加|新增|插入|追加|补充|填入|录入|登记|更新|替换|加一行)/iu,
   /^(?:继续|接着|继续处理|继续执行|好的继续|然后呢|然后|是的|好的)$/iu,
   /\b(?:open|create|write|save|read|find|search|locate|extract|summarize|analyze|run|execute|restart|install|download|generate|process|fix|verify|test|modify|edit|add|insert|append|update|replace)\b(?:[^.!?\n]{0,60})\b(?:file|folder|path|desktop|computer|pdf|excel|word|ppt|image|browser|app|table|row|column|record)\b/iu,
+];
+const LOCAL_OPEN_ACTION_REQUEST_PATTERNS = [
+  /(?:打开|直接打开|帮我打开|请打开|麻烦打开)(?:刚才|之前|上面|这个|那个|你(?:刚才|之前)?(?:做|生成|保存)?(?:好)?的)?[^。！？.!?\n]{0,60}(?:网页|浏览器|文件|链接|网址|路径|html|应用|程序|报告|文档|图片)/iu,
+  /^(?:直接打开|打开|帮我打开|请打开|打开一下)$/iu,
+  /\bopen\b(?:[^.!?\n]{0,60})\b(?:webpage|browser|file|link|url|path|html|app)\b/iu,
+];
+const SOFT_TOOL_LIMIT_FINAL_PATTERNS = [
+  /(?:工具额度|软限制|soft limit|tool quota|tool limit|permission soft)/iu,
+  /(?:无法|不能|没法)(?:[^。！？.!?\n]{0,40})(?:继续|直接|自动)(?:[^。！？.!?\n]{0,40})(?:打开|执行|操作)/iu,
+  /(?:请|可以)(?:[^。！？.!?\n]{0,40})(?:手动|自己)(?:[^。！？.!?\n]{0,40})(?:打开|执行|操作)/iu,
+  /(?:权限|工具)(?:[^。！？.!?\n]{0,40})(?:受限|限制|不可用|不足)/iu,
 ];
 const WRITE_EXECUTION_INTENT_PATTERNS = [
   /(?:创建|新建|写入|保存|另存|导出|修改|编辑|删除|移动|复制|重命名|替换|覆盖|更新|改成)/iu,
@@ -410,6 +444,20 @@ function hasExplicitWriteIntent(message: string): boolean {
   );
 }
 
+function hasLocalOpenActionIntent(message: string): boolean {
+  const normalized = message.replace(/\s+/gu, " ").trim();
+  return LOCAL_OPEN_ACTION_REQUEST_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+}
+
+function isSoftToolLimitFinal(message: string): boolean {
+  const normalized = cleanAssistantText(message).replace(/\s+/gu, " ").trim();
+  return SOFT_TOOL_LIMIT_FINAL_PATTERNS.some((pattern) =>
+    pattern.test(normalized),
+  );
+}
+
 function resolveEffectiveExecutionMode(input: {
   requestedExecutionMode: AgentExecutionMode;
   permissionMode: AgentPermissionMode;
@@ -432,27 +480,94 @@ function isInsufficientBalanceError(message: string): boolean {
   );
 }
 
+function isAuthExpiredError(message: string): boolean {
+  return /(?:token|jwt|登录|登陆|auth|authorization).{0,24}(?:过期|expired)|(?:unauthorized|not authenticated|未登录|未认证)/iu.test(
+    message,
+  );
+}
+
+function isUpstreamSaturatedError(message: string): boolean {
+  return /(?:上游.*(?:负载|分组).*(?:饱和|繁忙)|当前分组上游负载已饱和|upstream.*(?:saturat|overload|busy)|rate limit|too many requests|HTTP 429|\b429\b)/iu.test(
+    message,
+  );
+}
+
 function isModelAuthNotReadyError(message: string): boolean {
   return /(?:No API key found for provider ["']?link["']?|auth-profiles\.json|Configure auth for this agent)/iu.test(
     message,
   );
 }
 
-function normalizeAgentErrorMessage(message: string): string {
-  if (isInsufficientBalanceError(message)) {
-    return INSUFFICIENT_BALANCE_MESSAGE;
+function isModelNetworkError(message: string): boolean {
+  return /(?:LLM request failed:\s*)?(?:network connection error|connection error|fetch failed|failed to fetch|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)/iu.test(
+    message,
+  );
+}
+
+function isOpenClawNotReadyError(message: string): boolean {
+  return /(?:OpenClaw 配置同步失败|config sync failed|sync.*auth.*profile|openclaw gateway not connected|gateway not connected|not paired|pairing required|device token mismatch|device signature invalid|request ".*" timed out|OpenClaw agent chat timed out)/iu.test(
+    message,
+  );
+}
+
+function isImageResponseLostError(message: string): boolean {
+  return /(?:图片生成请求未返回完整图片结果|图片生成.*返回失败|image generation.*(?:timed out|timeout|response.*lost|failed)|生图.*(?:超时|返回失败|未返回))/iu.test(
+    message,
+  );
+}
+
+export function classifyAgentChatErrorMessage(
+  message: string,
+): AgentChatErrorCategory {
+  if (isInsufficientBalanceError(message)) return "insufficient_balance";
+  if (isAuthExpiredError(message)) return "auth_expired";
+  if (isModelAuthNotReadyError(message)) return "model_auth_not_ready";
+  if (isUpstreamSaturatedError(message)) return "upstream_saturated";
+  if (isImageResponseLostError(message)) return "image_response_lost";
+  if (isOpenClawNotReadyError(message)) return "openclaw_not_ready";
+  if (isModelNetworkError(message)) return "model_network_error";
+  return "unknown";
+}
+
+export function normalizeAgentChatUserMessage(message: string): string {
+  if (
+    message === OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE ||
+    /(?:OpenClaw 配置同步失败|config sync failed|sync.*auth.*profile)/iu.test(
+      message,
+    )
+  ) {
+    return OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE;
   }
-  if (isModelAuthNotReadyError(message)) {
-    return MODEL_AUTH_NOT_READY_MESSAGE;
+  switch (classifyAgentChatErrorMessage(message)) {
+    case "insufficient_balance":
+      return INSUFFICIENT_BALANCE_MESSAGE;
+    case "auth_expired":
+      return AUTH_EXPIRED_MESSAGE;
+    case "model_auth_not_ready":
+      return MODEL_AUTH_NOT_READY_MESSAGE;
+    case "upstream_saturated":
+      return UPSTREAM_SATURATED_MESSAGE;
+    case "image_response_lost":
+      return IMAGE_RESPONSE_LOST_MESSAGE;
+    case "openclaw_not_ready":
+      return OPENCLAW_NOT_READY_MESSAGE;
+    case "model_network_error":
+      return MODEL_NETWORK_ERROR_MESSAGE;
+    default:
+      return message;
   }
-  return message;
 }
 
 function isUserFacingAgentError(message: string): boolean {
   return (
     message === INSUFFICIENT_BALANCE_MESSAGE ||
+    message === AUTH_EXPIRED_MESSAGE ||
+    message === UPSTREAM_SATURATED_MESSAGE ||
     message === MODEL_AUTH_NOT_READY_MESSAGE ||
-    message === OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE
+    message === MODEL_NETWORK_ERROR_MESSAGE ||
+    message === OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE ||
+    message === OPENCLAW_NOT_READY_MESSAGE ||
+    message === IMAGE_RESPONSE_LOST_MESSAGE
   );
 }
 
@@ -541,6 +656,7 @@ function buildWorkbenchSystemPrompt(input: {
     "这是龙虾工作台的直接对话请求，优先回答用户当前消息。",
     modeDirective,
     "如果用户要求查找/读取/处理本机文件、运行命令、打开网页/应用、生成或修改图片，必须先调用可用工具执行；不要把“我会/我先/我正在/我准备”这类计划或进度说明作为最终答复。",
+    "如果用户明确要求打开网页、打开文件或打开浏览器，必须调用可用工具执行打开动作；不要只建议用户手动打开，也不要把工具额度/软限制作为最终答复。",
     "最终答复必须包含实际结果、产物路径/图片链接，或明确阻塞原因与所需输入；任务没完成时继续执行。",
     buildPermissionDirective(input.permissionMode),
   ].join("\n\n");
@@ -666,6 +782,7 @@ function shouldAutoContinueFinal(input: {
   autoContinueTurns: number;
   maxTurns: number;
   userMessage: string;
+  requestRoute: AgentChatRequestRoute;
   permissionMode: AgentPermissionMode;
   savedFileCount: number;
   toolActivitySeen: boolean;
@@ -693,6 +810,24 @@ function shouldAutoContinueFinal(input: {
     permissionMode: input.permissionMode,
     savedFileCount: input.savedFileCount,
   });
+
+  if (
+    input.requestRoute === "write_agent" &&
+    !input.toolActivitySeen &&
+    hasLocalOpenActionIntent(input.userMessage) &&
+    isSoftToolLimitFinal(normalized)
+  ) {
+    return true;
+  }
+
+  if (
+    input.requestRoute === "image_generation" &&
+    !input.toolActivitySeen &&
+    isSoftToolLimitFinal(normalized)
+  ) {
+    return true;
+  }
+
   if (
     !isActionRequest &&
     !input.toolActivitySeen &&
@@ -713,6 +848,20 @@ function shouldAutoContinueFinal(input: {
   }
 
   return true;
+}
+
+function shouldSuppressLocalExecutionBlockedFinal(input: {
+  finalText: string;
+  userMessage: string;
+  requestRoute: AgentChatRequestRoute;
+  toolActivitySeen: boolean;
+}): boolean {
+  return (
+    input.requestRoute === "write_agent" &&
+    !input.toolActivitySeen &&
+    hasLocalOpenActionIntent(input.userMessage) &&
+    isSoftToolLimitFinal(input.finalText)
+  );
 }
 
 function asChatPayload(payload: unknown): OpenClawChatEventPayload | null {
@@ -922,6 +1071,9 @@ export class AgentChatService {
       requestRoute,
     });
     const userMessage = input.message;
+    const shouldBufferPreToolText =
+      requestRoute === "image_generation" ||
+      (requestRoute === "write_agent" && hasLocalOpenActionIntent(userMessage));
     const message = buildAgentMessage({
       message: appendSavedFileReferences({
         message: input.message,
@@ -954,6 +1106,7 @@ export class AgentChatService {
     let controllerRef: ReadableStreamDefaultController<Uint8Array> | null =
       null;
     let lastText = "";
+    let bufferedPreToolText = "";
     let settled = false;
     let firstMatchingEventLogged = false;
     let firstTextLogged = false;
@@ -972,6 +1125,7 @@ export class AgentChatService {
     let gatewayWaitMs: number | null = null;
     let submitMs: number | null = null;
     let firstTextMs: number | null = null;
+    let lastErrorCategory: AgentChatErrorCategory | null = null;
 
     const sendAgentRun = async (
       requestRunId: string,
@@ -1023,6 +1177,7 @@ export class AgentChatService {
           savedFileCount: savedFiles.length,
           autoContinueTurns,
           emptyFinalRetries,
+          errorCategory: lastErrorCategory,
         },
         "agent_chat_latency_summary",
       );
@@ -1106,6 +1261,7 @@ export class AgentChatService {
           runId,
           elapsedMs: Date.now() - streamStartedAt,
           error: error.message,
+          errorCategory: classifyAgentChatErrorMessage(error.message),
         },
         "agent_chat_stream_fail",
       );
@@ -1117,7 +1273,52 @@ export class AgentChatService {
       }
     };
 
-    const writeText = (nextText: string) => {
+    const enqueueTextDelta = (delta: string) => {
+      enqueue(
+        toSseChunk({
+          choices: [{ delta: { content: delta } }],
+        }),
+      );
+    };
+
+    const logFirstTextIfNeeded = (textLength: number) => {
+      if (firstTextLogged) {
+        return;
+      }
+      firstTextLogged = true;
+      firstTextMs = Date.now() - streamStartedAt;
+      logger.info(
+        {
+          route: "agentChat.stream",
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+          sessionKey,
+          runId,
+          elapsedMs: firstTextMs,
+          textLength,
+        },
+        "agent_chat_first_text",
+      );
+    };
+
+    const flushBufferedPreToolText = () => {
+      if (!bufferedPreToolText) {
+        return;
+      }
+      logFirstTextIfNeeded(lastText.length);
+      enqueueTextDelta(bufferedPreToolText);
+      bufferedPreToolText = "";
+    };
+
+    const discardBufferedPreToolText = () => {
+      if (!bufferedPreToolText) {
+        return;
+      }
+      bufferedPreToolText = "";
+      lastText = "";
+    };
+
+    const writeText = (nextText: string, options?: { force?: boolean }) => {
       if (!nextText) {
         return;
       }
@@ -1134,32 +1335,22 @@ export class AgentChatService {
         return;
       }
 
-      if (!firstTextLogged) {
-        firstTextLogged = true;
-        firstTextMs = Date.now() - streamStartedAt;
-        logger.info(
-          {
-            route: "agentChat.stream",
-            agentId: input.agentId,
-            sessionId: input.sessionId,
-            sessionKey,
-            runId,
-            elapsedMs: firstTextMs,
-            textLength: normalizedNextText.length,
-          },
-          "agent_chat_first_text",
-        );
+      if (
+        shouldBufferPreToolText &&
+        !options?.force &&
+        !toolActivitySeen
+      ) {
+        bufferedPreToolText += delta;
+        return;
       }
 
-      enqueue(
-        toSseChunk({
-          choices: [{ delta: { content: delta } }],
-        }),
-      );
+      logFirstTextIfNeeded(normalizedNextText.length);
+      enqueueTextDelta(delta);
     };
 
     const noteToolActivity = (eventName: string) => {
       toolActivitySeen = true;
+      flushBufferedPreToolText();
       if (firstToolActivityLogged) {
         return;
       }
@@ -1330,7 +1521,8 @@ export class AgentChatService {
             return;
           }
           waitingForSessionContinuation = false;
-          writeText("没有收到有效回复，请重试。");
+          lastErrorCategory = "unknown";
+          writeText(AGENT_CHAT_EMPTY_RESPONSE_MESSAGE, { force: true });
           logger.warn(
             {
               route: "agentChat.stream",
@@ -1340,6 +1532,7 @@ export class AgentChatService {
               runId,
               eventRunId: payloadRunId,
               emptyFinalRetries,
+              errorCategory: lastErrorCategory,
               elapsedMs: Date.now() - streamStartedAt,
             },
             "agent_chat_empty_final_exhausted",
@@ -1352,6 +1545,7 @@ export class AgentChatService {
             finalText: messageText,
             autoContinueTurns,
             userMessage,
+            requestRoute,
             permissionMode,
             savedFileCount: savedFiles.length,
             toolActivitySeen,
@@ -1361,6 +1555,7 @@ export class AgentChatService {
                 : AGENT_CHAT_PROGRESS_AUTO_CONTINUE_MAX_TURNS,
           })
         ) {
+          discardBufferedPreToolText();
           autoContinueTurns += 1;
           const continuationRunId = randomUUID();
           activeRunId = continuationRunId;
@@ -1419,6 +1614,20 @@ export class AgentChatService {
             });
           return;
         }
+        if (
+          shouldSuppressLocalExecutionBlockedFinal({
+            finalText: messageText,
+            userMessage,
+            requestRoute,
+            toolActivitySeen,
+          })
+        ) {
+          discardBufferedPreToolText();
+          writeText(LOCAL_EXECUTION_BLOCKED_MESSAGE, { force: true });
+          finish();
+          return;
+        }
+        flushBufferedPreToolText();
         finish();
         return;
       }
@@ -1433,13 +1642,14 @@ export class AgentChatService {
       }
 
       if (state === "error") {
-        const errorMessage = normalizeAgentErrorMessage(
+        const rawErrorMessage =
           typeof payload.errorMessage === "string"
             ? payload.errorMessage
-            : "OpenClaw agent chat failed",
-        );
+            : "OpenClaw agent chat failed";
+        lastErrorCategory = classifyAgentChatErrorMessage(rawErrorMessage);
+        const errorMessage = normalizeAgentChatUserMessage(rawErrorMessage);
         if (isUserFacingAgentError(errorMessage)) {
-          writeText(errorMessage);
+          writeText(errorMessage, { force: true });
           finish();
           return;
         }
@@ -1623,9 +1833,10 @@ export class AgentChatService {
         "agent_chat_ws_request_done",
       );
     })().catch((error) => {
-      const message = normalizeAgentErrorMessage(
-        error instanceof Error ? error.message : "OpenClaw agent chat failed",
-      );
+      const rawMessage =
+        error instanceof Error ? error.message : "OpenClaw agent chat failed";
+      lastErrorCategory = classifyAgentChatErrorMessage(rawMessage);
+      const message = normalizeAgentChatUserMessage(rawMessage);
       logger.warn(
         {
           route: "agentChat.stream",
@@ -1634,12 +1845,13 @@ export class AgentChatService {
           sessionKey,
           runId,
           error: message,
+          errorCategory: lastErrorCategory,
         },
         "agent_chat_send_failed",
       );
       if (!lastText) {
         if (isUserFacingAgentError(message)) {
-          writeText(message);
+          writeText(message, { force: true });
           finish();
         } else {
           fail(new Error(message));

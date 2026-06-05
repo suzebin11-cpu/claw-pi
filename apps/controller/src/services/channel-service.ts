@@ -1008,6 +1008,7 @@ export class ChannelService {
         connected: false,
         message: "当前没有进行中的登录，请先发起登录。",
         expired: true,
+        status: "expired" as const,
       };
     }
 
@@ -1017,6 +1018,7 @@ export class ChannelService {
         connected: false,
         message: "二维码已过期，请重新生成。",
         expired: true,
+        status: "expired" as const,
       };
     }
 
@@ -1110,6 +1112,7 @@ export class ChannelService {
           connected: false,
           message: "二维码已过期，请重新生成。",
           expired: true,
+          status: "expired" as const,
         };
       }
 
@@ -1138,6 +1141,7 @@ export class ChannelService {
           connected: true,
           message: "已扫码，正在同步微信连接。",
           accountId: normalizedAccountId,
+          status: "connected" as const,
         };
       }
     }
@@ -1154,6 +1158,10 @@ export class ChannelService {
       message:
         "仍在等待手机微信扫码/确认。如果手机端提示“请检查网络”，请重新生成二维码，或切换手机网络后再试。",
       pending: true,
+      status:
+        lastLoggedStatus === "scaned"
+          ? ("scanned_waiting_confirm" as const)
+          : ("waiting_scan" as const),
     };
   }
 

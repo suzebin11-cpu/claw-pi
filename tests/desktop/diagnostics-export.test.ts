@@ -19,6 +19,7 @@ const mockApp = {
     if (name === "crashDumps") return "/app/crash-dumps";
     return `/app/${name}`;
   }),
+  getVersion: vi.fn(() => "0.3.test"),
   isPackaged: true,
 };
 
@@ -91,6 +92,32 @@ function asRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function createRuntimeState() {
+  return {
+    startedAt: "2026-06-03T00:00:00.000Z",
+    units: [
+      {
+        id: "openclaw-runtime",
+        label: "OpenClaw Runtime",
+        phase: "running",
+        port: 18789,
+        lastError: null,
+        lastReasonCode: null,
+        restartCount: 0,
+      },
+      {
+        id: "nexu-controller",
+        label: "nexu Controller",
+        phase: "running",
+        port: 50800,
+        lastError: null,
+        lastReasonCode: null,
+        restartCount: 0,
+      },
+    ],
+  };
+}
+
 describe("buildMachineSummary", () => {
   const originalPlatform = process.platform;
 
@@ -159,5 +186,81 @@ describe("buildMachineSummary", () => {
       stdout: "x86_64",
     });
     expect(mockSpawnSync).not.toHaveBeenCalled();
+  });
+});
+
+describe("buildDiagnosticsSummary", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    mockApp.getVersion.mockReturnValue("0.3.test");
+  });
+
+  it("classifies image openai_error failures as image response failures", async () => {
+    const { buildDiagnosticsSummary } = await import(
+      "../../apps/desktop/main/diagnostics-export"
+    );
+    const summary = buildDiagnosticsSummary({
+      runtimeConfig: createRuntimeConfig(),
+      runtimeState: createRuntimeState() as never,
+      diagnosticText:
+        "runId=img_123 gpt-image-2 /v1/images/generations returned 406 openai_error, 没有出图",
+      desktopDiagnosticsSummary: null,
+    });
+
+    expect(summary.lastRunId).toBe("img_123");
+    expect(summary.lastErrorCategory).toBe("image_response_lost");
+    expect(summary.conclusion).toBe("本次失败原因：图片生成结果返回失败");
+    expect(summary.openclawReady).toBe(true);
+  });
+
+  it("classifies balance fetch failures without treating recharge UI as insufficient balance", async () => {
+    const { buildDiagnosticsSummary } = await import(
+      "../../apps/desktop/main/diagnostics-export"
+    );
+    const summary = buildDiagnosticsSummary({
+      runtimeConfig: createRuntimeConfig(),
+      runtimeState: createRuntimeState() as never,
+      diagnosticText:
+        "recharge page: Failed to fetch balance. 余额暂时无法显示，请检查网络后重试",
+      desktopDiagnosticsSummary: null,
+    });
+
+    expect(summary.lastErrorCategory).toBe("balance_unavailable");
+    expect(summary.balanceStatus).toBe("unavailable");
+    expect(summary.conclusion).toBe(
+      "本次失败原因：余额暂时无法显示或余额接口不可用",
+    );
+  });
+
+  it("keeps expired auth ahead of generic balance unavailable errors", async () => {
+    const { buildDiagnosticsSummary } = await import(
+      "../../apps/desktop/main/diagnostics-export"
+    );
+    const summary = buildDiagnosticsSummary({
+      runtimeConfig: createRuntimeConfig(),
+      runtimeState: createRuntimeState() as never,
+      diagnosticText: "token 已过期，无法加载余额，请重新登录",
+      desktopDiagnosticsSummary: null,
+    });
+
+    expect(summary.lastErrorCategory).toBe("auth_expired");
+    expect(summary.balanceStatus).toBe("auth_expired");
+  });
+
+  it("classifies WeChat network failures separately from QR pending state", async () => {
+    const { buildDiagnosticsSummary } = await import(
+      "../../apps/desktop/main/diagnostics-export"
+    );
+    const summary = buildDiagnosticsSummary({
+      runtimeConfig: createRuntimeConfig(),
+      runtimeState: createRuntimeState() as never,
+      diagnosticText: "wechat connect failed: 请检查网络后重试",
+      desktopDiagnosticsSummary: null,
+    });
+
+    expect(summary.lastErrorCategory).toBe("wechat_network_error");
+    expect(summary.wechatStatus).toBe("network_error");
+    expect(summary.conclusion).toBe("本次失败原因：微信连接网络异常");
   });
 });

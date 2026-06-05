@@ -120,7 +120,9 @@ export class UpdateManager {
     this.currentFeedUrl = getDefaultR2FeedUrl(this.channel);
 
     autoUpdater.autoDownload = options?.autoDownload ?? false;
-    autoUpdater.autoInstallOnAppQuit = true;
+    // Windows updates must go through quitAndInstall(), which tears down
+    // local sidecars and checks locked paths before the NSIS installer runs.
+    autoUpdater.autoInstallOnAppQuit = false;
     autoUpdater.forceDevUpdateConfig = !app.isPackaged;
     this.configureFeedUrl();
     this.bindEvents();

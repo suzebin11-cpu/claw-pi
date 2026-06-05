@@ -15,6 +15,10 @@
     <p style="font-size: 16px; font-weight: 600; margin: 0 0 4px;">⚡ 快速上手</p>
     <p style="font-size: 14px; color: var(--vp-c-text-2); margin: 0;">一分钟内让你的 AI Agent 跑起来</p>
   </a>
+  <a href="/zh/guide/claw-pi-user-manual-faq" style="display: block; padding: 20px; border: 1px solid var(--vp-c-divider); border-radius: 12px; text-decoration: none; color: inherit; transition: border-color 0.25s, box-shadow 0.25s;">
+    <p style="font-size: 16px; font-weight: 600; margin: 0 0 4px;">使用文档与 Q&A</p>
+    <p style="font-size: 14px; color: var(--vp-c-text-2); margin: 0;">安装、充值、问答、生图、微信和常见问题</p>
+  </a>
   <a href="/zh/guide/concepts" style="display: block; padding: 20px; border: 1px solid var(--vp-c-divider); border-radius: 12px; text-decoration: none; color: inherit; transition: border-color 0.25s, box-shadow 0.25s;">
     <p style="font-size: 16px; font-weight: 600; margin: 0 0 4px;">💡 核心概念</p>
     <p style="font-size: 14px; color: var(--vp-c-text-2); margin: 0;">了解 Agent、渠道、模型、技能</p>

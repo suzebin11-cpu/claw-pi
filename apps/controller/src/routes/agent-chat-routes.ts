@@ -1,6 +1,10 @@
 import { type OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import type { ControllerContainer } from "../app/container.js";
 import { logger } from "../lib/logger.js";
+import {
+  classifyAgentChatErrorMessage,
+  normalizeAgentChatUserMessage,
+} from "../services/agent-chat-service.js";
 import type { ControllerBindings } from "../types.js";
 
 const agentChatAttachmentSchema = z.object({
@@ -38,14 +42,6 @@ const extractedAttachmentSchema = z.object({
   extractStatus: z.enum(["ok", "truncated", "failed", "unsupported"]),
   extractError: z.string().optional(),
 });
-
-function normalizeAgentChatError(message: string): string {
-  return /(?:token quota is not enough|need quota|insufficient (?:balance|quota|credits?)|quota.+not enough|余额不足|额度不足|余额不够|充值)/iu.test(
-    message,
-  )
-    ? "余额不足，请及时充值"
-    : message;
-}
 
 function resolveDefaultAgentId(
   config: Awaited<ReturnType<ControllerContainer["configStore"]["getConfig"]>>,
@@ -145,15 +141,16 @@ export function registerAgentChatRoutes(
           signal: c.req.raw.signal,
         });
       } catch (error) {
-        const message = normalizeAgentChatError(
-          error instanceof Error ? error.message : "OpenClaw agent chat failed",
-        );
+        const rawMessage =
+          error instanceof Error ? error.message : "OpenClaw agent chat failed";
+        const message = normalizeAgentChatUserMessage(rawMessage);
         logger.warn(
           {
             route: "agentChat.stream",
             agentId,
             sessionId: body.sessionId,
             error: message,
+            errorCategory: classifyAgentChatErrorMessage(rawMessage),
           },
           "agent_chat_stream_unavailable",
         );

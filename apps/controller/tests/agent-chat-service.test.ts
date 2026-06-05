@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ControllerEnv } from "../src/app/env.js";
 import type { OpenClawGatewayEvent } from "../src/runtime/openclaw-ws-client.js";
-import { AgentChatService } from "../src/services/agent-chat-service.js";
+import {
+  AgentChatService,
+  classifyAgentChatErrorMessage,
+  normalizeAgentChatUserMessage,
+} from "../src/services/agent-chat-service.js";
 
 type RequestRecord = {
   method: string;
@@ -99,6 +103,22 @@ describe("AgentChatService", () => {
 
   afterEach(async () => {
     await rm(rootDir, { recursive: true, force: true });
+  });
+
+  it("classifies known setup failures for diagnostics", () => {
+    expect(
+      classifyAgentChatErrorMessage("OpenClaw 配置同步失败，请稍后重试。"),
+    ).toBe("openclaw_not_ready");
+    expect(
+      classifyAgentChatErrorMessage(
+        'No API key found for provider "link". Configure auth for this agent.',
+      ),
+    ).toBe("model_auth_not_ready");
+    expect(
+      normalizeAgentChatUserMessage(
+        'No API key found for provider "link". Configure auth for this agent.',
+      ),
+    ).toBe("模型账号未就绪，请重新登录或检查云雾连接。");
   });
 
   it("streams workbench replies through OpenClaw agent runner", async () => {
@@ -220,6 +240,149 @@ describe("AgentChatService", () => {
     expect(
       fakeWs.requests.filter((request) => request.method === "agent"),
     ).toHaveLength(1);
+  });
+
+  it("forces explicit open requests to use tools in write mode", async () => {
+    await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "open-url-session",
+      message: "直接打开",
+      modelId: "link/gpt-5.5",
+      requestRoute: "write_agent",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    expect(String(send?.params.extraSystemPrompt)).toContain(
+      "打开网页、打开文件或打开浏览器",
+    );
+    expect(String(send?.params.extraSystemPrompt)).toContain(
+      "必须调用可用工具执行打开动作",
+    );
+    expect(String(send?.params.message)).toContain("完全访问");
+  });
+
+  it("auto-continues soft tool-limit replies for local open requests without exposing them", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "soft-open-session",
+      message: "直接打开",
+      modelId: "link/gpt-5.5",
+      requestRoute: "write_agent",
+      permissionMode: "full",
+    });
+
+    const initialSend = fakeWs.requests.find(
+      (request) => request.method === "agent",
+    );
+    const initialRunId = String(initialSend?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:soft-open-session",
+        runId: initialRunId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "当前工具额度又碰到软限制，这一步没法继续替你自动打开。",
+            },
+          ],
+        },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const retrySend = fakeWs.requests
+      .filter((request) => request.method === "agent")
+      .find((request) => String(request.params.idempotencyKey) !== initialRunId);
+    expect(retrySend).toBeTruthy();
+    expect(String(retrySend?.params.message)).toContain("继续执行当前任务");
+
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:soft-open-session",
+        runId: String(retrySend?.params.idempotencyKey),
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "已打开网页。" }],
+        },
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("已打开网页。");
+    expect(body).not.toContain("软限制");
+    expect(body).toContain("data: [DONE]");
+  });
+
+  it("auto-continues soft tool-limit replies for image generation without exposing them", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "soft-image-session",
+      message: "生成一张图片",
+      modelId: "link/gpt-5.5",
+      requestRoute: "image_generation",
+      permissionMode: "full",
+    });
+
+    const initialSend = fakeWs.requests.find(
+      (request) => request.method === "agent",
+    );
+    const initialRunId = String(initialSend?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:soft-image-session",
+        runId: initialRunId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "当前工具额度又碰到软限制，没法继续自动生图。",
+            },
+          ],
+        },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const retrySend = fakeWs.requests
+      .filter((request) => request.method === "agent")
+      .find((request) => String(request.params.idempotencyKey) !== initialRunId);
+    expect(retrySend).toBeTruthy();
+    expect(String(retrySend?.params.message)).toContain("继续执行当前任务");
+
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:soft-image-session",
+        runId: String(retrySend?.params.idempotencyKey),
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "图片已生成。" }],
+        },
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("图片已生成。");
+    expect(body).not.toContain("软限制");
+    expect(body).not.toContain("工具额度");
+    expect(body).toContain("data: [DONE]");
   });
 
   it("waits through an empty OpenClaw final and adopts the real session run", async () => {
@@ -566,6 +729,140 @@ describe("AgentChatService", () => {
     expect(fakeWs.requests.some((request) => request.method === "agent")).toBe(
       false,
     );
+  });
+
+  it("surfaces OpenClaw model network errors without a generic empty reply", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "session-network-error",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      requestRoute: "chat",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    const runId = String(send?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:session-network-error",
+        runId,
+        state: "error",
+        errorMessage: "LLM request failed: network connection error.",
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("模型连接失败，请稍后重试。");
+    expect(body).not.toContain("没有收到有效回复");
+    expect(body).toContain("data: [DONE]");
+  });
+
+  it("surfaces upstream saturation as a user-facing reply", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "session-upstream-saturated",
+      message: "生成图片",
+      modelId: "link/gpt-5.5",
+      requestRoute: "image_generation",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    const runId = String(send?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:session-upstream-saturated",
+        runId,
+        state: "error",
+        errorMessage: "当前分组上游负载已饱和，请稍后再试",
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("上游分组负载饱和，请稍后再试");
+    expect(body).not.toContain("没有收到有效回复");
+    expect(body).toContain("data: [DONE]");
+  });
+
+  it("surfaces OpenClaw readiness errors instead of a generic empty reply", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "session-openclaw-not-ready",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      requestRoute: "chat",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    const runId = String(send?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:session-openclaw-not-ready",
+        runId,
+        state: "error",
+        errorMessage: "openclaw gateway not connected",
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("OpenClaw 本地服务未就绪，正在重试。");
+    expect(body).not.toContain("没有收到有效回复");
+    expect(body).toContain("data: [DONE]");
+  });
+
+  it("uses an actionable fallback after empty finals are exhausted", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "session-empty-final-exhausted",
+      message: "你好",
+      modelId: "link/gpt-5.5",
+      requestRoute: "chat",
+      permissionMode: "full",
+    });
+
+    const initialSend = fakeWs.requests.find(
+      (request) => request.method === "agent",
+    );
+    const initialRunId = String(initialSend?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:session-empty-final-exhausted",
+        runId: initialRunId,
+        state: "final",
+        message: { role: "assistant", content: [] },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const retrySend = fakeWs.requests
+      .filter((request) => request.method === "agent")
+      .find((request) => String(request.params.idempotencyKey) !== initialRunId);
+    expect(retrySend).toBeTruthy();
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:session-empty-final-exhausted",
+        runId: String(retrySend?.params.idempotencyKey),
+        state: "final",
+        message: { role: "assistant", content: [] },
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("任务没有返回可见结果，请重试或导出诊断包。");
+    expect(body).not.toContain("没有收到有效回复");
+    expect(body).toContain("data: [DONE]");
   });
 
   it("auto-continues observed workbench status finals that mention summarizing later", async () => {

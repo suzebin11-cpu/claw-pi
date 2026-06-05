@@ -1,6 +1,6 @@
 {
   "name": "@nexu/desktop",
-  "version": "0.3.22",
+  "version": "0.3.25",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -26,6 +26,7 @@
     "dist:mac:unsigned:arm64": "NEXU_DESKTOP_TARGET_ARCH=arm64 node ./scripts/dist-mac.mjs --unsigned",
     "dist:mac:unsigned:x64": "NEXU_DESKTOP_TARGET_ARCH=x64 node ./scripts/dist-mac.mjs --unsigned",
     "upload:sourcemaps": "node ./scripts/upload-sourcemaps.mjs",
+    "verify:update-feed": "node ./scripts/verify-update-feed.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

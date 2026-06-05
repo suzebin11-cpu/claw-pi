@@ -62,12 +62,15 @@ const DEFAULT_IMAGE_SIZE = "1024x1024";
 const IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 90_000;
 const IMAGE_GENERATION_RETRY_DELAYS_MS = [1_500, 3_000] as const;
+const IMAGE_ENDPOINT_RETRY_DELAYS_MS = [1_500, 3_000, 6_000, 10_000] as const;
 const IMAGE_STREAM_PARTIAL_IMAGES = 1;
 const MAX_INPUT_IMAGES = 4;
 const MAX_PROMPT_CHARS = 4000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
 const IMAGE_RESPONSE_LOST_MESSAGE =
-  "图片生成请求未返回完整图片结果，请稍后重试。";
+  "图片生成已提交但结果返回失败，请查看诊断。";
+const IMAGE_UPSTREAM_BUSY_MESSAGE =
+  "生图通道繁忙，已自动重试但仍未返回图片，请再试一次或切换生图模型。";
 
 type ImageEndpointLabel = "generations" | "edits";
 type ImageEndpointRequestMode = "sync" | "stream";
@@ -520,10 +523,19 @@ function isImageNetworkError(message: string): boolean {
   );
 }
 
+function isImageTransientUpstreamError(message: string): boolean {
+  return /(?:HTTP\s*(?:408|429|502|503|504)|rate limit|too many|overloaded|busy|queue|upstream|temporar|限流|负载|繁忙|饱和|排队|稍后再试)/iu.test(
+    message,
+  );
+}
+
 export function normalizeImageGenerationErrorMessage(message: string): string {
   const trimmed = message.trim();
   if (isInsufficientBalanceError(trimmed)) {
     return INSUFFICIENT_BALANCE_MESSAGE;
+  }
+  if (isImageTransientUpstreamError(trimmed)) {
+    return IMAGE_UPSTREAM_BUSY_MESSAGE;
   }
   if (/timed out|timeout|超时/iu.test(trimmed)) {
     return IMAGE_RESPONSE_LOST_MESSAGE;
@@ -553,6 +565,20 @@ function shouldRetryTransientImageError(
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterDelayMs(response: Response): number | null {
+  const raw = response.headers.get("retry-after")?.trim();
+  if (!raw) return null;
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(seconds * 1000, 30_000);
+  }
+
+  const retryAt = Date.parse(raw);
+  if (Number.isNaN(retryAt)) return null;
+  return Math.min(Math.max(retryAt - Date.now(), 0), 30_000);
 }
 
 async function fetchImageBytes(
@@ -742,6 +768,7 @@ export class ImageGenerationService {
     let requestMode: ImageEndpointRequestMode =
       params.initialRequestMode ??
       (shouldUseImageStreaming(params.modelId) ? "stream" : "sync");
+    let transientRetryIndex = 0;
 
     while (true) {
       const request = await params.buildRequest(
@@ -766,6 +793,30 @@ export class ImageGenerationService {
         elapsedMs = result.elapsedMs;
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (
+          transientRetryIndex < IMAGE_ENDPOINT_RETRY_DELAYS_MS.length &&
+          shouldRetryTransientImageError(null, message)
+        ) {
+          const retryDelay =
+            IMAGE_ENDPOINT_RETRY_DELAYS_MS[transientRetryIndex] ?? 0;
+          transientRetryIndex += 1;
+          logger.warn(
+            {
+              label: params.label,
+              endpoint: summarizeImageEndpoint(request.url),
+              modelId: params.modelId,
+              hasInputImages: params.hasInputImages,
+              inputImageCount: params.inputImageCount,
+              requestMode,
+              retryIndex: transientRetryIndex,
+              retryDelay,
+              errorMessage: message,
+            },
+            "image_generation_network_retry",
+          );
+          await delay(retryDelay);
+          continue;
+        }
         throw new Error(normalizeImageGenerationErrorMessage(message));
       }
 
@@ -837,6 +888,34 @@ export class ImageGenerationService {
           },
           "image_generation_retry_without_response_format",
         );
+        continue;
+      }
+
+      if (
+        transientRetryIndex < IMAGE_ENDPOINT_RETRY_DELAYS_MS.length &&
+        shouldRetryTransientImageError(response.status, message)
+      ) {
+        const fallbackDelay =
+          IMAGE_ENDPOINT_RETRY_DELAYS_MS[transientRetryIndex] ?? 0;
+        const retryDelay = parseRetryAfterDelayMs(response) ?? fallbackDelay;
+        transientRetryIndex += 1;
+        logger.warn(
+          {
+            label: params.label,
+            endpoint: summarizeImageEndpoint(request.url),
+            modelId: params.modelId,
+            hasInputImages: params.hasInputImages,
+            inputImageCount: params.inputImageCount,
+            requestMode,
+            status: response.status,
+            retryIndex: transientRetryIndex,
+            retryDelay,
+            elapsedMs,
+            errorMessage: message,
+          },
+          "image_generation_transient_retry",
+        );
+        await delay(retryDelay);
         continue;
       }
 

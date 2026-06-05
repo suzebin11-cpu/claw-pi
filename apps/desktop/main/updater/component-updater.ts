@@ -12,7 +12,7 @@ import {
 import { join } from "node:path";
 import { app } from "electron";
 
-export const R2_BASE_URL = "https://api.clawpi.app:9443/updates";
+export const R2_BASE_URL = "https://api.claw-pi.cn/updates";
 
 export type ComponentInfo = {
   id: string;

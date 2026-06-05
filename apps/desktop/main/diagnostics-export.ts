@@ -62,6 +62,210 @@ type CollectedFileMetadata = {
   modifiedAt: string;
 };
 
+type DiagnosticsErrorCategory =
+  | "model_network_error"
+  | "upstream_saturated"
+  | "insufficient_balance"
+  | "balance_unavailable"
+  | "auth_expired"
+  | "model_auth_not_ready"
+  | "openclaw_not_ready"
+  | "image_response_lost"
+  | "attachment_extract_failed"
+  | "wechat_qr_pending"
+  | "wechat_network_error"
+  | "update_failed"
+  | "unknown";
+
+function classifyDiagnosticText(text: string): DiagnosticsErrorCategory {
+  if (
+    /(?:上游.*(?:负载|分组).*(?:饱和|繁忙)|当前分组上游负载已饱和|upstream.*(?:saturat|overload|busy)|rate limit|too many requests|HTTP 429|\b429\b)/iu.test(
+      text,
+    )
+  ) {
+    return "upstream_saturated";
+  }
+  if (
+    /(?:token quota is not enough|need quota|insufficient (?:balance|quota|credits?)|quota.+not enough|余额不足|额度不足|余额不够)/iu.test(
+      text,
+    )
+  ) {
+    return "insufficient_balance";
+  }
+  if (
+    /(?:token|jwt|登录|登陆|auth|authorization).{0,24}(?:过期|expired)|(?:unauthorized|not authenticated|未登录|未认证)/iu.test(
+      text,
+    )
+  ) {
+    return "auth_expired";
+  }
+  if (
+    /(?:No API key found|模型账号未就绪|auth-profiles\.json|Configure auth for this agent|OpenClaw 配置同步失败|config sync failed)/iu.test(
+      text,
+    )
+  ) {
+    return "model_auth_not_ready";
+  }
+  if (
+    /(?:图片生成已提交但结果返回失败|图片生成请求未返回完整图片结果|image_generation_stream_failed|image_generation.*(?:timed out|timeout|response.*lost|failed)|(?:图片|生图|图生图|gpt-image|\/v1\/images).{0,120}openai_error|openai_error.{0,120}(?:图片|生图|图生图|gpt-image|\/v1\/images)|生图.*(?:超时|返回失败|未返回))/iu.test(
+      text,
+    )
+  ) {
+    return "image_response_lost";
+  }
+  if (
+    /(?:余额暂时无法显示|无法加载余额|Failed to fetch balance|balance.{0,48}(?:unavailable|fetch failed|load failed|failed to fetch)|Server unreachable)/iu.test(
+      text,
+    )
+  ) {
+    return "balance_unavailable";
+  }
+  if (
+    /(?:LLM request failed:\s*)?(?:network connection error|connection error|fetch failed|failed to fetch|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)/iu.test(
+      text,
+    )
+  ) {
+    return "model_network_error";
+  }
+  if (
+    /(?:openclaw gateway not connected|gateway not connected|NOT_PAIRED|pairing required|device token mismatch|device signature invalid|OpenClaw agent chat timed out)/iu.test(
+      text,
+    )
+  ) {
+    return "openclaw_not_ready";
+  }
+  if (
+    /(?:agent_chat_extracted_attachment.*"extractStatus":"failed"|附件内容为空|附件.*无法读取|attachment_extract_failed)/iu.test(
+      text,
+    )
+  ) {
+    return "attachment_extract_failed";
+  }
+  if (
+    /(?:wechat_qr_wait_timeout|wechat_qr_wait_poll_retryable|仍在等待手机微信扫码|scanned_waiting_confirm|waiting_scan)/iu.test(
+      text,
+    )
+  ) {
+    return "wechat_qr_pending";
+  }
+  if (
+    /(?:wechat.{0,120}(?:network|请检查网络|connect failed|connection failed|login failed)|(?:微信|wechat).{0,120}(?:网络异常|请检查网络|连接失败|登录失败|扫码没反应))/iu.test(
+      text,
+    )
+  ) {
+    return "wechat_network_error";
+  }
+  if (/(?:update error|update_failed|auto-update.*error)/iu.test(text)) {
+    return "update_failed";
+  }
+  return "unknown";
+}
+
+function buildDiagnosticConclusion(category: DiagnosticsErrorCategory): string {
+  switch (category) {
+    case "model_network_error":
+      return "本次失败原因：上游模型网络错误";
+    case "upstream_saturated":
+      return "本次失败原因：上游分组负载饱和";
+    case "insufficient_balance":
+      return "本次失败原因：余额不足";
+    case "balance_unavailable":
+      return "本次失败原因：余额暂时无法显示或余额接口不可用";
+    case "auth_expired":
+      return "本次失败原因：登录状态已过期";
+    case "model_auth_not_ready":
+      return "本次失败原因：OpenClaw 本地模型认证缺失";
+    case "openclaw_not_ready":
+      return "本次失败原因：OpenClaw 本地服务未就绪";
+    case "image_response_lost":
+      return "本次失败原因：图片生成结果返回失败";
+    case "attachment_extract_failed":
+      return "本次失败原因：附件读取或解析失败";
+    case "wechat_qr_pending":
+      return "本次失败原因：微信扫码仍在等待确认或网络恢复";
+    case "wechat_network_error":
+      return "本次失败原因：微信连接网络异常";
+    case "update_failed":
+      return "本次失败原因：更新检查或安装失败";
+    default:
+      return "本次诊断未识别到明确失败类型，请查看日志明细";
+  }
+}
+
+function extractLastRunId(text: string): string | null {
+  const matches = [...text.matchAll(/\brunId=([A-Za-z0-9._~-]+)/gu)];
+  return matches.at(-1)?.[1] ?? null;
+}
+
+export function buildDiagnosticsSummary(input: {
+  runtimeConfig: DesktopRuntimeConfig;
+  runtimeState: ReturnType<RuntimeOrchestrator["getRuntimeState"]>;
+  diagnosticText: string;
+  desktopDiagnosticsSummary: unknown;
+}): Record<string, unknown> {
+  const category = classifyDiagnosticText(input.diagnosticText);
+  const units = input.runtimeState.units.map((unit) => ({
+    id: unit.id,
+    label: unit.label,
+    phase: unit.phase,
+    port: unit.port,
+    lastError: unit.lastError,
+    lastReasonCode: unit.lastReasonCode,
+    restartCount: unit.restartCount,
+  }));
+  const openclawUnit = input.runtimeState.units.find((unit) =>
+    /openclaw/iu.test(`${unit.id} ${unit.label}`),
+  );
+  const failedUnits = input.runtimeState.units.filter(
+    (unit) => unit.phase === "failed",
+  );
+  const startupStatus =
+    failedUnits.length > 0
+      ? "failed"
+      : input.runtimeState.units.every((unit) => unit.phase === "running")
+        ? "ready"
+        : "starting";
+
+  return {
+    version: app.getVersion(),
+    buildInfo: input.runtimeConfig.buildInfo,
+    lastRunId: extractLastRunId(input.diagnosticText),
+    lastErrorCategory: category,
+    conclusion: buildDiagnosticConclusion(category),
+    startupStatus,
+    openclawReady: openclawUnit ? openclawUnit.phase === "running" : null,
+    modelAuthReady:
+      category === "model_auth_not_ready"
+        ? false
+        : null,
+    imagePluginReady:
+      /(?:Registered image_generate tool|clawpi-image-generation.*tool_call)/iu.test(
+        input.diagnosticText,
+      )
+        ? true
+        : null,
+    balanceStatus:
+      category === "insufficient_balance"
+        ? "insufficient"
+        : category === "auth_expired"
+          ? "auth_expired"
+          : category === "balance_unavailable"
+            ? "unavailable"
+          : null,
+    wechatStatus:
+      category === "wechat_qr_pending"
+        ? "pending"
+        : category === "wechat_network_error"
+          ? "network_error"
+        : /wechat_qr_wait_confirmed/iu.test(input.diagnosticText)
+          ? "connected"
+          : null,
+    runtimeUnits: units,
+    failedUnits: failedUnits.map((unit) => unit.id),
+    desktopDiagnostics: input.desktopDiagnosticsSummary,
+  };
+}
+
 function toDosDateTime(date: Date): { dosTime: number; dosDate: number } {
   const dosTime =
     ((date.getHours() & 0x1f) << 11) |
@@ -402,6 +606,7 @@ async function collectArtifacts(
   const missing: string[] = [];
   const warnings: string[] = [];
   let desktopDiagnosticsSummary: unknown = null;
+  const diagnosticSignals: string[] = [];
 
   const additionalArtifacts = {
     startupHealth: null as CollectedFileMetadata | null,
@@ -439,6 +644,16 @@ async function collectArtifacts(
       sizeBytes: data.length,
       modifiedAt: result.mtime.toISOString(),
     };
+  }
+
+  async function addDiagnosticSignal(filePath: string): Promise<void> {
+    const result = await tryReadFile(filePath);
+    if (result === null) {
+      return;
+    }
+    diagnosticSignals.push(
+      scrubTextBuffer(result.data).toString("utf8").slice(-160_000),
+    );
   }
 
   // Desktop diagnostics snapshot
@@ -497,12 +712,16 @@ async function collectArtifacts(
 
   // Main process logs
   const logsDir = resolve(app.getPath("userData"), "logs");
-  await addFile("logs/cold-start.log", resolve(logsDir, "cold-start.log"), {
+  const coldStartLogPath = resolve(logsDir, "cold-start.log");
+  const desktopMainLogPath = resolve(logsDir, "desktop-main.log");
+  await addFile("logs/cold-start.log", coldStartLogPath, {
     scrubLog: true,
   });
-  await addFile("logs/desktop-main.log", resolve(logsDir, "desktop-main.log"), {
+  await addFile("logs/desktop-main.log", desktopMainLogPath, {
     scrubLog: true,
   });
+  await addDiagnosticSignal(coldStartLogPath);
+  await addDiagnosticSignal(desktopMainLogPath);
 
   // Runtime unit logs (skip embedded units — they have no subprocess log file)
   const runtimeState = orchestrator.getRuntimeState();
@@ -570,6 +789,7 @@ async function collectArtifacts(
       );
       if (metadata) {
         additionalArtifacts.openclawLogs.push(metadata);
+        await addDiagnosticSignal(openclawLogPath);
       }
     }
   }
@@ -691,6 +911,21 @@ async function collectArtifacts(
     });
     included.push("summary/startup-probe-summary.json");
   }
+
+  const diagnosticsSummary = buildDiagnosticsSummary({
+    runtimeConfig,
+    runtimeState,
+    diagnosticText: diagnosticSignals.join("\n"),
+    desktopDiagnosticsSummary,
+  });
+  entries.push({
+    name: `${archiveRoot}/diagnosticsSummary.json`,
+    data: redactJsonBuffer(
+      Buffer.from(`${JSON.stringify(diagnosticsSummary, null, 2)}\n`, "utf8"),
+    ),
+    modTime: now,
+  });
+  included.push("diagnosticsSummary.json");
 
   const extraArtifactsSummary = {
     startupHealth: additionalArtifacts.startupHealth,

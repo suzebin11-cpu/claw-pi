@@ -30,7 +30,8 @@ import {
 } from "../../lib/api/sdk.gen";
 
 const SETUP_COMPLETE_KEY = "nexu_setup_complete";
-const AUTH_EXPIRED_MESSAGE = "登录已过期，请重新登录";
+const AUTH_EXPIRED_MESSAGE = "登录状态已过期，请重新登录";
+const BALANCE_UNAVAILABLE_MESSAGE = "余额暂时无法显示，请检查网络后重试";
 
 function isAuthExpiredErrorMessage(
   message: string | null | undefined,
@@ -47,7 +48,16 @@ function normalizeRechargeError(
   if (isAuthExpiredErrorMessage(message)) {
     return AUTH_EXPIRED_MESSAGE;
   }
-  return message?.trim() || fallback;
+  const normalized = message?.trim();
+  if (
+    !normalized ||
+    /(?:Failed to fetch balance|Server unreachable|Failed to fetch|NetworkError|Load failed|fetch failed)/iu.test(
+      normalized,
+    )
+  ) {
+    return fallback;
+  }
+  return normalized;
 }
 
 function redirectToActivationLogin(): void {
@@ -479,9 +489,7 @@ function ValueComparisonChart({ providers }: { providers: ProviderGroup[] }) {
   );
 }
 
-// ── Transaction & Usage components ─────────────────────────────
-
-type HistoryTab = "transactions" | "usage";
+// ── Transaction components ─────────────────────────────────────
 
 function Pagination({
   page,
@@ -684,39 +692,13 @@ function UsageLogList() {
 }
 
 function HistorySection() {
-  const [tab, setTab] = useState<HistoryTab>("transactions");
-
   return (
     <div className="rounded-2xl border border-border bg-surface-0 p-6 mb-6">
-      <div className="flex items-center gap-1 mb-4 rounded-lg bg-surface-1 p-1 w-fit">
-        <button
-          type="button"
-          onClick={() => setTab("transactions")}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors",
-            tab === "transactions"
-              ? "bg-surface-0 text-text-primary shadow-sm"
-              : "text-text-muted hover:text-text-secondary",
-          )}
-        >
-          <History size={13} />
-          充值记录
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("usage")}
-          className={cn(
-            "flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[12px] font-medium transition-colors",
-            tab === "usage"
-              ? "bg-surface-0 text-text-primary shadow-sm"
-              : "text-text-muted hover:text-text-secondary",
-          )}
-        >
-          <Receipt size={13} />
-          消费日志
-        </button>
+      <div className="mb-4 flex items-center gap-1.5 text-[12px] font-medium text-text-primary">
+        <History size={13} />
+        充值记录
       </div>
-      {tab === "transactions" ? <TransactionList /> : <UsageLogList />}
+      <TransactionList />
     </div>
   );
 }
@@ -877,6 +859,22 @@ function AlipayPaymentSection() {
     setFlow({ phase: "creating" });
 
     try {
+      const balanceCheck = await getApiInternalActivationBalance();
+      const balanceError =
+        balanceCheck.error ||
+        (!balanceCheck.data?.ok ? balanceCheck.data?.error : undefined);
+      if (balanceError || !balanceCheck.data) {
+        const message = normalizeRechargeError(
+          typeof balanceError === "string" ? balanceError : undefined,
+          t("recharge.balanceUnavailable"),
+        );
+        setFlow({ phase: "error", message });
+        if (isAuthExpiredErrorMessage(message)) {
+          redirectToActivationLogin();
+        }
+        return;
+      }
+
       const { data } = await postApiInternalPaymentAlipayCreateOrder({
         body: { amount_cents: effectiveAmountCents },
       });
@@ -1177,16 +1175,23 @@ export function RechargePage() {
     isLoading: balanceLoading,
     isError: balanceError,
     error: balanceQueryError,
+    isFetching: balanceFetching,
+    refetch: refetchBalance,
   } = useQuery({
     queryKey: ["user-balance"],
     queryFn: async () => {
       const { data, error } = await getApiInternalActivationBalance();
       if (error || !data) {
-        throw new Error("Failed to fetch balance");
+        throw new Error(
+          normalizeRechargeError(
+            typeof error === "string" ? error : undefined,
+            BALANCE_UNAVAILABLE_MESSAGE,
+          ),
+        );
       }
       if (!data.ok) {
         throw new Error(
-          normalizeRechargeError(data.error, t("recharge.balanceUnavailable")),
+          normalizeRechargeError(data.error, BALANCE_UNAVAILABLE_MESSAGE),
         );
       }
       return data;
@@ -1198,7 +1203,7 @@ export function RechargePage() {
   const balanceErrorMessage =
     balanceQueryError instanceof Error
       ? balanceQueryError.message
-      : t("recharge.balanceUnavailable");
+      : BALANCE_UNAVAILABLE_MESSAGE;
 
   useEffect(() => {
     if (balanceError && isAuthExpiredErrorMessage(balanceErrorMessage)) {
@@ -1268,8 +1273,21 @@ export function RechargePage() {
                 {t("recharge.loadingBalance")}
               </div>
             ) : balanceError ? (
-              <div className="text-[13px] text-red-500">
-                {balanceErrorMessage}
+              <div className="space-y-2">
+                <div className="text-[13px] text-red-500">
+                  {balanceErrorMessage}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void refetchBalance()}
+                  disabled={balanceFetching}
+                  className="inline-flex h-7 items-center gap-1.5 rounded-md border border-border px-2.5 text-[12px] font-medium text-text-secondary transition-colors hover:bg-surface-1 hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {balanceFetching ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : null}
+                  {t("recharge.retryBalance")}
+                </button>
               </div>
             ) : (
               <div className="text-2xl font-bold text-text-primary tabular-nums">
@@ -1354,11 +1372,8 @@ export function RechargePage() {
         )}
       </div> */}
 
-      {/* Transaction history & usage logs */}
+      {/* Recharge records */}
       <HistorySection />
-
-      {/* Model pricing */}
-      <ModelPricingSection />
     </div>
   );
 }
