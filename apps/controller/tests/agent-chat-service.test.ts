@@ -214,10 +214,10 @@ describe("AgentChatService", () => {
     const send = fakeWs.requests.find((request) => request.method === "agent");
     expect(String(send?.params.extraSystemPrompt)).toContain("普通对话请求");
     expect(String(send?.params.extraSystemPrompt)).toContain(
-      "直接回答用户当前消息",
+      "能直接回答就直接回答",
     );
-    expect(String(send?.params.extraSystemPrompt)).not.toContain(
-      "必须先调用可用工具执行",
+    expect(String(send?.params.extraSystemPrompt)).toContain(
+      "直接调用可用工具完成",
     );
 
     const runId = String(send?.params.idempotencyKey);
@@ -299,7 +299,9 @@ describe("AgentChatService", () => {
 
     const retrySend = fakeWs.requests
       .filter((request) => request.method === "agent")
-      .find((request) => String(request.params.idempotencyKey) !== initialRunId);
+      .find(
+        (request) => String(request.params.idempotencyKey) !== initialRunId,
+      );
     expect(retrySend).toBeTruthy();
     expect(String(retrySend?.params.message)).toContain("继续执行当前任务");
 
@@ -360,7 +362,9 @@ describe("AgentChatService", () => {
 
     const retrySend = fakeWs.requests
       .filter((request) => request.method === "agent")
-      .find((request) => String(request.params.idempotencyKey) !== initialRunId);
+      .find(
+        (request) => String(request.params.idempotencyKey) !== initialRunId,
+      );
     expect(retrySend).toBeTruthy();
     expect(String(retrySend?.params.message)).toContain("继续执行当前任务");
 
@@ -510,13 +514,13 @@ describe("AgentChatService", () => {
     });
 
     const body = await response.text();
-    expect(body).toContain("我先在桌面查找简历文件");
+    expect(body).not.toContain("我先在桌面查找简历文件");
     expect(body).toContain("已完成总结：");
     expect(body).toContain("候选人经验...");
     expect(body).toContain("data: [DONE]");
   });
 
-  it("does not auto-continue progress-like replies on ordinary chat route", async () => {
+  it("auto-continues progress-like replies on ordinary chat route", async () => {
     const response = await service.createOpenAiCompatibleStream({
       agentId: "bot-1",
       sessionId: "chat-progress",
@@ -548,14 +552,36 @@ describe("AgentChatService", () => {
       },
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const followupSend = fakeWs.requests
+      .filter((request) => request.method === "agent")
+      .find((request) => String(request.params.idempotencyKey) !== runId);
+    expect(followupSend).toBeTruthy();
+
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:chat-progress",
+        runId: String(followupSend?.params.idempotencyKey),
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "你好，我在。" }],
+        },
+      },
+    });
+
     const body = await response.text();
-    expect(body).toContain("我先看一下你的问题");
+    expect(body).not.toContain("我先看一下你的问题");
+    expect(body).toContain("你好，我在。");
     expect(
       fakeWs.requests.filter((request) => request.method === "agent"),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
-  it("adds read-only constraints for analysis-only workbench agent tasks", async () => {
+  it("normalizes read-only requests to full write execution", async () => {
     await service.createOpenAiCompatibleStream({
       agentId: "bot-1",
       sessionId: "session-readonly",
@@ -567,12 +593,13 @@ describe("AgentChatService", () => {
 
     const send = fakeWs.requests.find((request) => request.method === "agent");
     expect(String(send?.params.extraSystemPrompt)).toContain(
+      "执行模式=全能力执行",
+    );
+    expect(String(send?.params.extraSystemPrompt)).not.toContain(
       "执行模式=只读分析",
     );
-    expect(String(send?.params.extraSystemPrompt)).toContain(
-      "不要创建、写入、编辑、保存、导出或覆盖任何用户文件",
-    );
-    expect(String(send?.params.message)).toContain("执行模式=只读分析");
+    expect(String(send?.params.message)).toContain("完全访问");
+    expect(String(send?.params.message)).toContain("执行模式=全能力执行");
   });
 
   it("promotes explicit spreadsheet edit requests to write execution", async () => {
@@ -587,13 +614,13 @@ describe("AgentChatService", () => {
 
     const send = fakeWs.requests.find((request) => request.method === "agent");
     expect(String(send?.params.extraSystemPrompt)).toContain(
-      "执行模式=可写执行",
+      "执行模式=全能力执行",
     );
     expect(String(send?.params.extraSystemPrompt)).not.toContain(
       "执行模式=只读分析",
     );
     expect(String(send?.params.message)).toContain("完全访问");
-    expect(String(send?.params.message)).toContain("执行模式=可写执行");
+    expect(String(send?.params.message)).toContain("执行模式=全能力执行");
   });
 
   it("surfaces insufficient balance errors as a user-facing reply", async () => {
@@ -846,7 +873,9 @@ describe("AgentChatService", () => {
 
     const retrySend = fakeWs.requests
       .filter((request) => request.method === "agent")
-      .find((request) => String(request.params.idempotencyKey) !== initialRunId);
+      .find(
+        (request) => String(request.params.idempotencyKey) !== initialRunId,
+      );
     expect(retrySend).toBeTruthy();
     fakeWs.emit({
       type: "event",
@@ -922,7 +951,7 @@ describe("AgentChatService", () => {
     });
 
     const body = await response.text();
-    expect(body).toContain("OneDrive 桌面定位");
+    expect(body).not.toContain("OneDrive 桌面定位");
     expect(body).toContain("总结如下：候选人经验...");
     expect(body).toContain("data: [DONE]");
   });
@@ -982,7 +1011,7 @@ describe("AgentChatService", () => {
     });
 
     const body = await response.text();
-    expect(body).toContain("正在桌面路径递归查找简历文件");
+    expect(body).not.toContain("正在桌面路径递归查找简历文件");
     expect(body).toContain("总结如下：候选人经验...");
     expect(body).toContain("data: [DONE]");
   });
@@ -1221,10 +1250,10 @@ describe("AgentChatService", () => {
     expect(message).toContain("Hello PDF Resume");
   });
 
-  it("injects extracted upload text without local paths in basic permission mode", async () => {
+  it("injects extracted upload text with local paths even for legacy basic permission mode", async () => {
     await service.createOpenAiCompatibleStream({
       agentId: "main",
-      sessionId: "basic-upload-session",
+      sessionId: "legacy-basic-upload-session",
       message: "总结这个上传附件",
       permissionMode: "basic",
       executionMode: "read_only",
@@ -1241,13 +1270,15 @@ describe("AgentChatService", () => {
 
     const send = fakeWs.requests.find((request) => request.method === "agent");
     const message = String(send?.params.message);
-    expect(message).toContain("工作台已接收上传附件");
-    expect(message).toContain("基础权限下不要读取本机路径");
+    expect(message).toContain(
+      "工作台附件已保存到当前 OpenClaw agent workspace",
+    );
+    expect(message).toContain("必须优先使用下列附件内容或文件路径");
     expect(message).toContain("resume.txt");
     expect(message).toContain("candidate summary");
-    expect(message).not.toContain(rootDir);
-    expect(message).not.toContain(".openclaw");
-    expect(message).not.toMatch(/: [A-Z]:\\/u);
+    expect(message).toContain(rootDir);
+    expect(message).toContain(".openclaw");
+    expect(message).toMatch(/: [A-Z]:\\/u);
   });
 
   it("retries empty finals for saved workbench attachments", async () => {
@@ -1299,7 +1330,7 @@ describe("AgentChatService", () => {
     expect(String(retrySend?.params.message)).toContain("resume.txt");
     expect(String(retrySend?.params.message)).toContain("已提取正文");
     expect(String(retrySend?.params.message)).toContain("hello");
-    expect(String(retrySend?.params.message)).toContain("只读分析模式");
+    expect(String(retrySend?.params.message)).not.toContain("只读分析模式");
 
     const retryRunId = String(retrySend?.params.idempotencyKey);
     fakeWs.emit({

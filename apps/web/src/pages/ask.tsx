@@ -15,10 +15,7 @@ import {
   BookOpen,
   Copy,
   Download,
-  FileSpreadsheet,
   FileText,
-  FolderPlus,
-  Globe2,
   ImageIcon,
   Loader2,
   Maximize2,
@@ -30,7 +27,6 @@ import {
   Plus,
   RotateCcw,
   Send,
-  ShieldCheck,
   Square,
   Trash2,
   UserRound,
@@ -139,17 +135,9 @@ type ChatCompletionMessage = {
       >;
 };
 
-type LocalDesktopPermissionMode = "basic" | "confirm" | "full";
-type WorkbenchRequestRoute =
-  | "chat"
-  | "image_generation"
-  | "read_only_agent"
-  | "write_agent";
-type AgentExecutionMode = "read_only" | "write";
-
-type LocalDesktopPermissionSettings = {
-  mode: LocalDesktopPermissionMode;
-};
+type LocalDesktopPermissionMode = "full";
+type WorkbenchRequestRoute = "image_generation" | "write_agent";
+type AgentExecutionMode = "write";
 
 type StreamedCompletionResult = {
   text: string;
@@ -178,8 +166,6 @@ const MAX_KNOWLEDGE_MATCHES = 4;
 const ASK_SESSIONS_STORAGE_KEY = "claw-pi.ask.sessions.v1";
 const ASK_ACTIVE_SESSION_STORAGE_KEY = "claw-pi.ask.activeSessionId.v1";
 const ASK_KNOWLEDGE_STORAGE_KEY = "claw-pi.ask.knowledge.v1";
-const ASK_LOCAL_PERMISSIONS_STORAGE_KEY = "claw-pi.ask.localPermissions.v1";
-const ASK_LOCAL_PERMISSIONS_STORAGE_VERSION = 2;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
 const MODEL_NETWORK_ERROR_MESSAGE = "模型连接失败，请稍后重试。";
 const MODEL_AUTH_NOT_READY_MESSAGE =
@@ -193,10 +179,6 @@ const IMAGE_RESPONSE_LOST_MESSAGE =
   "图片生成已提交但结果返回失败，请查看诊断。";
 const EMPTY_RESPONSE_MESSAGE = "任务没有返回可见结果，请重试或导出诊断包。";
 const AGENT_HISTORY_CONTEXT_MESSAGES = 8;
-
-const DEFAULT_LOCAL_PERMISSIONS: LocalDesktopPermissionSettings = {
-  mode: "full",
-};
 
 const TEXT_EXTENSIONS = new Set([
   "c",
@@ -415,39 +397,6 @@ function persistKnowledgeItems(items: KnowledgeItem[]) {
   } catch {
     toast.error("知识库保存失败，内容可能过大");
   }
-}
-
-function loadLocalPermissions(): LocalDesktopPermissionSettings {
-  if (typeof window === "undefined") return DEFAULT_LOCAL_PERMISSIONS;
-  try {
-    const raw = window.localStorage.getItem(ASK_LOCAL_PERMISSIONS_STORAGE_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    if (!parsed || typeof parsed !== "object") {
-      return DEFAULT_LOCAL_PERMISSIONS;
-    }
-    const candidate = parsed as Partial<LocalDesktopPermissionSettings> & {
-      version?: unknown;
-    };
-    const version =
-      typeof candidate.version === "number" ? candidate.version : 0;
-    if (version < ASK_LOCAL_PERMISSIONS_STORAGE_VERSION) {
-      return DEFAULT_LOCAL_PERMISSIONS;
-    }
-    return DEFAULT_LOCAL_PERMISSIONS;
-  } catch {
-    return DEFAULT_LOCAL_PERMISSIONS;
-  }
-}
-
-function persistLocalPermissions(settings: LocalDesktopPermissionSettings) {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(
-    ASK_LOCAL_PERMISSIONS_STORAGE_KEY,
-    JSON.stringify({
-      version: ASK_LOCAL_PERMISSIONS_STORAGE_VERSION,
-      ...settings,
-    }),
-  );
 }
 
 let askSessionsCache: ChatSession[] | null = null;
@@ -762,7 +711,6 @@ function getAttachmentStatusLabel(
       return t("ask.attachment.status.failed");
     case "unsupported":
       return t("ask.attachment.status.unsupported");
-    case "saved":
     default:
       return t("ask.attachment.status.saved");
   }
@@ -1065,22 +1013,6 @@ function getMessageContentForIntent(message: ChatMessage): string {
   return `${message.text} ${attachmentText}`.trim();
 }
 
-function isContinuationText(text: string): boolean {
-  return /^(?:继续|接着|继续处理|继续执行|好的继续|然后呢|然后|是的|好的|ok|嗯|行)$/iu.test(
-    text.trim(),
-  );
-}
-
-function hasRecentAgentTaskContext(messages: ChatMessage[]): boolean {
-  const recent = messages
-    .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
-    .map(getMessageContentForIntent)
-    .join("\n");
-  return /(?:桌面|onedrive|本机|电脑|文件|目录|路径|pdf|excel|word|ppt|简历|安装包|应用|网页|浏览器|截图|图片|生图|改图|图生图|读取|查找|搜索|定位|提取|总结|分析|运行|执行|重启|安装|下载|生成|处理|修复|验证|测试)/iu.test(
-    recent,
-  );
-}
-
 function hasRecentImageGenerationContext(messages: ChatMessage[]): boolean {
   const recent = messages
     .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
@@ -1088,42 +1020,6 @@ function hasRecentImageGenerationContext(messages: ChatMessage[]): boolean {
     .join("\n");
   return /(?:生图|生成(?:一张|一个|个)?图片|画一张|画个|改图|修图|图生图|换背景|生成.*海报|image_generate|generate (?:an? )?image|create (?:an? )?image|edit (?:the )?image)/iu.test(
     recent,
-  );
-}
-
-function hasRecentOpenableArtifactContext(messages: ChatMessage[]): boolean {
-  const recent = messages
-    .slice(-AGENT_HISTORY_CONTEXT_MESSAGES)
-    .map(getMessageContentForIntent)
-    .join("\n");
-  return /(?:网页|浏览器|网址|链接|html|文件|目录|路径|桌面|本机|电脑|生成(?:的|好)?(?:网页|文件|html)|webpage|browser|url|link|html|file|folder|path|desktop|local)/iu.test(
-    recent,
-  );
-}
-
-function isExplicitOpenExecutionRequest(input: {
-  normalized: string;
-  haystack: string;
-  recentMessages: ChatMessage[];
-}): boolean {
-  if (
-    /(?:帮我|请|麻烦|替我|为我)?[^。！？.!?\n]{0,20}打开(?:刚才|之前|上面|这个|那个|你(?:刚才|之前)?(?:做|生成|保存)?(?:好)?的)?[^。！？.!?\n]{0,40}(?:网页|浏览器|文件|链接|网址|路径|html|应用|程序|报告|文档|图片|webpage|browser|file|link|url|path|html|app)/iu.test(
-      input.haystack,
-    ) ||
-    /(?:直接打开|帮我打开|请打开|麻烦打开|打开刚才那个|打开刚才你做好的|打开刚才做好的)/iu.test(
-      input.normalized,
-    ) ||
-    /\bopen\b(?:[^.!?\n]{0,60})\b(?:webpage|browser|file|link|url|path|html|app)\b/iu.test(
-      input.haystack,
-    )
-  ) {
-    return true;
-  }
-
-  return (
-    /^(?:直接打开|打开|帮我打开|请打开|打开一下)$/iu.test(
-      input.normalized,
-    ) && hasRecentOpenableArtifactContext(input.recentMessages)
   );
 }
 
@@ -1140,7 +1036,6 @@ function classifyWorkbenchRequest(input: {
     )
     .join(" ");
   const haystack = `${normalized} ${attachmentSummary}`;
-  const hasAttachment = input.attachments.length > 0;
   const hasImageAttachment = input.attachments.some(
     (attachment) => attachment.kind === "image",
   );
@@ -1157,66 +1052,7 @@ function classifyWorkbenchRequest(input: {
     return "image_generation";
   }
 
-  if (
-    isExplicitOpenExecutionRequest({
-      normalized,
-      haystack,
-      recentMessages: input.recentMessages,
-    })
-  ) {
-    return "write_agent";
-  }
-
-  const writeRequest =
-    /(?:创建|新建|写入|保存|另存|导出|生成(?:一个|一份|成)?(?:文件|文档|docx|excel|表格|ppt|pdf)|修改|编辑|删除|移动|复制|重命名|运行|执行|重启|安装|下载|打包|发布|提交|替换|覆盖|添加|新增|插入|追加|补充|填入|录入|登记|更新|改成|加(?:上|入|到|一行|一列|一条))/iu.test(
-      haystack,
-    ) ||
-    /\b(?:create|write|save|export|modify|edit|delete|move|copy|rename|run|execute|restart|install|download|package|publish|add|insert|append|update)\b/iu.test(
-      haystack,
-    );
-  if (writeRequest) {
-    return "write_agent";
-  }
-
-  const explicitLocalContext =
-    /(?:桌面|onedrive|本机|电脑|本地|下载目录|文档目录|文件夹|目录|路径|浏览器|网页|应用|程序|安装包|desktop|downloads?|documents?|folder|path|browser|app|installer)/iu.test(
-      normalized,
-    );
-  const attachmentAnalysisRequest =
-    hasAttachment &&
-    /(?:总结|分析|读取|提取|查看|看一下|处理|说明|概括|翻译|识别|summarize|analy[sz]e|read|extract|review|translate)/iu.test(
-      normalized,
-    );
-  if (attachmentAnalysisRequest) {
-    return "read_only_agent";
-  }
-
-  if (hasAttachment && !explicitLocalContext) {
-    return "chat";
-  }
-
-  const readOnlyRequest =
-    /(?:桌面|onedrive|本机|电脑|文件|目录|路径|pdf|excel|word|ppt|简历|安装包|网页|浏览器|截图)/iu.test(
-      haystack,
-    ) ||
-    /(?:查找|搜索|定位|读取|打开看看|提取|总结|分析|查看)(?:[^。！？.!?\n]{0,50})(?:文件|目录|路径|桌面|电脑|本机|网页|简历|pdf|excel|word|ppt)/iu.test(
-      haystack,
-    ) ||
-    /\b(?:find|search|locate|read|extract|summarize|analyze|inspect)\b(?:[^.!?\n]{0,60})\b(?:file|folder|path|desktop|computer|pdf|excel|word|ppt|resume|webpage)\b/iu.test(
-      haystack,
-    );
-  if (readOnlyRequest) {
-    return "read_only_agent";
-  }
-
-  if (
-    isContinuationText(normalized) &&
-    hasRecentAgentTaskContext(input.recentMessages)
-  ) {
-    return "read_only_agent";
-  }
-
-  return "chat";
+  return "write_agent";
 }
 
 export const __test__ = {
@@ -1399,9 +1235,7 @@ function resolveAgentExecutionMode(input: {
   permissionMode: LocalDesktopPermissionMode;
   route: WorkbenchRequestRoute;
 }): AgentExecutionMode {
-  if (input.route === "read_only_agent") {
-    return "read_only";
-  }
+  void input;
   return "write";
 }
 
@@ -1778,9 +1612,6 @@ export function AskPage() {
   const [confirmAction, setConfirmAction] = useState<
     "clearContext" | "clearChat" | null
   >(null);
-  const [localPermissions, setLocalPermissions] =
-    useState<LocalDesktopPermissionSettings>(loadLocalPermissions);
-  const [localPermissionsOpen, setLocalPermissionsOpen] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
 
   const { data: defaultModelData } = useQuery({
@@ -1919,10 +1750,6 @@ export function AskPage() {
   useEffect(() => {
     persistKnowledgeItems(knowledgeItems);
   }, [knowledgeItems]);
-
-  useEffect(() => {
-    persistLocalPermissions(localPermissions);
-  }, [localPermissions]);
 
   useEffect(() => {
     setVisibleAskSessionId(activeSessionId || null);
@@ -2501,12 +2328,11 @@ export function AskPage() {
         error instanceof Error && error.message.trim()
           ? normalizeWorkbenchErrorMessage(error.message.trim())
           : t("ask.toast.sendFailed");
-      const failedText =
-        isStandaloneWorkbenchErrorMessage(errorMessage)
-          ? errorMessage
-          : workbenchRoute === "image_generation"
-            ? t("ask.imageFailed", { message: errorMessage })
-            : t("ask.requestFailed", { message: errorMessage });
+      const failedText = isStandaloneWorkbenchErrorMessage(errorMessage)
+        ? errorMessage
+        : workbenchRoute === "image_generation"
+          ? t("ask.imageFailed", { message: errorMessage })
+          : t("ask.requestFailed", { message: errorMessage });
       updateSessionMessages(targetSessionId, (previous) => ({
         messages: previous.map((message) =>
           message.id === assistantMessageId
@@ -3082,24 +2908,6 @@ export function AskPage() {
                     />
                     <button
                       type="button"
-                      onClick={() => {
-                        setConfirmAction(null);
-                        setLocalPermissionsOpen((open) => !open);
-                      }}
-                      className={cn(
-                        "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[#25262a] hover:text-text-primary",
-                        localPermissions.mode !== "basic"
-                          ? "text-[var(--color-brand-primary)]"
-                          : "text-text-muted",
-                      )}
-                      aria-label={t("ask.local.permissions")}
-                      title={t("ask.local.permissions")}
-                      aria-pressed={localPermissions.mode !== "basic"}
-                    >
-                      <ShieldCheck size={15} />
-                    </button>
-                    <button
-                      type="button"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={controlsDisabled}
                       className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-[#25262a] hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
@@ -3152,89 +2960,6 @@ export function AskPage() {
                       </button>
                     ) : null}
                   </div>
-                  {localPermissionsOpen ? (
-                    <div className="absolute bottom-12 left-2 z-50 w-[360px] rounded-xl border border-[#303642] bg-[#171a20] p-3 shadow-2xl">
-                      <div className="flex items-start gap-2">
-                        <span className="mt-0.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-[var(--color-brand-primary)]/15 text-[var(--color-brand-primary)]">
-                          <ShieldCheck size={15} />
-                        </span>
-                        <div className="min-w-0">
-                          <div className="text-[13px] font-semibold text-text-primary">
-                            {t("ask.local.title")}
-                          </div>
-                          <p className="mt-1 text-[11px] leading-5 text-text-muted">
-                            {t("ask.local.desc")}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="mt-3 grid grid-cols-3 gap-1.5">
-                        {[
-                          {
-                            key: "full",
-                            label: t("ask.local.mode.full"),
-                            desc: t("ask.local.mode.fullDesc"),
-                            icon: Globe2,
-                          },
-                        ].map((item) => {
-                          const Icon = item.icon;
-                          const mode = item.key as LocalDesktopPermissionMode;
-                          const selected = localPermissions.mode === mode;
-                          return (
-                            <button
-                              key={item.key}
-                              type="button"
-                              onClick={() =>
-                                setLocalPermissions((previous) => ({
-                                  ...previous,
-                                  mode,
-                                }))
-                              }
-                              className={cn(
-                                "flex min-h-[92px] flex-col items-start rounded-lg border p-2 text-left transition-colors hover:bg-[#242933]",
-                                selected
-                                  ? "border-[var(--color-brand-primary)]/70 bg-[var(--color-brand-primary)]/10 text-text-primary"
-                                  : "border-white/10 bg-white/[0.02] text-text-secondary",
-                              )}
-                            >
-                              <span className="flex items-center gap-1.5 text-[12px] font-semibold">
-                                <Icon size={14} />
-                                <span>{item.label}</span>
-                              </span>
-                              <span className="mt-1 text-[10px] leading-4 text-text-muted">
-                                {item.desc}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                      <div className="mt-2 flex flex-wrap gap-1.5 text-[10px] text-text-muted">
-                        {[
-                          {
-                            icon: Globe2,
-                            label: t("ask.local.capability.upload"),
-                          },
-                          {
-                            icon: FolderPlus,
-                            label: t("ask.local.capability.web"),
-                          },
-                          {
-                            icon: FileSpreadsheet,
-                            label: t("ask.local.capability.workspace"),
-                          },
-                        ].map(({ icon: CapabilityIcon, label }) => {
-                          return (
-                            <span
-                              key={label}
-                              className="inline-flex items-center gap-1 rounded-md border border-white/10 px-1.5 py-1"
-                            >
-                              <CapabilityIcon size={11} />
-                              {label}
-                            </span>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  ) : null}
                   {confirmAction ? (
                     <div className="absolute bottom-12 left-2 z-50 w-[220px] rounded-lg border border-[#303642] bg-[#1a1e26] p-3 shadow-2xl">
                       <div className="text-[12px] font-medium text-text-primary">

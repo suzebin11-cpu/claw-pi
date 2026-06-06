@@ -38,8 +38,8 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * 工作台 agent run 使用 `bootstrapContextMode="lightweight"`，跳过 AGENTS/SOUL/BOOTSTRAP/MEMORY 首轮注入，避免 onboarding 干扰普通问答。
 * Controller 会等待 OpenClaw 空 final 后的同 session 内层 run，避免过早结束导致 UI 显示“没有收到有效回复”。
 * OpenClaw `chat` event 返回模型/网络错误时，Controller 将其标准化为用户可见错误并结束 SSE，避免上游 `Connection error` 被前端误判为空回复。
-* 工作台请求显式区分 `chat`、`read_only_agent`、`write_agent`、`image_generation`，普通聊天仍走 OpenClaw runner，但使用轻量提示并禁用进度类自动续跑。
-* OpenClaw agent 上下文预算采用保守默认：最近上下文保留 `keepRecentTokens=8000`，工作台附件提取正文最多注入 12000 字符，执行类任务进度自动续跑最多 1 次，空回复重试仍保留 1 次。
+* 工作台请求保留 `requestRoute` 兼容字段，但除 `image_generation` 外前端统一走 `write_agent`；旧客户端传入的 `chat`、`read_only_agent`、`basic`、`confirm`、`read_only` 在 Controller 内部都按完全访问/可写执行处理。
+* OpenClaw agent 上下文预算采用保守默认：最近上下文保留 `keepRecentTokens=8000`，工作台附件提取正文最多注入 12000 字符，进度自动续跑最多 4 次，空回复重试仍保留 1 次。
 * OpenClaw pricing bootstrap 可通过 `OPENCLAW_SKIP_MODEL_PRICING=1` 禁用，避免首条请求被 OpenRouter 价格表超时拖慢。
 * OpenClaw WS 首次 connected 后只在断连期间发生配置写入时触发 `syncAll()`，避免启动阶段重复 reload。
 * OpenClaw Gateway WS 鉴权会同时发送配置的 gateway token 和已配对的 device token，避免打包环境重启后因只携带 gateway token 触发 `NOT_PAIRED`。
@@ -115,11 +115,11 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 == 4. 解决方案策略
 
 * Controller-first：Controller 仍是本地控制面，负责读取 Claw-Pi 配置、编译 OpenClaw 配置、启动 OpenClaw、同步模型和渠道。
-* OpenClaw-backed workbench：工作台新增 `AgentChatService`，将用户消息包装成权限约束后发送给 OpenClaw `agent`。
+* OpenClaw-backed workbench：工作台新增 `AgentChatService`，将用户消息包装成全能力执行约束后发送给 OpenClaw `agent`。
 * OpenClaw-backed ask surface：网页龙虾/龙虾工作台的用户发送路径统一进入 `/api/internal/agent-chat/stream`，`/v1/chat/completions` 只保留为压缩、兼容和诊断路径。
 * SSE compatibility：对前端保持 OpenAI-compatible stream 形态，内部事件来自 OpenClaw `chat` event。
 * Lightweight workbench turns：工作台请求显式传 `bootstrapContextMode="lightweight"` 和 `extraSystemPrompt`，保留 runner/tool 能力，同时避免新工作区 bootstrap 文档抢占用户消息。
-* Route-aware agent prompt：前端把请求分类为 `chat`、`read_only_agent`、`write_agent` 或 `image_generation`。普通聊天不注入文件/生图强执行提示，不重复携带历史摘要和最近 8 条；执行类任务才注入工具/权限约束。
+* Full-access agent prompt：前端除图片生成外统一发送 `write_agent`；Controller 兼容旧路由字段，但统一注入完全访问和可写执行提示。普通聊天仍走 OpenClaw runner，能直接回答就回答，需要本机/文件/网页/图片/命令能力时直接调用工具。
 * Cost-aware context budget：OpenClaw agent 保留足够上下文以维持连续任务，但默认不再保留 20000 token 级别上下文；附件正文注入和执行类自动续跑都设置上限，降低长会话、长文档和工具循环的余额消耗。
 * 固定默认模型：测试和默认路径只使用 `link/gpt-5.5`；生图固定 `clawpi-image/gpt-image-2`。
 * GPT Image2 streaming：默认纯文生图使用 `stream=true` 和 `partial_images=1`，服务端明确拒绝 streaming 参数或返回 `406 openai_error` 时退回同步调用一次；图生图/改图固定同步调用 `/v1/images/edits`。
@@ -359,7 +359,7 @@ Windows 自动更新安装必须经过桌面端 `UpdateManager.quitAndInstall()`
 
 === 8.1 权限模式
 
-工作台历史上支持 `basic`、`confirm`、`full` 三档权限；Web 龙虾大脑当前固定使用 OpenClaw 原生 `full` 权限和可写执行模式，旧版本地权限存储在新版本首次加载时迁移回 `full`。prompt 约束要求：用户只要求总结/分析时必须直接在聊天里回复，不额外创建文件；破坏性操作仍需保护。权限约束由 Controller 注入到用户消息前面。
+工作台历史上支持 `basic`、`confirm`、`full` 三档权限；当前产品权限模型收敛为统一完全访问。前端不再展示权限切换 UI，也不再持久化本地权限选择。Controller 继续接受旧请求字段，但 `permissionMode` 始终归一为 `full`，`executionMode` 始终归一为 `write`，`read_only_agent` 仅作为旧协议兼容值，不再代表只读行为。真实阻塞只来自工具、上游、余额、认证或网络失败。
 
 === 8.2 Session Key
 
@@ -525,7 +525,7 @@ agent:{agentId}:workbench:{sessionId}
 
 原因：全部入口统一走 OpenClaw 后，普通寒暄也带着文件/网页/生图/可写执行提示、历史摘要和最近多轮上下文进入 agent，导致首字慢且容易把简单问答误判成执行任务。
 
-结果：`/api/internal/agent-chat/stream` 增加内部 `requestRoute` 字段。`chat` 路由仍走 OpenClaw agent runner，但使用轻量普通对话提示、不主动调用工具、不做进度类 auto-continue；`read_only_agent`、`write_agent`、`image_generation` 保留工具与权限约束。前端不再把历史摘要和最近 8 条重复注入当前消息，附件正文由 Controller 保存/提取后注入。
+结果：`/api/internal/agent-chat/stream` 增加内部 `requestRoute` 字段。后续产品策略改为除 `image_generation` 外统一走全能力 `write_agent`；旧的 `chat`、`read_only_agent` 字段继续兼容接收，但不再禁用工具或自动续跑。前端不再把历史摘要和最近 8 条重复注入当前消息，附件正文由 Controller 保存/提取后注入。
 
 === ADR-017: Agent 上下文和续跑预算保守化
 
@@ -533,7 +533,7 @@ agent:{agentId}:workbench:{sessionId}
 
 原因：全部入口统一走 OpenClaw 后，长 session 记忆、附件正文、工具输出和自动续跑会叠加放大每轮模型输入，用户反馈余额消耗过快。过度削减又会让工作台回到“需要用户一直继续”的僵硬体验。
 
-结果：OpenClaw compaction 默认 `keepRecentTokens=8000`；工作台附件正文提取最多注入 12000 字符；执行类任务进度自动续跑最多 1 次；空回复重试保留 1 次。该策略优先控制普通用户余额消耗，同时保留一次恢复机会以减少“没有收到有效回复”和执行半停。
+结果：OpenClaw compaction 默认 `keepRecentTokens=8000`；工作台附件正文提取最多注入 12000 字符；进度自动续跑最多 4 次；空回复重试保留 1 次。该策略优先保证任务能持续执行，余额消耗控制不再通过产品权限软约束实现。
 
 == 10. 质量需求
 
@@ -683,9 +683,9 @@ agent:{agentId}:workbench:{sessionId}
 |云端图片接口可能已经生成并扣费，但本地 fetch 在读取响应时断开，导致没有可保存图片。
 |`gpt-image-2` 纯文生图使用 streaming + partial image progress 降低 60s 断连概率；若 stream 读取中断但已有 partial，则保存最新 partial。图生图/改图不使用 edit stream，避免云雾 edit stream 返回 500/SSE syntax error，并记录 `requestMode=sync`。
 
-|上下文预算降低
-|`keepRecentTokens=8000`、附件正文 12000 字符和 1 次自动续跑会降低余额消耗，但长对话可能忘记更早背景，长文档可能漏掉后半段细节，复杂执行任务可能需要用户手动继续。
-|优先保持普通聊天和常见文件任务成本可控；后续可按 route 区分预算，例如只读长文档任务允许显式扩展附件提取，普通 chat 保持低预算。
+|上下文预算与自动续跑
+|`keepRecentTokens=8000` 和附件正文 12000 字符仍可能让长对话忘记更早背景，自动续跑提高到 4 次会增加复杂任务的 token 和工具消耗。
+|当前优先保证任务持续执行和减少“没有收到有效回复”；后续若余额消耗再次成为主风险，应通过上游分组、模型价格和诊断账单优化，而不是恢复产品权限软限制。
 
 |错误分类误判
 |统一错误分类依赖上游返回文本和本地日志特征。若上游文案变化，可能把未知错误归入相邻类别，影响用户提示和售后判断。
@@ -700,8 +700,8 @@ agent:{agentId}:workbench:{sessionId}
 |patch 脚本必须 anchor 校验；升级 OpenClaw 时先跑 sidecar prepare。
 
 |权限边界
-|Full 模式需要执行能力，但不能变成无限制本机控制。
-|破坏性操作保留确认或阻断策略。
+|统一完全访问会提升误执行风险，尤其是用户表达含糊但 agent 推断为写入、打开或运行任务时。
+|不再通过 `basic/confirm/read_only` 提示词限制 agent；产品层依赖工具真实失败、系统权限、诊断日志和后续更明确的用户可撤销/备份机制控制风险。
 |===
 
 == 12. 术语表

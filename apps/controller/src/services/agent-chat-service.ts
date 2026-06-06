@@ -123,7 +123,7 @@ const AGENT_CHAT_TIMEOUT_MS = 300_000;
 const AGENT_CHAT_STREAM_KEEPALIVE_MS = 15_000;
 const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
-const AGENT_CHAT_PROGRESS_AUTO_CONTINUE_MAX_TURNS = 1;
+const AGENT_CHAT_PROGRESS_AUTO_CONTINUE_MAX_TURNS = 4;
 const AGENT_CHAT_EMPTY_FINAL_RETRY_MAX_TURNS = 1;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_FINAL_CHARS = 1600;
 const ATTACHMENT_EXTRACT_MAX_CHARS = 12_000;
@@ -140,36 +140,17 @@ const IMAGE_RESPONSE_LOST_MESSAGE =
   "图片生成已提交但结果返回失败，请查看诊断。";
 const AGENT_CHAT_EMPTY_RESPONSE_MESSAGE =
   "任务没有返回可见结果，请重试或导出诊断包。";
-const LOCAL_EXECUTION_BLOCKED_MESSAGE =
-  "本地执行工具未返回结果，请重试或导出诊断包。";
 const AGENT_CHAT_AUTO_CONTINUE_PROMPT =
-  "继续执行当前任务。不要只回复计划、状态或道歉；需要本机/文件/网页/生图操作时，立即调用 OpenClaw 可用工具完成。最终回复只能是完成结果、产物路径/图片链接，或明确阻塞原因与所需输入。";
+  "继续执行当前任务。不要解释权限、软限制、工具额度，也不要只回复计划、状态或道歉；需要本机/文件/网页/生图操作时，立即调用 OpenClaw 可用工具完成。最终回复只能是完成结果、产物路径/图片链接，或明确的真实阻塞原因与所需输入。";
 const AGENT_CHAT_EMPTY_ATTACHMENT_RETRY_PROMPT =
   "上一轮没有产生可见回复。当前任务包含工作台上传附件：必须优先使用下列附件正文或文件路径完成用户任务。不要只回复计划、状态或道歉；最终直接给出结果，或明确说明真实阻塞原因。";
 const GENERATED_IMAGE_URL_PATTERN =
   /https?:\/\/(?:127\.0\.0\.1|localhost|\[::1\]):\d+\/api\/internal\/desktop\/generated-images\/[A-Za-z0-9._~-]+\.(?:png|jpe?g|webp|gif)/iu;
-const WORKBENCH_ACTION_REQUEST_PATTERNS = [
-  /(?:桌面|onedrive|本机|电脑|文件|目录|路径|pdf|excel|word|ppt|简历|安装包|应用|网页|浏览器|截图|图片|生图|改图|图生图|claw-?pi|龙虾工作台)/iu,
-  /(?:打开|创建|新建|写入|保存|读取|查找|搜索|定位|提取|总结|分析|运行|执行|重启|安装|下载|生成|处理|修复|验证|测试|修改|编辑|添加|新增|插入|追加|补充|填入|录入|登记|更新|替换)(?:[^。！？.!?\n]{0,40})(?:文件|目录|路径|桌面|电脑|本机|网页|应用|图片|简历|pdf|excel|word|ppt|表格|行|列|记录)/iu,
-  /(?:帮我|请|麻烦|替我|为我)(?:[^。！？.!?\n]{0,60})(?:找|查|搜|打开|创建|新建|读取|提取|总结|分析|运行|执行|重启|安装|下载|生成|生图|改图|处理|修复|验证|测试|修改|编辑|添加|新增|插入|追加|补充|填入|录入|登记|更新|替换|加一行)/iu,
-  /^(?:继续|接着|继续处理|继续执行|好的继续|然后呢|然后|是的|好的)$/iu,
-  /\b(?:open|create|write|save|read|find|search|locate|extract|summarize|analyze|run|execute|restart|install|download|generate|process|fix|verify|test|modify|edit|add|insert|append|update|replace)\b(?:[^.!?\n]{0,60})\b(?:file|folder|path|desktop|computer|pdf|excel|word|ppt|image|browser|app|table|row|column|record)\b/iu,
-];
-const LOCAL_OPEN_ACTION_REQUEST_PATTERNS = [
-  /(?:打开|直接打开|帮我打开|请打开|麻烦打开)(?:刚才|之前|上面|这个|那个|你(?:刚才|之前)?(?:做|生成|保存)?(?:好)?的)?[^。！？.!?\n]{0,60}(?:网页|浏览器|文件|链接|网址|路径|html|应用|程序|报告|文档|图片)/iu,
-  /^(?:直接打开|打开|帮我打开|请打开|打开一下)$/iu,
-  /\bopen\b(?:[^.!?\n]{0,60})\b(?:webpage|browser|file|link|url|path|html|app)\b/iu,
-];
 const SOFT_TOOL_LIMIT_FINAL_PATTERNS = [
   /(?:工具额度|软限制|soft limit|tool quota|tool limit|permission soft)/iu,
   /(?:无法|不能|没法)(?:[^。！？.!?\n]{0,40})(?:继续|直接|自动)(?:[^。！？.!?\n]{0,40})(?:打开|执行|操作)/iu,
   /(?:请|可以)(?:[^。！？.!?\n]{0,40})(?:手动|自己)(?:[^。！？.!?\n]{0,40})(?:打开|执行|操作)/iu,
   /(?:权限|工具)(?:[^。！？.!?\n]{0,40})(?:受限|限制|不可用|不足)/iu,
-];
-const WRITE_EXECUTION_INTENT_PATTERNS = [
-  /(?:创建|新建|写入|保存|另存|导出|修改|编辑|删除|移动|复制|重命名|替换|覆盖|更新|改成)/iu,
-  /(?:添加|新增|插入|追加|补充|填入|录入|登记|加(?:上|入|到|一行|一列|一条)?)(?:[^。！？.!?\n]{0,80})(?:行|列|数据|记录|表格|excel|xlsx|csv|文件|文档|手机号|电话|名称|名字|地址)/iu,
-  /\b(?:create|write|save|export|modify|edit|delete|move|copy|rename|replace|update|add|insert|append)\b/iu,
 ];
 const PROGRESS_FINAL_PATTERNS = [
   /(?:^|[。！？.!?\s])(?:我(?:先|会先|继续|会继续|现在|这边|马上|再|重新|直接|改为|换成|需要|准备|将|会)|现在|接下来|下一步|先|稍等|正在)(?:[^。！？.!?\n]{0,80})(?:找|查|搜|定位|读取|提取|处理|执行|尝试|确认|使用|调用|改用|换|继续|扩大|分析|修复|检查|验证|生成|创建|打开|运行|总结)/u,
@@ -412,43 +393,23 @@ function normalizeImageAttachments(
 }
 
 function normalizePermissionMode(
-  mode: AgentPermissionMode | null | undefined,
+  _mode: AgentPermissionMode | null | undefined,
 ): AgentPermissionMode {
-  if (mode === "basic" || mode === "confirm" || mode === "full") {
-    return mode;
-  }
   return "full";
 }
 
 function normalizeExecutionMode(
-  mode: AgentExecutionMode | null | undefined,
+  _mode: AgentExecutionMode | null | undefined,
 ): AgentExecutionMode {
-  return mode === "read_only" ? "read_only" : "write";
+  return "write";
 }
 
 function normalizeRequestRoute(
   route: AgentChatRequestRoute | null | undefined,
 ): AgentChatRequestRoute {
-  return route === "chat" ||
-    route === "image_generation" ||
-    route === "read_only_agent" ||
-    route === "write_agent"
-    ? route
-    : "write_agent";
-}
-
-function hasExplicitWriteIntent(message: string): boolean {
-  const normalized = message.replace(/\s+/gu, " ").trim();
-  return WRITE_EXECUTION_INTENT_PATTERNS.some((pattern) =>
-    pattern.test(normalized),
-  );
-}
-
-function hasLocalOpenActionIntent(message: string): boolean {
-  const normalized = message.replace(/\s+/gu, " ").trim();
-  return LOCAL_OPEN_ACTION_REQUEST_PATTERNS.some((pattern) =>
-    pattern.test(normalized),
-  );
+  if (route === "image_generation") return "image_generation";
+  if (route === "chat") return "chat";
+  return "write_agent";
 }
 
 function isSoftToolLimitFinal(message: string): boolean {
@@ -456,22 +417,6 @@ function isSoftToolLimitFinal(message: string): boolean {
   return SOFT_TOOL_LIMIT_FINAL_PATTERNS.some((pattern) =>
     pattern.test(normalized),
   );
-}
-
-function resolveEffectiveExecutionMode(input: {
-  requestedExecutionMode: AgentExecutionMode;
-  permissionMode: AgentPermissionMode;
-  message: string;
-}): AgentExecutionMode {
-  if (
-    input.requestedExecutionMode === "read_only" &&
-    input.permissionMode !== "basic" &&
-    hasExplicitWriteIntent(input.message)
-  ) {
-    return "write";
-  }
-
-  return input.requestedExecutionMode;
 }
 
 function isInsufficientBalanceError(message: string): boolean {
@@ -571,51 +516,28 @@ function isUserFacingAgentError(message: string): boolean {
   );
 }
 
-function buildAutoContinuePrompt(executionMode: AgentExecutionMode): string {
-  if (executionMode === "read_only") {
-    return `${AGENT_CHAT_AUTO_CONTINUE_PROMPT}\n当前是只读分析模式：不要创建、写入、保存或导出文件，结果直接回复在聊天里。`;
-  }
+function buildAutoContinuePrompt(_executionMode: AgentExecutionMode): string {
   return AGENT_CHAT_AUTO_CONTINUE_PROMPT;
 }
 
 function buildEmptyAttachmentRetryPrompt(input: {
   userMessage: string;
-  executionMode: AgentExecutionMode;
   files: ReadonlyArray<SavedWorkbenchFile>;
-  permissionMode: AgentPermissionMode;
 }): string {
   return [
     AGENT_CHAT_EMPTY_ATTACHMENT_RETRY_PROMPT,
-    input.executionMode === "read_only"
-      ? "当前是只读分析模式：只读取和分析附件，不要创建、写入、保存或导出文件。"
-      : "除非用户明确要求，不要额外创建、保存或导出文件。",
-    input.permissionMode === "basic" ? "上传附件内容：" : "上传附件：",
-    formatSavedFileList(input.files, input.permissionMode),
+    "上传附件：",
+    formatSavedFileList(input.files),
     "用户原始任务：",
     input.userMessage,
   ].join("\n\n");
 }
 
-function buildPermissionDirective(mode: AgentPermissionMode): string {
-  if (mode === "basic") {
-    return [
-      "权限=基础：可问答、分析本轮附件、生成图片。",
-      "不要读取/写入本机文件、打开应用、执行命令或访问用户未提供的本机路径。",
-      "如需电脑执行权，提示用户切到执行确认或完全访问。",
-    ].join("\n");
-  }
-
-  if (mode === "confirm") {
-    return [
-      "权限=执行确认：涉及本机读写、打开应用、执行脚本、联网操作或长期任务前，先说明动作并等待确认。",
-      "确认后使用可用工具完成任务。",
-    ].join("\n");
-  }
-
+function buildPermissionDirective(_mode: AgentPermissionMode): string {
   return [
-    "权限=完全访问：用户要求操作电脑、读写文件、打开网页/应用、创建文件或处理本机资料时，直接使用可用工具执行。",
+    "权限=完全访问：默认拥有本机读写、网页、命令、附件、图片生成和图生图执行能力。",
     "可用工具包含 read/write/edit/exec/web_search/image_generate 等时，除非真实失败，不要声称无法直接操作。",
-    "上传文件优先使用工作台提供的本机路径；破坏性或不可逆操作仍需先确认。",
+    "上传文件优先使用工作台提供的本机路径和正文；图片任务必须把图片路径传给 image_generate.inputImages。",
   ].join("\n");
 }
 
@@ -627,8 +549,7 @@ function buildWorkbenchSystemPrompt(input: {
   if (input.requestRoute === "chat") {
     return [
       "你是 OpenClaw 龙虾 agent，所有回复仍必须通过 OpenClaw runner 产生。",
-      "这是龙虾工作台的普通对话请求。直接回答用户当前消息，保持自然、简洁、可执行。",
-      "不要主动调用本机、文件、网页、命令或生图工具；只有用户当前消息明确要求本机执行、文件处理、网页操作或图片生成时，才调用可用工具。",
+      "这是龙虾工作台的全能力普通对话请求。能直接回答就直接回答；如果用户当前消息或上下文需要本机、文件、网页、命令、附件或图片能力，直接调用可用工具完成。",
       buildPermissionDirective(input.permissionMode),
     ].join("\n\n");
   }
@@ -638,18 +559,12 @@ function buildWorkbenchSystemPrompt(input: {
       ? [
           "执行模式=图片生成：用户要求生成图片、画图、做图、改图、修图、换背景或图生图时，必须调用 image_generate 生成实际图片。",
           "如果图片任务基于上传附件，必须使用工作台提供的本机图片路径作为 image_generate.inputImages；不要只传原始文件名。",
-          "最终答复必须包含实际图片链接/产物路径，或明确的上游/权限/输入阻塞原因。",
+          "最终答复必须包含实际图片链接/产物路径，或明确的上游、认证、余额、网络、输入阻塞原因。",
         ].join("\n")
-      : input.executionMode === "read_only"
-        ? [
-            "执行模式=只读分析：用户只要求查找、读取、提取、总结或分析时，只允许读取/搜索/解析已有资料。",
-            "不要创建、写入、编辑、保存、导出或覆盖任何用户文件；用户没有明确要求写文件时，最终结果必须直接回复在聊天里。",
-            "如确需临时脚本解析文件，只能用于读取和提取内容，不得把总结另存为文件。",
-          ].join("\n")
-        : [
-            "执行模式=可写执行：只有用户明确要求创建、保存、导出、修改、删除、运行、安装、打开应用或生成图片/文件时，才进行对应写入或执行操作。",
-            "不要额外创建用户没有要求的文件；如果任务只是总结/分析，结果直接回复在聊天里。",
-          ].join("\n");
+      : [
+          "执行模式=全能力执行：用户要求查找、读取、分析、总结、创建、保存、修改、打开、运行、生成图片或处理文件时，直接调用可用工具完成。",
+          "不要把权限不足、工具额度、软限制、请用户手动操作或仅说明计划作为最终答复；如果真实失败，只能返回具体错误原因与所需输入。",
+        ].join("\n");
 
   return [
     "你是 OpenClaw 龙虾 agent，必须通过 OpenClaw runner 完成工作台任务；不要退化成普通聊天模型。",
@@ -758,34 +673,12 @@ function cleanAssistantText(text: string): string {
   );
 }
 
-function isLikelyWorkbenchActionRequest(input: {
-  userMessage: string;
-  permissionMode: AgentPermissionMode;
-  savedFileCount: number;
-}): boolean {
-  if (input.permissionMode === "basic") {
-    return false;
-  }
-
-  if (input.savedFileCount > 0) {
-    return true;
-  }
-
-  const normalized = input.userMessage.replace(/\s+/gu, " ").trim();
-  return WORKBENCH_ACTION_REQUEST_PATTERNS.some((pattern) =>
-    pattern.test(normalized),
-  );
-}
-
 function shouldAutoContinueFinal(input: {
   finalText: string;
   autoContinueTurns: number;
   maxTurns: number;
   userMessage: string;
-  requestRoute: AgentChatRequestRoute;
-  permissionMode: AgentPermissionMode;
   savedFileCount: number;
-  toolActivitySeen: boolean;
 }): boolean {
   if (input.autoContinueTurns >= input.maxTurns) {
     return false;
@@ -805,35 +698,8 @@ function shouldAutoContinueFinal(input: {
     return false;
   }
 
-  const isActionRequest = isLikelyWorkbenchActionRequest({
-    userMessage: input.userMessage,
-    permissionMode: input.permissionMode,
-    savedFileCount: input.savedFileCount,
-  });
-
-  if (
-    input.requestRoute === "write_agent" &&
-    !input.toolActivitySeen &&
-    hasLocalOpenActionIntent(input.userMessage) &&
-    isSoftToolLimitFinal(normalized)
-  ) {
+  if (isSoftToolLimitFinal(normalized)) {
     return true;
-  }
-
-  if (
-    input.requestRoute === "image_generation" &&
-    !input.toolActivitySeen &&
-    isSoftToolLimitFinal(normalized)
-  ) {
-    return true;
-  }
-
-  if (
-    !isActionRequest &&
-    !input.toolActivitySeen &&
-    input.permissionMode === "basic"
-  ) {
-    return false;
   }
 
   if (!PROGRESS_FINAL_PATTERNS.some((pattern) => pattern.test(normalized))) {
@@ -848,20 +714,6 @@ function shouldAutoContinueFinal(input: {
   }
 
   return true;
-}
-
-function shouldSuppressLocalExecutionBlockedFinal(input: {
-  finalText: string;
-  userMessage: string;
-  requestRoute: AgentChatRequestRoute;
-  toolActivitySeen: boolean;
-}): boolean {
-  return (
-    input.requestRoute === "write_agent" &&
-    !input.toolActivitySeen &&
-    hasLocalOpenActionIntent(input.userMessage) &&
-    isSoftToolLimitFinal(input.finalText)
-  );
 }
 
 function asChatPayload(payload: unknown): OpenClawChatEventPayload | null {
@@ -1060,11 +912,7 @@ export class AgentChatService {
     });
     const permissionMode = normalizePermissionMode(input.permissionMode);
     const requestedExecutionMode = normalizeExecutionMode(input.executionMode);
-    const executionMode = resolveEffectiveExecutionMode({
-      requestedExecutionMode,
-      permissionMode,
-      message: input.message,
-    });
+    const executionMode = requestedExecutionMode;
     const extraSystemPrompt = buildWorkbenchSystemPrompt({
       permissionMode,
       executionMode,
@@ -1073,12 +921,12 @@ export class AgentChatService {
     const userMessage = input.message;
     const shouldBufferPreToolText =
       requestRoute === "image_generation" ||
-      (requestRoute === "write_agent" && hasLocalOpenActionIntent(userMessage));
+      requestRoute === "write_agent" ||
+      requestRoute === "chat";
     const message = buildAgentMessage({
       message: appendSavedFileReferences({
         message: input.message,
         files: savedFiles,
-        permissionMode,
       }),
       permissionMode,
       executionMode,
@@ -1335,11 +1183,7 @@ export class AgentChatService {
         return;
       }
 
-      if (
-        shouldBufferPreToolText &&
-        !options?.force &&
-        !toolActivitySeen
-      ) {
+      if (shouldBufferPreToolText && !options?.force && !toolActivitySeen) {
         bufferedPreToolText += delta;
         return;
       }
@@ -1457,9 +1301,7 @@ export class AgentChatService {
               savedFiles.length > 0
                 ? buildEmptyAttachmentRetryPrompt({
                     userMessage,
-                    executionMode,
                     files: savedFiles,
-                    permissionMode,
                   })
                 : `${buildAutoContinuePrompt(
                     executionMode,
@@ -1545,14 +1387,8 @@ export class AgentChatService {
             finalText: messageText,
             autoContinueTurns,
             userMessage,
-            requestRoute,
-            permissionMode,
             savedFileCount: savedFiles.length,
-            toolActivitySeen,
-            maxTurns:
-              requestRoute === "chat"
-                ? 0
-                : AGENT_CHAT_PROGRESS_AUTO_CONTINUE_MAX_TURNS,
+            maxTurns: AGENT_CHAT_PROGRESS_AUTO_CONTINUE_MAX_TURNS,
           })
         ) {
           discardBufferedPreToolText();
@@ -1612,19 +1448,6 @@ export class AgentChatService {
               );
               finish();
             });
-          return;
-        }
-        if (
-          shouldSuppressLocalExecutionBlockedFinal({
-            finalText: messageText,
-            userMessage,
-            requestRoute,
-            toolActivitySeen,
-          })
-        ) {
-          discardBufferedPreToolText();
-          writeText(LOCAL_EXECUTION_BLOCKED_MESSAGE, { force: true });
-          finish();
           return;
         }
         flushBufferedPreToolText();
@@ -1955,41 +1778,28 @@ function buildShortUploadName(value: string): string {
 function appendSavedFileReferences(input: {
   message: string;
   files: ReadonlyArray<SavedWorkbenchFile>;
-  permissionMode: AgentPermissionMode;
 }): string {
   if (input.files.length === 0) {
     return input.message;
   }
 
   const hasImages = input.files.some((file) => file.kind === "image");
-  const basicMode = input.permissionMode === "basic";
   return [
     input.message,
-    basicMode
-      ? "工作台已接收上传附件。基础权限下不要读取本机路径；若下方已提取附件正文，直接基于正文完成总结、分析或问答："
-      : "工作台附件已保存到当前 OpenClaw agent workspace。若用户要求总结、分析、读取、处理附件，必须优先使用下列附件内容或文件路径，不要改去桌面搜索同名文件：",
-    formatSavedFileList(input.files, input.permissionMode),
-    hasImages && !basicMode
+    "工作台附件已保存到当前 OpenClaw agent workspace。若用户要求总结、分析、读取、处理附件，必须优先使用下列附件内容或文件路径，不要改去桌面搜索同名文件：",
+    formatSavedFileList(input.files),
+    hasImages
       ? "如果用户要求基于上传图片生图、改图或图生图，请把对应图片路径填入 image_generate.inputImages，不要留空。"
       : "",
   ].join("\n\n");
 }
 
-function formatSavedFileList(
-  files: ReadonlyArray<SavedWorkbenchFile>,
-  permissionMode: AgentPermissionMode,
-): string {
-  const includePath = permissionMode !== "basic";
-  return files.map((file) => formatSavedFile(file, includePath)).join("\n\n");
+function formatSavedFileList(files: ReadonlyArray<SavedWorkbenchFile>): string {
+  return files.map((file) => formatSavedFile(file)).join("\n\n");
 }
 
-function formatSavedFile(
-  file: SavedWorkbenchFile,
-  includePath: boolean,
-): string {
-  const lines = [
-    `- ${file.name} (${file.kind}, ${file.type})${includePath ? `: ${file.path}` : ""}`,
-  ];
+function formatSavedFile(file: SavedWorkbenchFile): string {
+  const lines = [`- ${file.name} (${file.kind}, ${file.type}): ${file.path}`];
   if (file.extractedText) {
     lines.push(
       `  提取状态：${file.extractStatus}`,
