@@ -4,6 +4,12 @@ import path from "node:path";
 import pdfjsLegacy from "pdf-parse/lib/pdf.js/v1.10.100/build/pdf.js";
 import type { ControllerEnv } from "../app/env.js";
 import { logger } from "../lib/logger.js";
+import {
+  LOCAL_RUNTIME_REPAIR_FAILED_MESSAGE,
+  LOCAL_RUNTIME_REPAIR_MESSAGE,
+  type OpenClawRuntimeRepairCoordinator,
+  classifyOpenClawRuntimeRepairReason,
+} from "../runtime/openclaw-runtime-repair.js";
 import type {
   OpenClawGatewayEvent,
   OpenClawWsClient,
@@ -68,6 +74,7 @@ export type AgentChatErrorCategory =
   | "auth_expired"
   | "model_auth_not_ready"
   | "openclaw_not_ready"
+  | "local_runtime_repairable"
   | "image_response_lost"
   | "attachment_extract_failed"
   | "wechat_qr_pending"
@@ -470,6 +477,9 @@ export function classifyAgentChatErrorMessage(
   if (isUpstreamSaturatedError(message)) return "upstream_saturated";
   if (isImageResponseLostError(message)) return "image_response_lost";
   if (isOpenClawNotReadyError(message)) return "openclaw_not_ready";
+  if (classifyOpenClawRuntimeRepairReason(message)) {
+    return "local_runtime_repairable";
+  }
   if (isModelNetworkError(message)) return "model_network_error";
   return "unknown";
 }
@@ -498,6 +508,8 @@ export function normalizeAgentChatUserMessage(message: string): string {
       return OPENCLAW_NOT_READY_MESSAGE;
     case "model_network_error":
       return MODEL_NETWORK_ERROR_MESSAGE;
+    case "local_runtime_repairable":
+      return LOCAL_RUNTIME_REPAIR_FAILED_MESSAGE;
     default:
       return message;
   }
@@ -512,6 +524,7 @@ function isUserFacingAgentError(message: string): boolean {
     message === MODEL_NETWORK_ERROR_MESSAGE ||
     message === OPENCLAW_CONFIG_SYNC_FAILED_MESSAGE ||
     message === OPENCLAW_NOT_READY_MESSAGE ||
+    message === LOCAL_RUNTIME_REPAIR_FAILED_MESSAGE ||
     message === IMAGE_RESPONSE_LOST_MESSAGE
   );
 }
@@ -841,6 +854,7 @@ export class AgentChatService {
     private readonly wsClient: OpenClawWsClient,
     private readonly env: ControllerEnv,
     private readonly preflightSyncService?: AgentChatPreflightSyncService,
+    private readonly runtimeRepair?: OpenClawRuntimeRepairCoordinator,
   ) {}
 
   async extractAttachments(input: {
@@ -964,7 +978,7 @@ export class AgentChatService {
     let waitingForSessionContinuation = false;
     let autoContinueTurns = 0;
     let emptyFinalRetries = 0;
-    let pendingError: Error | null = null;
+    const pendingError: Error | null = null;
     let timeout: NodeJS.Timeout | null = null;
     let keepalive: NodeJS.Timeout | null = null;
     let emptyFinalRetryTimeout: NodeJS.Timeout | null = null;
@@ -974,6 +988,7 @@ export class AgentChatService {
     let submitMs: number | null = null;
     let firstTextMs: number | null = null;
     let lastErrorCategory: AgentChatErrorCategory | null = null;
+    let runtimeRepairAttempts = 0;
 
     const sendAgentRun = async (
       requestRunId: string,
@@ -1114,10 +1129,27 @@ export class AgentChatService {
         "agent_chat_stream_fail",
       );
       logLatencySummary("fail");
+      const normalizedMessage = normalizeAgentChatUserMessage(error.message);
+      const visibleMessage = isUserFacingAgentError(normalizedMessage)
+        ? normalizedMessage
+        : `任务执行失败：${normalizedMessage}`;
+      const chunks = [
+        toSseChunk({
+          choices: [{ delta: { content: visibleMessage } }],
+        }),
+        toDoneChunk(),
+      ];
       if (controllerRef) {
-        controllerRef.error(error);
+        for (const chunk of chunks) {
+          controllerRef.enqueue(chunk);
+        }
+        try {
+          controllerRef.close();
+        } catch {
+          // Stream may already be cancelled by the browser.
+        }
       } else {
-        pendingError = error;
+        queuedChunks.push(...chunks);
       }
     };
 
@@ -1211,6 +1243,83 @@ export class AgentChatService {
         },
         "agent_chat_tool_activity",
       );
+    };
+
+    const tryRuntimeRepairAndRetry = (
+      rawErrorMessage: string,
+      source: string,
+    ): boolean => {
+      const reason = classifyOpenClawRuntimeRepairReason(rawErrorMessage);
+      if (!reason || !this.runtimeRepair || runtimeRepairAttempts >= 1) {
+        return false;
+      }
+
+      runtimeRepairAttempts += 1;
+      lastErrorCategory = "local_runtime_repairable";
+      writeText(LOCAL_RUNTIME_REPAIR_MESSAGE, { force: true });
+
+      const continuationRunId = randomUUID();
+      activeRunId = continuationRunId;
+      waitingForSessionContinuation = true;
+      logger.warn(
+        {
+          route: "agentChat.stream",
+          agentId: input.agentId,
+          sessionId: input.sessionId,
+          sessionKey,
+          runId,
+          continuationRunId,
+          source,
+          reason,
+          rawErrorMessage,
+          runtimeRepairAttempts,
+        },
+        "agent_chat_runtime_repair_retry_start",
+      );
+
+      void this.runtimeRepair
+        .repair(reason)
+        .then(async (result) => {
+          if (!result.ok) {
+            writeText(LOCAL_RUNTIME_REPAIR_FAILED_MESSAGE, { force: true });
+            finish();
+            return;
+          }
+          await sendAgentRun(continuationRunId, message);
+          logger.info(
+            {
+              route: "agentChat.stream",
+              agentId: input.agentId,
+              sessionId: input.sessionId,
+              sessionKey,
+              runId,
+              continuationRunId,
+              source,
+              repairLevel: result.level,
+              skippedCooldown: result.skippedCooldown,
+            },
+            "agent_chat_runtime_repair_retry_sent",
+          );
+        })
+        .catch((error) => {
+          logger.warn(
+            {
+              route: "agentChat.stream",
+              agentId: input.agentId,
+              sessionId: input.sessionId,
+              sessionKey,
+              runId,
+              continuationRunId,
+              source,
+              error: error instanceof Error ? error.message : String(error),
+            },
+            "agent_chat_runtime_repair_retry_failed",
+          );
+          writeText(LOCAL_RUNTIME_REPAIR_FAILED_MESSAGE, { force: true });
+          finish();
+        });
+
+      return true;
     };
 
     const handleChatEvent = (event: OpenClawGatewayEvent) => {
@@ -1469,6 +1578,9 @@ export class AgentChatService {
           typeof payload.errorMessage === "string"
             ? payload.errorMessage
             : "OpenClaw agent chat failed";
+        if (tryRuntimeRepairAndRetry(rawErrorMessage, "chat-error-event")) {
+          return;
+        }
         lastErrorCategory = classifyAgentChatErrorMessage(rawErrorMessage);
         const errorMessage = normalizeAgentChatUserMessage(rawErrorMessage);
         if (isUserFacingAgentError(errorMessage)) {
@@ -1476,7 +1588,8 @@ export class AgentChatService {
           finish();
           return;
         }
-        fail(new Error(errorMessage));
+        writeText(`任务执行失败：${errorMessage}`, { force: true });
+        finish();
       }
     };
 
@@ -1658,8 +1771,11 @@ export class AgentChatService {
     })().catch((error) => {
       const rawMessage =
         error instanceof Error ? error.message : "OpenClaw agent chat failed";
+      if (tryRuntimeRepairAndRetry(rawMessage, "agent-send-failed")) {
+        return;
+      }
       lastErrorCategory = classifyAgentChatErrorMessage(rawMessage);
-      const message = normalizeAgentChatUserMessage(rawMessage);
+      const normalizedMessage = normalizeAgentChatUserMessage(rawMessage);
       logger.warn(
         {
           route: "agentChat.stream",
@@ -1667,17 +1783,18 @@ export class AgentChatService {
           sessionId: input.sessionId,
           sessionKey,
           runId,
-          error: message,
+          error: normalizedMessage,
           errorCategory: lastErrorCategory,
         },
         "agent_chat_send_failed",
       );
       if (!lastText) {
-        if (isUserFacingAgentError(message)) {
-          writeText(message, { force: true });
+        if (isUserFacingAgentError(normalizedMessage)) {
+          writeText(normalizedMessage, { force: true });
           finish();
         } else {
-          fail(new Error(message));
+          writeText(`任务执行失败：${normalizedMessage}`, { force: true });
+          finish();
         }
       }
     });

@@ -4,8 +4,20 @@ export type RuntimeStatus = "active" | "starting" | "degraded" | "unhealthy";
 
 export type RuntimeReadySnapshot = {
   status?: RuntimeStatus;
+  ready?: boolean;
+  desktopReady?: boolean;
+  webReady?: boolean;
+  openclawReady?: boolean;
+  agentReady?: boolean;
   gatewayConnected?: boolean;
   bootTimestamp?: number;
+  runtimeRepair?: {
+    inProgress?: boolean;
+    lastReason?: string | null;
+    lastLevel?: "soft" | "deep" | null;
+    lastRepairAt?: number | null;
+    lastError?: string | null;
+  };
   model?: {
     ready?: boolean;
     defaultModelId?: string | null;

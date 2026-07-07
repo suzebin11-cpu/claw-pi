@@ -29,6 +29,13 @@ const desktopReadyResponseSchema = z.object({
     }),
   ),
   gatewayConnected: z.boolean(),
+  runtimeRepair: z.object({
+    inProgress: z.boolean(),
+    lastReason: z.string().nullable(),
+    lastLevel: z.enum(["soft", "deep"]).nullable(),
+    lastRepairAt: z.number().nullable(),
+    lastError: z.string().nullable(),
+  }),
   model: z.object({
     ready: z.boolean(),
     defaultModelId: z.string().nullable(),
@@ -124,7 +131,6 @@ function resolveLocalActionBase(target: LocalActionRequest["target"]): string {
       return path.join(home, "Downloads");
     case "home":
       return home;
-    case "desktop":
     default:
       return getDesktopPath();
   }
@@ -132,8 +138,11 @@ function resolveLocalActionBase(target: LocalActionRequest["target"]): string {
 
 function sanitizeFileName(name: string | undefined, fallback: string): string {
   const raw = name?.trim() || fallback;
-  const cleaned = raw
-    .replace(/[<>:"/\\|?*\u0000-\u001f]/gu, " ")
+  const withoutReservedChars = raw.replace(/[<>:"/\\|?*]/gu, " ");
+  const cleaned = Array.from(withoutReservedChars, (char) =>
+    char.charCodeAt(0) < 32 ? " " : char,
+  )
+    .join("")
     .replace(/\s+/gu, " ")
     .trim()
     .slice(0, 80);
@@ -511,6 +520,13 @@ export function registerDesktopRoutes(
         bots.find((bot) => bot.status !== "deleted") ??
         null;
       const gatewayConnected = container.gatewayService.isConnected();
+      const runtimeRepair = container.openclawRuntimeRepair?.getStatus?.() ?? {
+        inProgress: false,
+        lastReason: null,
+        lastLevel: null,
+        lastRepairAt: null,
+        lastError: null,
+      };
       const openclawReady =
         gatewayConnected && (runtime.ok || runtime.skipped === true);
       const agentReady = openclawReady && modelReady;
@@ -583,6 +599,7 @@ export function registerDesktopRoutes(
           runtime,
           status: container.runtimeState.status,
           gatewayConnected,
+          runtimeRepair,
           model: {
             ready: modelReady,
             defaultModelId: configuredModelId,

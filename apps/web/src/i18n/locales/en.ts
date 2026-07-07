@@ -204,8 +204,12 @@ const en = {
   "ask.emptyTitle": "What do you want to ask today?",
   "ask.placeholder": "Type a message, Enter to send",
   "ask.placeholderStarting": "Service is starting, please wait",
+  "ask.placeholderRepairing":
+    "Local execution is repairing; you can keep typing",
   "ask.runtimeStarting":
     "Lobster Workbench is preparing. You can start chatting once it is ready.",
+  "ask.runtimeRepairing":
+    "Local execution is being repaired. Tasks will continue automatically.",
   "ask.runtimeNotReady": "Lobster Workbench is unavailable. Please wait.",
   "ask.you": "You",
   "ask.assistant": "Assistant",

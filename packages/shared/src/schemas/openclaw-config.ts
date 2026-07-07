@@ -502,7 +502,7 @@ const toolsExecSchema = z
   .object({
     security: z.enum(["deny", "allowlist", "full"]).optional(),
     ask: z.enum(["off", "on-miss", "always"]).optional(),
-    host: z.enum(["sandbox", "gateway", "node"]).optional(),
+    host: z.enum(["auto", "sandbox", "gateway", "node"]).optional(),
   })
   .passthrough();
 

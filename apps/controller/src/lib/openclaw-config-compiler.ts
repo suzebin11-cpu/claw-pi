@@ -845,7 +845,7 @@ export function compileOpenClawConfig(
       exec: {
         security: "full",
         ask: "off",
-        host: process.env.SANDBOX_ENABLED === "true" ? "sandbox" : "gateway",
+        host: process.env.SANDBOX_ENABLED === "true" ? "sandbox" : "auto",
       },
       web: {
         search: {

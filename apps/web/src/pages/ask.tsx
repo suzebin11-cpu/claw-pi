@@ -8,7 +8,7 @@ import {
   readAskActivity,
   subscribeAskActivity,
 } from "@/lib/ask-activity";
-import { useBootGrace } from "@/lib/runtime-startup";
+import { type RuntimeReadySnapshot, useBootGrace } from "@/lib/runtime-startup";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -1627,12 +1627,20 @@ export function AskPage() {
     queryKey: ["sidebar-runtime-status"],
     queryFn: async () => {
       const { data } = await getApiInternalDesktopReady();
-      return data;
+      return data as RuntimeReadySnapshot | undefined;
     },
     refetchInterval: 3_000,
   });
   const { isFullyOnline: isRuntimeReady, showBootGrace: showRuntimeBootGrace } =
     useBootGrace(runtimeStatus);
+  const isWorkbenchTransportReady = Boolean(
+    runtimeStatus?.ready ||
+      runtimeStatus?.desktopReady ||
+      runtimeStatus?.webReady,
+  );
+  const isRuntimeRepairing =
+    runtimeStatus?.runtimeRepair?.inProgress === true ||
+    (!isRuntimeReady && isWorkbenchTransportReady);
 
   const { data: modelsData } = useQuery({
     queryKey: ["models"],
@@ -1703,12 +1711,16 @@ export function AskPage() {
     ? sendingSessionIds.has(activeSession.id)
     : false;
   const controlsDisabled =
-    !isRuntimeReady || activeSessionIsSending || updateModel.isPending;
+    !isWorkbenchTransportReady ||
+    activeSessionIsSending ||
+    updateModel.isPending;
   const runtimeNotice = isRuntimeReady
     ? null
-    : showRuntimeBootGrace || runtimeStatus?.status === "starting"
-      ? t("ask.runtimeStarting")
-      : t("ask.runtimeNotReady");
+    : isWorkbenchTransportReady
+      ? t("ask.runtimeRepairing")
+      : showRuntimeBootGrace || runtimeStatus?.status === "starting"
+        ? t("ask.runtimeStarting")
+        : t("ask.runtimeNotReady");
   const messages = activeSession?.messages ?? [];
   const sortedSessions = useMemo(
     () => [...sessions].sort((a, b) => b.updatedAt - a.updatedAt),
@@ -2175,7 +2187,7 @@ export function AskPage() {
     const targetSessionTitle =
       activeSession?.title ??
       getAskSessionTitle(targetSessionId, t("ask.newChat"));
-    if (!isRuntimeReady) {
+    if (!isWorkbenchTransportReady) {
       toast.info(t("ask.toast.runtimeNotReady"));
       return;
     }
@@ -2368,7 +2380,7 @@ export function AskPage() {
     compactSessionIfNeeded,
     currentModelId,
     input,
-    isRuntimeReady,
+    isWorkbenchTransportReady,
     knowledgeItems,
     messages,
     navigate,
@@ -2885,8 +2897,10 @@ export function AskPage() {
                   onKeyDown={handleKeyDown}
                   disabled={controlsDisabled}
                   placeholder={
-                    isRuntimeReady
-                      ? t("ask.placeholder")
+                    isWorkbenchTransportReady
+                      ? isRuntimeRepairing
+                        ? t("ask.placeholderRepairing")
+                        : t("ask.placeholder")
                       : t("ask.placeholderStarting")
                   }
                   rows={1}

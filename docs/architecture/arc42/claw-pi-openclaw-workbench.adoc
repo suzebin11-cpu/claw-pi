@@ -129,6 +129,7 @@ Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页�
 * Sidecar patch：OpenClaw 上游包通过 `prepare-openclaw-sidecar.mjs` 打补丁，确保打包产物可重复生成。
 * 冷启动体验修复：即使 OpenClaw WS 尚未 connected，Controller 也先返回 SSE stream，再在后台等待 gateway ready。
 * Readiness 分层：`desktopReady`/`webReady` 只表示本地壳和 Web 可打开；`openclawReady` 表示 health + gateway WS；`agentReady` 再叠加模型状态。OpenClaw 原生页可被 `openclawReady` gate，Web 工作台不能被它全局阻塞。
+* Runtime 自修复分级：OpenClaw exec 配置默认编译为 `host=auto`、`security=full`、`ask=off`。当 agent 返回 `exec host=node requires a paired node`、`exec host not allowed`、`/approve` 或 gateway not ready 时，Controller 先软修复并重试；只有确认执行状态损坏时才定向重启 OpenClaw，且带冷却时间，避免频繁让工作台进入“服务启动中”。
 * Replace-mode catalog fast path：当 Claw-Pi 已经把云雾/Link 模型写进 OpenClaw config 的显式 providers 时，OpenClaw 不再扫描隐式供应商或 provider plugin catalog，直接使用显式列表。
 * Runtime plugin atomic staging：Controller 写入 runtime plugins 时，临时 staging 放在 OpenClaw `extensions` 扫描目录之外，并清理历史 `.staging-*` 残留，避免 OpenClaw 把半成品目录当插件加载。
 * Desktop surface lifecycle：用户主流程 Web 工作台活跃时保持挂载；inactive 超过保留窗口后释放 webview 进程。OpenClaw 原生页只在被激活时挂载。
@@ -470,6 +471,14 @@ agent:{agentId}:workbench:{sessionId}
 原因：OpenClaw 会扫描 `extensions` 目录下的插件。若 Controller 把 `.staging-*` 临时目录放在该目录内，启动或热 reload 可能读到缺失 `openclaw.plugin.json` 的半成品目录，导致 `Config invalid` 和 gateway 无法就绪。
 
 结果：runtime plugin copy staging 改到 `openclawStateDir/tmp/plugin-staging`；`ensurePlugins()` 启动时清理历史 `extensions/*.staging-*` 目录。
+
+=== ADR-018: OpenClaw 本机执行自修复分级
+
+*状态：已采纳*
+
+原因：覆盖安装、旧 OpenClaw state 或执行 host 残留可能让本机执行落到 `node` host，但桌面包没有 paired node，表现为 `exec host=node requires a paired node (none available)`、`/approve`、命令无法执行或后续无回复。若每次错误都全量 stop/reset/start OpenClaw，Web 工作台会频繁显示“服务启动中”。
+
+结果：Controller 编译 OpenClaw config 时固定 `tools.exec.security=full`、`tools.exec.ask=off`、`tools.exec.host=auto`。`AgentChatService` 将 paired-node、approval、host mismatch、gateway not ready 等错误交给 `OpenClawRuntimeRepairCoordinator`；协调器同一时间只执行一个修复任务，优先 `syncAllImmediate()` 软修复，必要时清理 config/approval/tmp/cache 并重启 OpenClaw，深修复带 5 分钟冷却。修复不会删除云端登录、余额或 OpenClaw sessions，并把最近 session 线索写入 `nexu-runtime-repair-summary.json`。
 
 === ADR-009: 冷启动停留在品牌启动界面
 

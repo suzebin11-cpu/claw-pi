@@ -8,6 +8,7 @@ import { OpenClawConfigWriter } from "../runtime/openclaw-config-writer.js";
 import { OpenClawProcessManager } from "../runtime/openclaw-process.js";
 import { OpenClawRuntimeModelWriter } from "../runtime/openclaw-runtime-model-writer.js";
 import { OpenClawRuntimePluginWriter } from "../runtime/openclaw-runtime-plugin-writer.js";
+import { OpenClawRuntimeRepairCoordinator } from "../runtime/openclaw-runtime-repair.js";
 import { OpenClawWatchTrigger } from "../runtime/openclaw-watch-trigger.js";
 import { OpenClawWsClient } from "../runtime/openclaw-ws-client.js";
 import { RuntimeHealth } from "../runtime/runtime-health.js";
@@ -67,6 +68,7 @@ export interface ControllerContainer {
   templateService: TemplateService;
   skillhubService: SkillhubService;
   openclawSyncService: OpenClawSyncService;
+  openclawRuntimeRepair: OpenClawRuntimeRepairCoordinator;
   openclawAuthService: OpenClawAuthService;
   wsClient: OpenClawWsClient;
   gatewayService: OpenClawGatewayService;
@@ -139,6 +141,12 @@ export async function createContainer(): Promise<ControllerContainer> {
     skillhubService.workspaceSkillScanner,
   );
   syncService = openclawSyncService;
+  const openclawRuntimeRepair = new OpenClawRuntimeRepairCoordinator(
+    env,
+    openclawSyncService,
+    openclawProcess,
+    wsClient,
+  );
   const openclawAuthService = new OpenClawAuthService(env, authProfilesStore);
   const analyticsService = new AnalyticsService(
     env,
@@ -171,7 +179,12 @@ export async function createContainer(): Promise<ControllerContainer> {
     gatewayClient,
     runtimeHealth,
     openclawProcess,
-    agentChatService: new AgentChatService(wsClient, env, openclawSyncService),
+    agentChatService: new AgentChatService(
+      wsClient,
+      env,
+      openclawSyncService,
+      openclawRuntimeRepair,
+    ),
     agentService: new AgentService(configStore, openclawSyncService),
     channelService: new ChannelService(
       env,
@@ -204,6 +217,7 @@ export async function createContainer(): Promise<ControllerContainer> {
     templateService: new TemplateService(configStore, openclawSyncService),
     skillhubService,
     openclawSyncService,
+    openclawRuntimeRepair,
     openclawAuthService,
     wsClient,
     gatewayService,

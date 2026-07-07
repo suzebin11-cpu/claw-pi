@@ -85,6 +85,39 @@ class FakePreflightSyncService {
   }
 }
 
+class FakeRuntimeRepair {
+  calls: string[] = [];
+  shouldFail = false;
+
+  async repair(reason: string): Promise<{
+    ok: boolean;
+    reason: string;
+    level: "soft" | "deep";
+    skippedCooldown: boolean;
+  }> {
+    this.calls.push(reason);
+    return {
+      ok: !this.shouldFail,
+      reason,
+      level: "deep",
+      skippedCooldown: false,
+    };
+  }
+}
+
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 1000,
+): Promise<void> {
+  const startedAt = Date.now();
+  while (!predicate()) {
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error("Timed out waiting for condition");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+}
+
 describe("AgentChatService", () => {
   let rootDir: string;
   let fakeWs: FakeOpenClawWsClient;
@@ -676,6 +709,68 @@ describe("AgentChatService", () => {
 
     const body = await response.text();
     expect(body).toContain("模型账号未就绪，请重新登录或检查云雾连接。");
+    expect(body).toContain("data: [DONE]");
+  });
+
+  it("repairs and retries paired-node exec host failures instead of finalizing the internal error", async () => {
+    const repair = new FakeRuntimeRepair();
+    service = new AgentChatService(
+      fakeWs as never,
+      {
+        openclawStateDir: path.join(rootDir, ".openclaw"),
+      } as ControllerEnv,
+      undefined,
+      repair as never,
+    );
+
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "main",
+      sessionId: "session-exec-host-node",
+      message: "打开 chrome 搜索抖音",
+      modelId: "link/gpt-5.5",
+      permissionMode: "full",
+    });
+
+    const firstSend = fakeWs.requests.find(
+      (request) => request.method === "agent",
+    );
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:main:workbench:session-exec-host-node",
+        runId: String(firstSend?.params.idempotencyKey),
+        state: "error",
+        errorMessage:
+          "exec host=node requires a paired node (none available). This requires a companion app or node host.",
+      },
+    });
+
+    await waitFor(
+      () =>
+        fakeWs.requests.filter((request) => request.method === "agent")
+          .length === 2,
+    );
+    expect(repair.calls).toEqual(["agent_exec_host_node_unpaired"]);
+
+    const secondSend = fakeWs.requests.filter(
+      (request) => request.method === "agent",
+    )[1];
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:main:workbench:session-exec-host-node",
+        runId: String(secondSend?.params.idempotencyKey),
+        state: "final",
+        message: "已打开 Chrome 并搜索抖音。",
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("本地执行环境异常，已自动修复并重试。");
+    expect(body).toContain("已打开 Chrome 并搜索抖音。");
+    expect(body).not.toContain("requires a paired node");
     expect(body).toContain("data: [DONE]");
   });
 

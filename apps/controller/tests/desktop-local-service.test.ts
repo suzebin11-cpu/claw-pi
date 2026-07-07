@@ -47,6 +47,36 @@ describe("DesktopLocalService billing auth errors", () => {
     expect(clearActivation).toHaveBeenCalledTimes(1);
   });
 
+  it("treats missing balance data as unavailable", async () => {
+    const { service } = createService(
+      new Response(JSON.stringify({ success: true }), { status: 200 }),
+    );
+
+    await expect(service.getBalance()).resolves.toMatchObject({
+      ok: false,
+      error: "余额暂时无法显示，请检查网络后重试",
+    });
+  });
+
+  it("keeps a real zero balance visible", async () => {
+    const { service } = createService(
+      new Response(
+        JSON.stringify({
+          success: true,
+          balance_cents: 0,
+          total_recharged: 0,
+        }),
+        { status: 200 },
+      ),
+    );
+
+    await expect(service.getBalance()).resolves.toMatchObject({
+      ok: true,
+      balance_cents: 0,
+      total_recharged: 0,
+    });
+  });
+
   it("clears activation and normalizes expired Alipay order tokens", async () => {
     const { service, clearActivation, fetchMock } = createService(
       new Response(JSON.stringify({ error: "jwt expired" }), {

@@ -366,6 +366,13 @@ export class DesktopLocalService {
         error: await this.normalizeCloudAuthError(data.error),
       };
     }
+    if (
+      data.success === false ||
+      typeof data.balance_cents !== "number" ||
+      !Number.isFinite(data.balance_cents)
+    ) {
+      return { ok: false, error: BALANCE_UNAVAILABLE_MESSAGE };
+    }
 
     return {
       ok: true,

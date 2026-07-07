@@ -147,6 +147,17 @@ function createConfig(overrides: Partial<NexuConfig> = {}): NexuConfig {
 }
 
 describe("compileOpenClawConfig", () => {
+  it("defaults exec to full auto host so native execution is not pinned to node or gateway", () => {
+    const result = compileOpenClawConfig(createConfig(), createEnv());
+
+    expect(result.tools?.exec).toMatchObject({
+      security: "full",
+      ask: "off",
+      host: "auto",
+    });
+    expect(result.agents.defaults?.elevatedDefault).toBe("full");
+  });
+
   it("builds OpenClaw config with provider and channel parity defaults", () => {
     const result = compileOpenClawConfig(createConfig(), createEnv());
 
