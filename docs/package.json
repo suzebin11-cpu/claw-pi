@@ -1,0 +1,20 @@
+{
+  "name": "nexu-docs",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "packageManager": "pnpm@10.26.0",
+  "scripts": {
+    "validate:docs": "node ./scripts/validate-doc-pages.mjs",
+    "dev": "node ./scripts/validate-doc-pages.mjs && node ./scripts/dev.mjs",
+    "build": "node ./scripts/validate-doc-pages.mjs && vitepress build .",
+    "preview": "vitepress preview .",
+    "normalize-assets": "node ./scripts/normalize-assets.mjs",
+    "normalize-assets:watch": "node ./scripts/watch-assets.mjs"
+  },
+  "devDependencies": {
+    "@davidingplus/vitepress-image-viewer": "^1.1.5",
+    "sharp": "^0.34.5",
+    "vitepress": "^1.6.4"
+  }
+}

@@ -1,0 +1,583 @@
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { chromium } from "playwright";
+
+const repoRoot = resolve(import.meta.dirname, "..");
+const docsDir = resolve(repoRoot, "docs");
+const version = "0.3.13";
+const dateLabel = "2026-05-19";
+const htmlPath = resolve(docsDir, `Claw-Pi-使用说明-v${version}.html`);
+const pdfPath = resolve(docsDir, `Claw-Pi-使用说明-v${version}.pdf`);
+const previewPath = resolve(docsDir, `Claw-Pi-使用说明-v${version}-preview.png`);
+const visualAssetsDir = resolve(docsDir, "assets", `Claw-Pi-使用说明-v${version}`);
+
+const logoIcon = `
+<svg class="logo-mark" viewBox="0 0 200 200" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Claw-Pi">
+  <path d="M126.973367,74.611399 L126.973367,87.6539402 L140.932642,95.4497682 L140.932642,113.38067 L126.973367,113.38067 L126.973367,87.6547697 L73.0266334,87.6547697 L73.0266334,74.611399 L126.973367,74.611399 Z M109.850452,91.28956 L113.962255,95.4089558 L109.726303,99.6544386 L113.962255,103.90158 L109.850452,108.019317 L105.616155,103.773834 L101.50104,99.6594157 L105.611189,95.5300657 L109.850452,91.28956 Z M91.8508816,92.3757334 L91.8508816,106.933807 L86.0374135,106.933807 L86.0374135,92.3757334 L91.8508816,92.3757334 Z M59.0673575,87.6541061 L59.0673575,105.583349 L73.0266334,113.380836 L73.0266334,87.6541061 L59.0673575,87.6541061 Z M107.10958,126.42487 L126.973367,126.42487 L126.973367,113.3815 L107.10958,113.3815 L107.10958,126.42487 Z M73.0266334,126.42487 L93.1519596,126.42487 L93.1519596,113.3815 L73.0266334,113.3815 L73.0266334,126.42487 Z" fill="currentColor"/>
+</svg>`;
+
+function navScreenshot() {
+  return `
+  <figure class="visual visual-dark">
+    <div class="caption-row">
+      <span class="dot green"></span><span>主界面模块地图</span>
+    </div>
+    <div class="mock-app">
+      <aside>
+        <div class="brand-line">${logoIcon}<strong>Claw Pi</strong></div>
+        <div class="nav active">龙虾窝</div>
+        <div class="nav active-soft">网页龙虾</div>
+        <div class="nav active-soft">龙虾工作台</div>
+        <div class="nav">模型广场</div>
+        <div class="nav">绝技</div>
+        <div class="nav">投喂</div>
+      </aside>
+      <main>
+        <div class="hero-card">
+          <span class="status-dot"></span>
+          <h3>小龙虾已准备好</h3>
+          <p>选择聊天平台，连接模型，然后开始问答、处理文件或生成图片。</p>
+        </div>
+        <div class="mini-grid">
+          <div><b>微信</b><span>扫码连接</span></div>
+          <div><b>Web</b><span>网页龙虾</span></div>
+          <div><b>工作台</b><span>多会话问答</span></div>
+          <div><b>模型</b><span>统一切换</span></div>
+        </div>
+      </main>
+    </div>
+  </figure>`;
+}
+
+function askScreenshot() {
+  return `
+  <figure class="visual visual-dark">
+    <div class="caption-row">
+      <span class="dot cyan"></span><span>龙虾工作台：多会话、多模型、附件和知识库</span>
+    </div>
+    <div class="ask-shot">
+      <div class="chat-list">
+        <div class="chat-title">对话</div>
+        <div class="chat-item active">产品方案<br><small>09:40</small></div>
+        <div class="chat-item">图片生成<br><small>昨天</small></div>
+      </div>
+      <div class="chat-main">
+        <div class="bubble user">帮我把这张图片换成蓝色，并给出两版文案</div>
+        <div class="bubble assistant">
+          <b>gpt-5.5 | Claw-Pi</b>
+          <p>可以，我会先识别图片主体，再按你的要求生成新图，并补充可直接使用的文案。</p>
+          <small>Tokens: 612 ↑420 ↓192 · 耗时 4.8s</small>
+        </div>
+        <div class="composer">
+          <span>输入消息，Enter 发送</span>
+          <div class="tool-row">模型 · 附件 · 知识库 · 清除上下文 · 发送</div>
+        </div>
+      </div>
+    </div>
+  </figure>`;
+}
+
+function flowDiagram() {
+  return `
+  <figure class="visual flow-figure">
+    <svg viewBox="0 0 980 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Claw-Pi quick start flow">
+      <defs>
+        <linearGradient id="g1" x1="0" x2="1">
+          <stop offset="0" stop-color="#B9F23E"/>
+          <stop offset="1" stop-color="#31C7D8"/>
+        </linearGradient>
+        <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+          <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#0b1014" flood-opacity=".15"/>
+        </filter>
+      </defs>
+      <rect width="980" height="260" rx="28" fill="#F5F7FB"/>
+      ${["安装软件", "登录 / 配置 API", "选择模型", "连接微信或 Web", "开始问答"].map((label, index) => {
+        const x = 52 + index * 184;
+        const number = index + 1;
+        const subtitle = ["运行安装包", "推荐 Claw-Pi 账号", "聊天/生图模型", "扫码或打开网页", "文件/图片/知识库"][index];
+        const arrow = index < 4 ? `<path d="M${x + 132} 130 L${x + 172} 130" stroke="#94A3B8" stroke-width="4" stroke-linecap="round"/><path d="M${x + 164} 120 L${x + 176} 130 L${x + 164} 140" fill="none" stroke="#94A3B8" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/>` : "";
+        return `
+          <g filter="url(#shadow)">
+            <rect x="${x}" y="64" width="128" height="132" rx="22" fill="white"/>
+            <circle cx="${x + 64}" cy="106" r="24" fill="url(#g1)"/>
+            <text x="${x + 64}" y="114" font-size="22" text-anchor="middle" fill="#07110C" font-weight="800">${number}</text>
+            <text x="${x + 64}" y="151" font-size="18" text-anchor="middle" fill="#121826" font-weight="700">${label}</text>
+            <text x="${x + 64}" y="176" font-size="13" text-anchor="middle" fill="#667085">${subtitle}</text>
+          </g>${arrow}`;
+      }).join("")}
+    </svg>
+    <figcaption>建议首次使用按这个顺序完成，尤其要等“服务准备完成”后再开始问答。</figcaption>
+  </figure>`;
+}
+
+function modelSkillVisual() {
+  return `
+  <div class="visual-pair">
+    <figure class="visual visual-dark compact-visual">
+      <div class="caption-row"><span class="dot blue"></span><span>模型广场</span></div>
+      <div class="model-list">
+        <div class="model-row selected">GPT-5.5 <em>当前模型</em></div>
+        <div class="model-row">Claude Sonnet 4.6</div>
+        <div class="model-row">Gemini 3.1 Pro</div>
+        <div class="model-row image">生图模型 · gpt-image-2</div>
+      </div>
+      <p class="image-note">切换聊天模型会同步到微信、网页龙虾和龙虾工作台。</p>
+    </figure>
+    <figure class="visual visual-dark compact-visual">
+      <div class="caption-row"><span class="dot green"></span><span>绝技</span></div>
+      <div class="skill-tabs"><span class="selected">技能市场</span><span>我的</span></div>
+      <div class="skill-grid">
+        <div>文档处理<br><small>PDF / Word / 表格</small></div>
+        <div>数据分析<br><small>CSV / SQL / 报表</small></div>
+        <div>IT 运维<br><small>日志 / 排障</small></div>
+        <div>代码开发<br><small>仓库 / 接口 / 测试</small></div>
+      </div>
+    </figure>
+  </div>`;
+}
+
+function wechatVisual() {
+  return `
+  <figure class="visual visual-dark">
+    <div class="caption-row"><span class="dot green"></span><span>微信连接与问答</span></div>
+    <div class="phone-flow">
+      <div class="phone">
+        <div class="phone-top"></div>
+        <div class="qr">
+          <span></span><span></span><span></span><span></span>
+        </div>
+        <p>微信扫一扫</p>
+      </div>
+      <div class="phone-arrow">→</div>
+      <div class="phone chat">
+        <div class="msg left">你好，我是 Claw-Pi</div>
+        <div class="msg right">帮我总结这段内容</div>
+        <div class="msg left">可以，我先提炼重点...</div>
+      </div>
+      <div class="phone-copy">
+        <b>关键提示</b>
+        <p>界面显示“已连接 / 已准备好”后再测试第一条消息。第一个问题可能需要少量预热，之后通常更稳定。</p>
+      </div>
+    </div>
+  </figure>`;
+}
+
+const html = `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Claw-Pi 使用说明 v${version}</title>
+  <style>
+    @page { size: A4; margin: 12mm 12mm 14mm; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      color: #172033;
+      background: #f3f6f8;
+      font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Arial, sans-serif;
+      font-size: 13.5px;
+      line-height: 1.72;
+      -webkit-print-color-adjust: exact;
+      print-color-adjust: exact;
+    }
+    .page {
+      background: white;
+      min-height: 273mm;
+      padding: 18mm;
+      page-break-after: always;
+      position: relative;
+      overflow: hidden;
+    }
+    .page:last-child { page-break-after: auto; }
+    .cover {
+      color: white;
+      background: linear-gradient(135deg, #0B0D10 0%, #111820 48%, #0D1417 100%);
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+    .cover::after {
+      content: "";
+      position: absolute;
+      inset: auto -80px -140px auto;
+      width: 430px;
+      height: 430px;
+      background: radial-gradient(circle, rgba(185,242,62,.2), transparent 66%);
+    }
+    .cover .topline { display: flex; align-items: center; justify-content: space-between; }
+    .brand { display: flex; align-items: center; gap: 12px; font-size: 28px; font-weight: 800; letter-spacing: 0; }
+    .logo-mark { width: 46px; height: 46px; color: #B9F23E; flex: none; }
+    .version-pill { border: 1px solid rgba(255,255,255,.2); border-radius: 999px; padding: 6px 12px; color: #D4DAE4; font-size: 12px; }
+    .cover h1 { font-size: 56px; line-height: 1.05; margin: 70px 0 16px; letter-spacing: 0; }
+    .cover .subtitle { color: #C9D2DD; font-size: 18px; max-width: 560px; }
+    .cover-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 44px; }
+    .cover-card { border: 1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.06); border-radius: 18px; padding: 18px; min-height: 118px; }
+    .cover-card b { display: block; color: #B9F23E; margin-bottom: 8px; font-size: 16px; }
+    .cover-card span { color: #D4DAE4; font-size: 12.5px; }
+    .cover-footer { color: #AEB8C6; font-size: 12px; }
+    h2 { font-size: 26px; line-height: 1.25; margin: 0 0 16px; color: #101828; }
+    h3 { font-size: 17px; margin: 24px 0 8px; color: #101828; }
+    h4 { font-size: 14px; margin: 18px 0 6px; color: #162033; }
+    p { margin: 0 0 10px; }
+    ul, ol { margin: 6px 0 12px 20px; padding: 0; }
+    li { margin: 4px 0; }
+    .muted { color: #667085; }
+    .toc { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 20px; }
+    .toc a { display: flex; justify-content: space-between; align-items: center; text-decoration: none; color: #182230; background: #F6F8FA; border: 1px solid #E6EAF0; border-radius: 14px; padding: 12px 14px; font-weight: 700; }
+    .toc span { color: #667085; font-weight: 600; font-size: 12px; }
+    .note { background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 14px; padding: 12px 14px; color: #14532D; margin: 12px 0; }
+    .warn { background: #FFF7ED; border: 1px solid #FED7AA; color: #7C2D12; }
+    .section-label { color: #088A9B; font-weight: 800; font-size: 12px; letter-spacing: .06em; text-transform: uppercase; margin-bottom: 8px; }
+    .step-list { counter-reset: step; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 14px 0; }
+    .step { counter-increment: step; border: 1px solid #E6EAF0; border-radius: 16px; padding: 14px 14px 14px 50px; position: relative; background: #FBFCFE; min-height: 108px; }
+    .step::before { content: counter(step); position: absolute; left: 14px; top: 16px; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #06110C; background: #B9F23E; font-weight: 900; }
+    .step b { display: block; margin-bottom: 6px; }
+    .visual { border-radius: 22px; margin: 16px 0 18px; overflow: hidden; border: 1px solid #D9E0EA; background: #F8FAFC; }
+    .visual svg { width: 100%; display: block; }
+    .visual-dark { background: #101114; color: #E6EAF0; border-color: #252B35; padding: 16px; }
+    .visual-raster { border-radius: 22px; margin: 16px 0 18px; overflow: hidden; break-inside: avoid; page-break-inside: avoid; }
+    .visual-raster img { display: block; width: 100%; height: auto; border-radius: 22px; border: 1px solid #D9E0EA; }
+    .caption-row { display: flex; gap: 8px; align-items: center; color: #CBD5E1; font-size: 12px; font-weight: 700; margin-bottom: 12px; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+    .green { background: #24E59E; } .cyan { background: #31C7D8; } .blue { background: #7C8CFF; }
+    figcaption { color: #667085; font-size: 12px; padding: 8px 12px 12px; }
+    .mock-app { display: grid; grid-template-columns: 190px 1fr; min-height: 330px; border-radius: 16px; overflow: hidden; border: 1px solid #262D38; }
+    .mock-app aside { background: #08090D; padding: 16px 12px; border-right: 1px solid #252B35; }
+    .brand-line { display: flex; align-items: center; gap: 8px; margin-bottom: 20px; color: white; }
+    .brand-line .logo-mark { width: 28px; height: 28px; }
+    .nav { color: #9AA4B2; padding: 10px 12px; border-radius: 10px; margin: 6px 0; font-weight: 700; }
+    .nav.active, .nav.active-soft { background: #0B2B31; color: #39D4E6; }
+    .mock-app main { background: radial-gradient(circle at 55% 20%, rgba(185,242,62,.12), transparent 28%), #111319; padding: 28px; }
+    .hero-card { border: 1px solid #2B3340; background: #171B23; border-radius: 18px; padding: 22px; margin-bottom: 18px; }
+    .hero-card h3 { color: white; margin-top: 8px; }
+    .hero-card p { color: #AEB8C6; }
+    .status-dot { width: 12px; height: 12px; background: #24E59E; display: inline-block; border-radius: 50%; box-shadow: 0 0 20px #24E59E; }
+    .mini-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; }
+    .mini-grid div { border: 1px solid #2B3340; background: #0F1218; border-radius: 14px; padding: 14px; }
+    .mini-grid b { color: white; display: block; }
+    .mini-grid span { color: #8E99AA; font-size: 11px; }
+    .ask-shot { display: grid; grid-template-columns: 160px 1fr; min-height: 360px; border-radius: 16px; overflow: hidden; border: 1px solid #262D38; }
+    .chat-list { background: #0B0D12; border-right: 1px solid #252B35; padding: 14px; }
+    .chat-title { color: #AEB8C6; margin-bottom: 12px; font-weight: 800; }
+    .chat-item { color: #CBD5E1; padding: 12px; border-radius: 12px; margin-bottom: 8px; background: #11151D; }
+    .chat-item.active { background: #1E232E; color: white; }
+    .chat-item small { color: #7D8899; }
+    .chat-main { background: #13161D; padding: 24px; display: flex; flex-direction: column; gap: 14px; }
+    .bubble { border-radius: 16px; padding: 14px 16px; max-width: 78%; }
+    .bubble.user { align-self: flex-end; background: #12333C; border: 1px solid #1B7180; color: white; }
+    .bubble.assistant { align-self: flex-start; background: transparent; border: 0; color: white; max-width: 92%; }
+    .bubble.assistant b { color: #A9B7CA; font-size: 12px; }
+    .bubble.assistant small { color: #7D8899; }
+    .composer { margin-top: auto; border: 1px solid #283140; border-radius: 18px; padding: 14px; color: #8E99AA; background: #11151D; }
+    .tool-row { color: #CBD5E1; margin-top: 18px; font-size: 12px; }
+    .visual-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 16px 0; }
+    .compact-visual { min-height: 306px; }
+    .model-list { display: grid; gap: 8px; }
+    .model-row { border: 1px solid #2B3340; background: #11151D; border-radius: 12px; padding: 12px; font-weight: 800; }
+    .model-row.selected { border-color: #31C7D8; color: white; }
+    .model-row em { float: right; color: #31C7D8; font-style: normal; font-size: 11px; }
+    .model-row.image { color: #B9F23E; }
+    .image-note { color: #9AA4B2; font-size: 12px; margin-top: 12px; }
+    .skill-tabs { display: flex; gap: 8px; background: #181B22; width: max-content; border-radius: 999px; padding: 4px; margin-bottom: 12px; }
+    .skill-tabs span { padding: 6px 12px; border-radius: 999px; color: #AEB8C6; font-weight: 800; }
+    .skill-tabs .selected { background: #31C7D8; color: #071015; }
+    .skill-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .skill-grid div { border: 1px solid #2B3340; border-radius: 12px; background: #11151D; padding: 14px; color: white; font-weight: 800; }
+    .skill-grid small { color: #8E99AA; font-weight: 600; }
+    .phone-flow { display: grid; grid-template-columns: 170px 38px 190px 1fr; align-items: center; gap: 12px; }
+    .phone { height: 300px; border: 1px solid #313B49; background: #F4F7FA; color: #111827; border-radius: 30px; padding: 22px 16px; text-align: center; }
+    .phone-top { width: 58px; height: 6px; border-radius: 999px; background: #CBD5E1; margin: 0 auto 34px; }
+    .qr { width: 116px; height: 116px; background: white; margin: auto; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; padding: 12px; }
+    .qr span { background: #101114; }
+    .phone-arrow { color: #B9F23E; font-size: 34px; text-align: center; }
+    .phone.chat { background: #EDEFF3; text-align: left; display: flex; flex-direction: column; gap: 10px; padding-top: 34px; }
+    .msg { max-width: 85%; border-radius: 14px; padding: 8px 10px; font-size: 12px; }
+    .msg.left { background: white; align-self: flex-start; }
+    .msg.right { background: #91ED9C; align-self: flex-end; }
+    .phone-copy { color: #D4DAE4; background: #141922; border: 1px solid #2B3340; border-radius: 18px; padding: 18px; }
+    .phone-copy b { color: white; }
+    .qa { border-top: 1px solid #E6EAF0; padding: 14px 0; }
+    .qa b { display: block; color: #101828; margin-bottom: 6px; }
+    .two-col { columns: 2; column-gap: 22px; }
+    .kbd { display: inline-block; padding: 1px 6px; border-radius: 6px; background: #EEF2F6; border: 1px solid #D9E0EA; font-size: 12px; }
+    .footer { position: absolute; bottom: 9mm; left: 18mm; right: 18mm; color: #98A2B3; font-size: 10.5px; display: flex; justify-content: space-between; }
+    @media print {
+      .page { box-shadow: none; }
+      a { color: inherit; }
+    }
+  </style>
+</head>
+<body>
+  <section class="page cover">
+    <div>
+      <div class="topline">
+        <div class="brand">${logoIcon}<span>Claw-Pi</span></div>
+        <div class="version-pill">用户使用说明 · v${version}</div>
+      </div>
+      <h1>你的 AI 小龙虾<br/>使用说明</h1>
+      <p class="subtitle">从安装、连接微信、选择模型，到龙虾工作台问答、生图、知识库、绝技市场和常见问题，一份给最终用户看的快速手册。</p>
+      <div class="cover-grid">
+        <div class="cover-card"><b>开箱即用</b><span>完成登录或配置 API 后，等待服务准备完成即可开始。</span></div>
+        <div class="cover-card"><b>多入口问答</b><span>微信、网页龙虾、龙虾工作台共用一套模型状态。</span></div>
+        <div class="cover-card"><b>可扩展能力</b><span>支持文件、图片、生图、图生图、知识库和绝技技能。</span></div>
+      </div>
+    </div>
+    <div class="cover-footer">生成日期：${dateLabel} · 适用版本：Claw-Pi ${version}</div>
+  </section>
+
+  <section class="page">
+    <div class="section-label">Overview</div>
+    <h2>1. 这份文档适合谁</h2>
+    <p>这份说明面向第一次使用 Claw-Pi 的用户，也适合客服、销售或内部培训时快速讲清楚软件能做什么、怎么开始、遇到问题如何排查。</p>
+    <div class="note">建议先读“快速开始”，再按你实际使用的入口查看“微信问答”“网页龙虾”或“龙虾工作台”。</div>
+    <h3>目录</h3>
+    <div class="toc">
+      <a href="#quick">快速开始 <span>安装到第一句问答</span></a>
+      <a href="#workspace">主要界面 <span>每个入口做什么</span></a>
+      <a href="#models">模型与生图 <span>聊天/图片模型</span></a>
+      <a href="#skills">绝技与知识库 <span>技能、RAG、上下文</span></a>
+      <a href="#operations">常用操作流程 <span>按任务走</span></a>
+      <a href="#qa">Q&A <span>常见问题</span></a>
+    </div>
+    ${navScreenshot()}
+    <div class="footer"><span>Claw-Pi 使用说明 v${version}</span><span>01</span></div>
+  </section>
+
+  <section class="page" id="quick">
+    <div class="section-label">Quick Start</div>
+    <h2>2. 快速开始</h2>
+    ${flowDiagram()}
+    <div class="step-list">
+      <div class="step"><b>安装并启动</b>运行安装包，首次启动时等待本地服务准备。若界面提示“服务启动中”，请不要连续点击问答入口。</div>
+      <div class="step"><b>登录或配置模型</b>推荐使用 Claw-Pi 账号；高级用户也可以选择自带 API Key 的方式。</div>
+      <div class="step"><b>进入模型广场</b>选择聊天模型。需要图片生成时，还要确认生图模型可用。</div>
+      <div class="step"><b>选择使用入口</b>日常问答可用龙虾工作台；想让微信自动回复，去龙虾窝连接微信；想看 OpenClaw 原生聊天，打开网页龙虾。</div>
+    </div>
+    <h3>首次使用的判断标准</h3>
+    <ul>
+      <li>侧边栏能正常进入“龙虾工作台”“模型广场”“绝技”等页面。</li>
+      <li>模型广场里已有当前模型，或你已经配置了自己的模型服务。</li>
+      <li>微信扫码后显示已连接，并且服务状态不再处于准备中。</li>
+      <li>龙虾工作台输入框可点击，发送按钮可用。</li>
+    </ul>
+    <div class="warn note">如果刚启动、刚扫码、刚切换模型后第一条消息慢一点，通常是服务预热或配置同步。等状态稳定后再测试速度更准确。</div>
+    <div class="footer"><span>快速开始</span><span>02</span></div>
+  </section>
+
+  <section class="page" id="workspace">
+    <div class="section-label">Workspace</div>
+    <h2>3. 主要界面说明</h2>
+    <h3>龙虾窝</h3>
+    <p>用于查看小龙虾状态、连接微信/Web 等渠道。新用户一般从这里完成“放龙虾出去”的动作。</p>
+    <h3>网页龙虾</h3>
+    <p>这是 OpenClaw 原生 Web 聊天入口，适合验证底层问答是否可用，也适合需要原生会话体验的用户。</p>
+    <h3>龙虾工作台</h3>
+    <p>面向日常使用的多会话问答界面，支持切换模型、上传文件和图片、图片预览/复制/下载、知识库、清除上下文、Token 和耗时显示。</p>
+    ${askScreenshot()}
+    <h3>模型广场</h3>
+    <p>管理聊天模型和生图模型。当前聊天模型会同步到微信、网页龙虾和龙虾工作台；生图模型用于文生图、图生图等图片任务。</p>
+    <h3>绝技</h3>
+    <p>技能市场用于展示和安装技能；“我的”用于查看已安装技能；导入按钮可添加自定义 zip 技能包。</p>
+    <h3>投喂</h3>
+    <p>查看余额、充值入口和模型计费信息。不同模型的输入、输出和图片生成价格可能不同，以平台最终展示为准。</p>
+    <div class="footer"><span>主要界面</span><span>03</span></div>
+  </section>
+
+  <section class="page" id="models">
+    <div class="section-label">Models</div>
+    <h2>4. 模型与生图</h2>
+    ${modelSkillVisual()}
+    <h3>聊天模型</h3>
+    <p>聊天模型负责文字问答、长文本分析、代码、总结、规划等任务。你在模型广场切换聊天模型后，龙虾工作台、微信和网页龙虾会使用同一套当前模型状态。</p>
+    <h3>生图模型</h3>
+    <p>生图模型负责文生图、图生图和图片编辑。若你在龙虾工作台上传图片并要求“换颜色”“生成同款”“改风格”，系统会优先走图片生成能力。</p>
+    <h3>文件和多模态</h3>
+    <ul>
+      <li>文本文件、文档内容会作为上下文发给模型，适合总结、提取、改写。</li>
+      <li>图片能否被理解，取决于当前模型是否支持视觉能力。</li>
+      <li>视频等大文件可能需要等待更久，建议先压缩或截取关键片段。</li>
+    </ul>
+    <div class="note">不要让用户误以为所有模型都能生图。生图和图生图需要当前账号/接口具备对应图片模型能力。</div>
+    <div class="footer"><span>模型与生图</span><span>04</span></div>
+  </section>
+
+  <section class="page" id="skills">
+    <div class="section-label">Skills & Knowledge</div>
+    <h2>5. 绝技、知识库与上下文</h2>
+    <h3>绝技是什么</h3>
+    <p>绝技可以理解为给小龙虾增加“专业能力”的技能包，例如文档处理、数据分析、行业技能、IT 运维、代码开发、网页搜索等。</p>
+    <h3>安装技能</h3>
+    <ol>
+      <li>进入“绝技”。</li>
+      <li>切换到“技能市场”。</li>
+      <li>按分类或搜索找到技能。</li>
+      <li>点击“安装”，等待安装完成后即可使用。</li>
+    </ol>
+    <h3>导入自定义技能</h3>
+    <p>点击“导入”，选择包含 <span class="kbd">SKILL.md</span> 的 zip 文件。导入成功后会出现在“我的”中。</p>
+    <h3>知识库</h3>
+    <p>龙虾工作台里的知识库适合放固定资料、产品说明、客服话术、项目背景等。问答时系统会自动检索相关内容加入上下文。</p>
+    <h3>上下文与速度</h3>
+    <p>上下文越长，模型需要读取的信息越多，响应时间可能变长。遇到长对话变慢时，可以使用“清除上下文”保留当前聊天记录但减少后续模型读取压力。</p>
+    <div class="note">当前策略会尽量避免把所有技能详情都塞进每次问答，只在需要时命中相关技能，从而减少对回复速度的影响。</div>
+    <div class="footer"><span>绝技与知识库</span><span>05</span></div>
+  </section>
+
+  <section class="page" id="operations">
+    <div class="section-label">How-to</div>
+    <h2>6. 常用操作流程</h2>
+    ${wechatVisual()}
+    <h3>连接微信</h3>
+    <ol>
+      <li>进入“龙虾窝”。</li>
+      <li>选择微信入口，点击连接。</li>
+      <li>用微信扫码登录。</li>
+      <li>等界面显示已连接、服务准备完成后，再发送测试消息。</li>
+    </ol>
+    <h3>在龙虾工作台发起问答</h3>
+    <ol>
+      <li>进入“龙虾工作台”。</li>
+      <li>选择模型，或保持模型广场同步过来的当前模型。</li>
+      <li>输入问题，按 <span class="kbd">Enter</span> 发送；换行可用 <span class="kbd">Shift</span> + <span class="kbd">Enter</span>。</li>
+      <li>需要文件/图片时，点击附件按钮或直接粘贴图片。</li>
+    </ol>
+    <h3>生成或编辑图片</h3>
+    <ol>
+      <li>确认模型广场中已连接可用的生图模型。</li>
+      <li>在龙虾工作台输入清晰的图片需求。</li>
+      <li>图生图时先上传参考图片，再说明要修改什么。</li>
+      <li>生成后可点击图片放大、复制或下载。</li>
+    </ol>
+    <div class="footer"><span>常用操作流程</span><span>06</span></div>
+  </section>
+
+  <section class="page" id="qa">
+    <div class="section-label">Q&A</div>
+    <h2>7. 常见问题 Q&A</h2>
+    <div class="qa"><b>Q1：扫码后显示已连接，但为什么第一条消息慢？</b><p>扫码后还可能有配置同步、会话预热、模型连接确认等步骤。建议等界面显示服务准备完成后再测试第一条消息。</p></div>
+    <div class="qa"><b>Q2：为什么官网或 Cherry Studio 更快？</b><p>官网通常只走单一问答链路。Claw-Pi 多了桌面端、控制器、OpenClaw 网关、微信/Web 通道、上下文和技能检索等步骤，因此需要关注本地链路和配置同步。</p></div>
+    <div class="qa"><b>Q3：龙虾工作台和模型广场的模型是否同步？</b><p>是。聊天模型切换后会同步到微信、网页龙虾和龙虾工作台。若界面还没刷新，可稍等几秒或重新进入页面。</p></div>
+    <div class="qa"><b>Q4：为什么我不能生图或图生图？</b><p>需要账号或接口支持生图模型，并且当前生图模型可用。仅聊天模型无法完成图片生成。</p></div>
+    <div class="qa"><b>Q5：上传图片后模型没有看懂怎么办？</b><p>确认当前聊天模型支持视觉能力；如果只是想修改图片，建议明确写“基于这张图生成/编辑”。</p></div>
+    <div class="qa"><b>Q6：长文本输入后无响应怎么办？</b><p>长文本会增加上下文读取压力。建议拆分文本、先总结再追问，或清除上下文后重新发送核心内容。</p></div>
+    <div class="qa"><b>Q7：绝技安装后会拖慢问答吗？</b><p>系统会尽量使用轻量索引和按需命中，避免每次问答都加载所有技能详情。安装大量技能后仍建议只启用真正需要的能力。</p></div>
+    <div class="qa"><b>Q8：图片能不能下载、复制和放大？</b><p>可以。在龙虾工作台里，输入图片和模型返回图片都应支持放大查看、复制和下载。</p></div>
+    <div class="qa"><b>Q9：中文路径能不能用？</b><p>当前 Windows 安装包和本地运行流程按中文路径场景处理过，建议仍避免把安装目录放在权限受限或同步冲突严重的位置。</p></div>
+    <div class="qa"><b>Q10：遇到异常应该先看哪里？</b><p>先确认服务是否准备完成、模型是否可用、微信是否已连接；再检查是否有网络、账号或余额问题。</p></div>
+    <div class="footer"><span>常见问题</span><span>07</span></div>
+  </section>
+
+  <section class="page">
+    <div class="section-label">Troubleshooting</div>
+    <h2>8. 故障排查速查表</h2>
+    <table style="width:100%; border-collapse:collapse; font-size:12.5px;">
+      <thead>
+        <tr style="background:#F1F5F9;">
+          <th style="text-align:left; padding:10px; border:1px solid #D9E0EA;">现象</th>
+          <th style="text-align:left; padding:10px; border:1px solid #D9E0EA;">可能原因</th>
+          <th style="text-align:left; padding:10px; border:1px solid #D9E0EA;">建议处理</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td style="padding:10px; border:1px solid #D9E0EA;">问答入口点不了</td><td style="padding:10px; border:1px solid #D9E0EA;">服务还没准备好</td><td style="padding:10px; border:1px solid #D9E0EA;">等待状态变为可用后再进入</td></tr>
+        <tr><td style="padding:10px; border:1px solid #D9E0EA;">微信不回复</td><td style="padding:10px; border:1px solid #D9E0EA;">微信未连接、模型未配置或服务同步中</td><td style="padding:10px; border:1px solid #D9E0EA;">重新确认微信连接状态和模型广场当前模型</td></tr>
+        <tr><td style="padding:10px; border:1px solid #D9E0EA;">回复很慢</td><td style="padding:10px; border:1px solid #D9E0EA;">上下文太长、首次预热、网络或中转站延迟</td><td style="padding:10px; border:1px solid #D9E0EA;">清除上下文，换短问题测试，再看模型服务状态</td></tr>
+        <tr><td style="padding:10px; border:1px solid #D9E0EA;">生图失败</td><td style="padding:10px; border:1px solid #D9E0EA;">未连接生图模型或账号不可用</td><td style="padding:10px; border:1px solid #D9E0EA;">登录/刷新 Claw-Pi 官方服务，或配置可用图片模型</td></tr>
+        <tr><td style="padding:10px; border:1px solid #D9E0EA;">技能市场加载少</td><td style="padding:10px; border:1px solid #D9E0EA;">目录还在分页加载或网络失败</td><td style="padding:10px; border:1px solid #D9E0EA;">下拉继续加载，必要时刷新目录</td></tr>
+      </tbody>
+    </table>
+    <h3>交付和培训建议</h3>
+    <ul>
+      <li>给新用户演示时，先用龙虾工作台发一条短问题，确认模型链路正常。</li>
+      <li>再演示微信扫码，强调“准备好后再问”。</li>
+      <li>最后演示上传图片、生图和绝技市场，体现产品能力边界。</li>
+    </ul>
+    <div class="note">本文档可随版本继续更新。若界面名称或功能发生变化，优先以软件内实际展示为准。</div>
+    <div class="footer"><span>故障排查</span><span>08</span></div>
+  </section>
+</body>
+</html>`;
+
+await mkdir(docsDir, { recursive: true });
+await mkdir(visualAssetsDir, { recursive: true });
+await writeFile(htmlPath, html, "utf8");
+
+const browser = await chromium.launch({ headless: true });
+const page = await browser.newPage({
+  viewport: { width: 1240, height: 1754 },
+  deviceScaleFactor: 1,
+});
+await page.goto(pathToFileURL(htmlPath).href, { waitUntil: "networkidle" });
+await page.emulateMedia({ media: "screen" });
+
+const visualCount = await page.locator(".visual").count();
+for (let index = 0; index < visualCount; index += 1) {
+  const visual = page.locator(".visual").nth(0);
+  const caption =
+    (await visual
+      .locator(".caption-row")
+      .first()
+      .textContent()
+      .catch(() => null))?.trim() || `Claw-Pi 图示 ${index + 1}`;
+  const imagePath = resolve(visualAssetsDir, `visual-${String(index + 1).padStart(2, "0")}.png`);
+
+  await visual.screenshot({ path: imagePath });
+  const imageBuffer = await readFile(imagePath);
+  const dataUri = `data:image/png;base64,${imageBuffer.toString("base64")}`;
+
+  await visual.evaluate(
+    (node, payload) => {
+      const figure = document.createElement("figure");
+      figure.className = "visual-raster";
+      const image = document.createElement("img");
+      image.src = payload.dataUri;
+      image.alt = payload.caption;
+      figure.appendChild(image);
+      node.replaceWith(figure);
+    },
+    { caption, dataUri },
+  );
+}
+
+await page.evaluate(async () => {
+  const images = Array.from(document.images);
+  await Promise.all(
+    images.map((image) => {
+      if (image.complete) {
+        return true;
+      }
+      return new Promise((resolveImage) => {
+        image.onload = resolveImage;
+        image.onerror = resolveImage;
+      });
+    }),
+  );
+});
+
+await writeFile(htmlPath, await page.content(), "utf8");
+await page.screenshot({ path: previewPath, fullPage: false });
+await page.pdf({
+  path: pdfPath,
+  format: "A4",
+  printBackground: true,
+  preferCSSPageSize: true,
+});
+await browser.close();
+
+const pdfStats = await stat(pdfPath);
+const previewStats = await stat(previewPath);
+console.log(
+  JSON.stringify(
+    {
+      htmlPath,
+      pdfPath,
+      previewPath,
+      pdfBytes: pdfStats.size,
+      previewBytes: previewStats.size,
+    },
+    null,
+    2,
+  ),
+);

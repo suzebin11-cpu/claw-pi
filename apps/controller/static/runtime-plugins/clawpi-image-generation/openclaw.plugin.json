@@ -1,0 +1,15 @@
+{
+  "id": "clawpi-image-generation",
+  "name": "Claw-Pi Image Generation",
+  "description": "Provides the image_generate tool backed by the user's selected Claw-Pi image model.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "controllerUrl": {
+        "type": "string",
+        "description": "Claw-Pi Controller base URL used by the image generation tool."
+      }
+    }
+  }
+}

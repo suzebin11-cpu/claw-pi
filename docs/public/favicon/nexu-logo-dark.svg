@@ -1,0 +1,18 @@
+<svg width="200" height="50" viewBox="0 0 200 50" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="2" y="3" width="44" height="44" rx="10" fill="#161618"/>
+  <g transform="translate(2, 3) scale(0.11)">
+    <line x1="140" y1="260" x2="130" y2="305" stroke="#E56B2D" stroke-width="38" stroke-linecap="round"/>
+    <line x1="260" y1="260" x2="270" y2="305" stroke="#E56B2D" stroke-width="38" stroke-linecap="round"/>
+    <path d="M 155 150 Q 135 105 130 75" stroke="#E56B2D" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <path d="M 245 150 Q 265 105 270 75" stroke="#E56B2D" stroke-width="12" stroke-linecap="round" fill="none"/>
+    <rect x="75" y="145" width="250" height="155" rx="65" fill="#E56B2D"/>
+    <circle cx="127" cy="70" r="17" fill="#E56B2D"/>
+    <circle cx="273" cy="70" r="17" fill="#E56B2D"/>
+    <circle cx="150" cy="215" r="24" fill="#161618"/>
+    <circle cx="250" cy="215" r="24" fill="#161618"/>
+    <path d="M 156 199 L 140 215 L 156 231" stroke="#F5BB96" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M 244 199 L 260 215 L 244 231" stroke="#F5BB96" stroke-width="7" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <path d="M 182 250 A 18 18 0 0 0 218 250 Z" fill="#161618" stroke="#161618" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+  <text x="56" y="36" font-family="system-ui, -apple-system, sans-serif" font-size="32" font-weight="700" fill="#e8e8e8" letter-spacing="-0.5">Claw-Pi</text>
+</svg>

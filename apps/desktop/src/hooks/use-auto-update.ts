@@ -1,0 +1,215 @@
+import type { UpdaterEventMap } from "@shared/host";
+import { useCallback, useEffect, useState } from "react";
+import { checkForUpdate, downloadUpdate, installUpdate } from "../lib/host-api";
+
+export type UpdatePhase =
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "ready"
+  | "error";
+
+export type UpdateState = {
+  phase: UpdatePhase;
+  version: string | null;
+  releaseNotes: string | null;
+  percent: number;
+  errorMessage: string | null;
+  dismissed: boolean;
+  userInitiated: boolean;
+};
+
+export function restorePhaseAfterInstall(
+  state: UpdateState,
+  previousPhase: Exclude<UpdatePhase, "installing">,
+): UpdateState {
+  return state.phase === "installing"
+    ? { ...state, phase: previousPhase }
+    : state;
+}
+
+export function useAutoUpdate() {
+  const [state, setState] = useState<UpdateState>({
+    phase: "idle",
+    version: null,
+    releaseNotes: null,
+    percent: 0,
+    errorMessage: null,
+    dismissed: false,
+    userInitiated: false,
+  });
+
+  useEffect(() => {
+    const updater = window.clawpiUpdater;
+    if (!updater) return;
+
+    const disposers: Array<() => void> = [];
+
+    disposers.push(
+      updater.onEvent("update:checking", () => {
+        setState((prev) => ({
+          ...prev,
+          phase:
+            prev.userInitiated && prev.phase !== "installing"
+              ? "checking"
+              : prev.phase,
+          errorMessage: null,
+        }));
+      }),
+    );
+
+    disposers.push(
+      updater.onEvent(
+        "update:available",
+        (data: UpdaterEventMap["update:available"]) => {
+          setState((prev) => ({
+            ...prev,
+            phase: "available",
+            version: data.version,
+            releaseNotes: data.releaseNotes ?? null,
+            userInitiated: false,
+          }));
+        },
+      ),
+    );
+
+    disposers.push(
+      updater.onEvent("update:up-to-date", () => {
+        setState((prev) => ({
+          ...prev,
+          phase: prev.userInitiated ? "up-to-date" : "idle",
+          errorMessage: null,
+          userInitiated: false,
+        }));
+      }),
+    );
+
+    disposers.push(
+      updater.onEvent(
+        "update:progress",
+        (data: UpdaterEventMap["update:progress"]) => {
+          setState((prev) => ({
+            ...prev,
+            phase: "downloading",
+            percent: data.percent,
+            userInitiated: false,
+          }));
+        },
+      ),
+    );
+
+    disposers.push(
+      updater.onEvent(
+        "update:downloaded",
+        (data: UpdaterEventMap["update:downloaded"]) => {
+          setState((prev) => ({
+            ...prev,
+            phase: "ready",
+            version: data.version,
+            percent: 100,
+            userInitiated: false,
+          }));
+        },
+      ),
+    );
+
+    disposers.push(
+      updater.onEvent(
+        "update:error",
+        (data: UpdaterEventMap["update:error"]) => {
+          setState((prev) => ({
+            ...prev,
+            phase: "error",
+            errorMessage: data.message,
+            userInitiated: false,
+          }));
+        },
+      ),
+    );
+
+    return () => {
+      for (const dispose of disposers) {
+        dispose();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (state.phase !== "up-to-date") {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setState((prev) =>
+        prev.phase === "up-to-date"
+          ? { ...prev, phase: "idle", userInitiated: false }
+          : prev,
+      );
+    }, 2800);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [state.phase]);
+
+  const check = useCallback(async () => {
+    setState((prev) => ({
+      ...prev,
+      phase: "checking",
+      errorMessage: null,
+      dismissed: false,
+      userInitiated: true,
+    }));
+    try {
+      await checkForUpdate();
+    } catch {
+      // Errors are delivered via the update:error event
+    }
+  }, []);
+
+  const download = useCallback(async () => {
+    // Immediately switch to downloading state so the UI shows progress
+    // instead of leaving the Download button unresponsive while waiting
+    // for the first update:progress event from electron-updater.
+    setState((prev) => ({ ...prev, phase: "downloading", percent: 0 }));
+    try {
+      await downloadUpdate();
+    } catch {
+      // Errors are delivered via the update:error event
+    }
+  }, []);
+
+  const install = useCallback(async () => {
+    let previousPhase: Exclude<UpdatePhase, "installing"> = "ready";
+
+    setState((prev) => {
+      previousPhase = prev.phase === "installing" ? previousPhase : prev.phase;
+      return { ...prev, phase: "installing" };
+    });
+    try {
+      await installUpdate();
+      setState((prev) => restorePhaseAfterInstall(prev, previousPhase));
+    } catch {
+      // Errors are delivered via the update:error event
+    }
+  }, []);
+
+  const dismiss = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      dismissed: true,
+    }));
+  }, []);
+
+  const undismiss = useCallback(() => {
+    setState((prev) => ({
+      ...prev,
+      dismissed: false,
+    }));
+  }, []);
+
+  return { ...state, check, download, install, dismiss, undismiss };
+}

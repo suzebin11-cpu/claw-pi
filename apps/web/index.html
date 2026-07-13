@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="x-commit-hash" content="%VITE_COMMIT_HASH%" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link id="app-favicon" rel="icon" type="image/svg+xml" href="/favicon/favicon-light.svg" />
+    <script>
+      (() => {
+        const media = window.matchMedia("(prefers-color-scheme: dark)");
+        const updateFavicon = () => {
+          const link = document.getElementById("app-favicon");
+          if (!(link instanceof HTMLLinkElement)) return;
+          link.href = media.matches ? "/favicon/favicon-dark.svg" : "/favicon/favicon-light.svg";
+        };
+        updateFavicon();
+        media.addEventListener("change", updateFavicon);
+      })();
+    </script>
+    <title>Claw-Pi</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

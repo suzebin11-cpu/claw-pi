@@ -1,0 +1,428 @@
+= Claw-Pi OpenClaw Workbench Architecture
+:toc:
+:toc-title: 目录
+:sectnums:
+:revnumber: 0.1
+:revdate: 2026-05-25
+:revremark: arc42 working document
+
+== 1. 引言与目标
+
+=== 1.1 需求概览
+
+Claw-Pi 有多个用户入口：龙虾大脑、微信/飞书等渠道、网页龙虾、龙虾工作台。当前目标是让龙虾工作台也成为 OpenClaw agent 客户端，而不是绕过 OpenClaw 直接调用 OpenAI-compatible `/v1/chat/completions`。
+
+目标运行方式：
+
+[source,text]
+----
+用户界面
+  -> Claw-Pi Controller
+  -> OpenClaw Gateway / Agent Session
+  -> 云雾模型大脑/模型供应商
+  -> OpenClaw 工具、文件、技能、权限、记忆
+  -> Claw-Pi UI 展示结果
+----
+
+=== 1.2 当前完成状态
+
+已完成：
+
+* 龙虾工作台通过 Controller 的 `AgentChatService` 调用 OpenClaw `agent` runner。
+* 默认对话模型固定使用 `link/gpt-5.5`。
+* 默认生图模型固定使用 `clawpi-image/gpt-image-2`。
+* 生图能力经 `clawpi-image-generation` runtime plugin 调回 Controller 生图接口。
+* 工作台 SSE 响应头立即返回，避免 OpenClaw 冷启动期间前端表现为无响应。
+* 工作台 agent run 使用 `bootstrapContextMode="lightweight"`，跳过 AGENTS/SOUL/BOOTSTRAP/MEMORY 首轮注入，避免 onboarding 干扰普通问答。
+* Controller 会等待 OpenClaw 空 final 后的同 session 内层 run，避免过早结束导致 UI 显示“没有收到有效回复”。
+* OpenClaw pricing bootstrap 可通过 `OPENCLAW_SKIP_MODEL_PRICING=1` 禁用，避免首条请求被 OpenRouter 价格表超时拖慢。
+* OpenClaw WS 首次 connected 后只在断连期间发生配置写入时触发 `syncAll()`，避免启动阶段重复 reload。
+* OpenClaw sidecar 在 `models.mode="replace"` 且已有显式供应商模型时，跳过隐式 provider discovery，并直接从 Claw-Pi 编译出的 `models.providers` 构建 model catalog。
+
+=== 1.3 质量目标
+
+[cols="1,3",options="header"]
+|===
+|目标 |说明
+
+|可用性
+|龙虾工作台、龙虾大脑、微信问答、生图不能互相破坏。
+
+|一致性
+|工作台对话和渠道对话使用同一套模型配置和 OpenClaw runtime 能力。
+
+|响应速度
+|SSE 连接必须快速建立；OpenClaw 稳定态简单回复应控制在可接受范围，当前 warm 验证约 12 秒完成，UI 来源请求首 token 约 6.6 秒。
+
+|可执行能力
+|工作台应能使用 OpenClaw 提供的文件、工具、技能、执行权限，而不是普通聊天代理。
+
+|可回归
+|测试默认只使用 `gpt-5.5`；生图只使用 `gpt Image2`，避免模型切换造成误判。
+|===
+
+== 2. 架构约束
+
+* OpenClaw 是 runner，不是模型；它需要接入现有模型大脑作为对话/推理模型。
+* 不能替换云雾模型供应商，只能复用当前模型配置和账号余额。
+* 不能移除 `/v1/chat/completions`，该接口仍作为兼容和诊断路径存在。
+* 工作台用户回复不能静默绕回直连模型路径。
+* 打包产物必须在 `apps/desktop/release/win-unpacked` 可运行。
+* Windows 环境下不能依赖系统 Node 版本，OpenClaw sidecar 优先使用 Electron Node。
+* 不输出或提交 API key、账号 token、云雾配置明文。
+
+== 3. 上下文与范围
+
+=== 3.1 系统上下文
+
+[source,text]
+----
+用户
+  -> Desktop Shell / Web UI
+  -> Controller local API
+  -> OpenClaw Gateway WebSocket
+  -> OpenClaw Agent Runtime
+  -> Model Provider via cloud relay
+  -> Controller image generation endpoint when image_generate is used
+----
+
+=== 3.2 外部系统
+
+[cols="1,3",options="header"]
+|===
+|系统 |职责
+
+|云雾模型大脑
+|提供 `gpt-5.5` 对话/推理模型和 `gpt Image2` 生图模型。
+
+|OpenClaw
+|负责 agent session、tool loop、runtime plugin、技能、权限和本机执行能力。
+
+|Electron Desktop
+|启动 Controller、Web、OpenClaw sidecar，并提供 portable 打包运行环境。
+
+|微信/飞书渠道
+|通过 Controller 编译出的 OpenClaw 配置连接外部消息渠道。
+|===
+
+== 4. 解决方案策略
+
+* Controller-first：Controller 仍是本地控制面，负责读取 Claw-Pi 配置、编译 OpenClaw 配置、启动 OpenClaw、同步模型和渠道。
+* OpenClaw-backed workbench：工作台新增 `AgentChatService`，将用户消息包装成权限约束后发送给 OpenClaw `agent`。
+* SSE compatibility：对前端保持 OpenAI-compatible stream 形态，内部事件来自 OpenClaw `chat` event。
+* Lightweight workbench turns：工作台请求显式传 `bootstrapContextMode="lightweight"` 和 `extraSystemPrompt`，保留 runner/tool 能力，同时避免新工作区 bootstrap 文档抢占用户消息。
+* 固定默认模型：测试和默认路径只使用 `link/gpt-5.5`；生图固定 `clawpi-image/gpt-image-2`。
+* Sidecar patch：OpenClaw 上游包通过 `prepare-openclaw-sidecar.mjs` 打补丁，确保打包产物可重复生成。
+* 冷启动体验修复：即使 OpenClaw WS 尚未 connected，Controller 也先返回 SSE stream，再在后台等待 gateway ready。
+* Replace-mode catalog fast path：当 Claw-Pi 已经把云雾/Link 模型写进 OpenClaw config 的显式 providers 时，OpenClaw 不再扫描隐式供应商或 provider plugin catalog，直接使用显式列表。
+
+== 5. 构建块视图
+
+=== 5.1 Level 1
+
+[source,text]
+----
+Claw-Pi Desktop
+  |-- apps/desktop: Electron shell, sidecar packaging
+  |-- apps/web: Workbench UI
+  |-- apps/controller: local API and OpenClaw orchestration
+  |-- openclaw-runtime: bundled OpenClaw runner
+----
+
+=== 5.2 Level 2: Controller
+
+[cols="1,3",options="header"]
+|===
+|模块 |职责
+
+|`agent-chat-routes.ts`
+|提供工作台 OpenClaw stream API。
+
+|`agent-chat-service.ts`
+|构造 OpenClaw sessionKey、保存附件、发送 `agent` runner 请求、转发 OpenClaw `chat` events 到 SSE。
+
+|`openclaw-ws-client.ts`
+|维护 OpenClaw Gateway WebSocket、鉴权、JSON-RPC request/response、event subscription。
+
+|`openclaw-process.ts`
+|启动和监管 OpenClaw sidecar，注入 `OPENCLAW_SKIP_MODEL_PRICING=1` 等环境变量。
+
+|`openclaw-config-compiler.ts`
+|把 Claw-Pi 模型、渠道、agent、工具配置编译为 OpenClaw config。
+
+|`image-generation-service.ts`
+|处理 Controller 内部生图请求，供 UI 和 OpenClaw image plugin 调用。
+|===
+
+=== 5.3 Level 2: Desktop Packaging
+
+[cols="1,3",options="header"]
+|===
+|模块 |职责
+
+|`prepare-openclaw-sidecar.mjs`
+|复制 OpenClaw runtime，打补丁，处理 sidecar 依赖；其中包括 replace-mode model catalog fast path 和 provider discovery 跳过逻辑。
+
+|`manifests.ts`
+|解析 runtime sidecar manifest，支持 archive/raw sidecar fallback。
+
+|`release/win-unpacked`
+|当前 portable 运行包目录。
+|===
+
+== 6. 运行时视图
+
+=== 6.1 工作台对话
+
+[source,text]
+----
+Workbench UI
+  -> POST /api/internal/agent-chat/stream
+  -> AgentChatService creates SSE immediately
+  -> wait until OpenClaw WS connected if needed
+  -> ws.request("agent", sessionKey, message, thinking="off", bootstrapContextMode="lightweight")
+  -> OpenClaw dispatches agent turn
+  -> Model provider link/gpt-5.5
+  -> OpenClaw emits chat delta/final
+  -> Controller maps events to SSE chunks
+  -> UI renders assistant reply
+----
+
+=== 6.2 生图
+
+[source,text]
+----
+User asks image generation
+  -> OpenClaw tool image_generate
+  -> clawpi-image-generation runtime plugin
+  -> Controller /api/internal/desktop/images/generations
+  -> cloud image model clawpi-image/gpt-image-2
+  -> generated image stored under nexu-home/generated-images
+  -> markdown image URL returned to UI
+----
+
+=== 6.3 OpenClaw 启动
+
+[source,text]
+----
+Desktop starts Controller
+  -> Controller writes OpenClaw config
+  -> OpenClawProcessManager spawns OpenClaw
+  -> env includes OPENCLAW_SKIP_MODEL_PRICING=1
+  -> Controller WS client retries until gateway is ready
+  -> workbench stream waits internally if user sends message early
+----
+
+=== 6.4 Model Catalog 快路径
+
+[source,text]
+----
+Controller compileModelsConfig
+  -> OpenClaw config models.mode = "replace"
+  -> OpenClaw config models.providers.link.models includes gpt-5.5
+  -> patched models-config skips implicit provider discovery
+  -> patched model-catalog builds entries directly from explicit providers
+  -> OpenClaw agent selects link/gpt-5.5
+  -> nexu-runtime-model calls 云雾/Link model API
+----
+
+这个路径只影响 OpenClaw sidecar 的模型发现阶段，不改变龙虾大脑、微信/飞书渠道和 `/v1/chat/completions` 的兼容路径。
+
+== 7. 部署视图
+
+当前目标部署形态是 Windows portable：
+
+* 可执行文件：`apps/desktop/release/win-unpacked/Claw-Pi.exe`
+* Controller bundle：`resources/runtime/controller/dist/index.js`
+* OpenClaw sidecar：`resources/runtime/openclaw/node_modules/openclaw`
+* 用户数据：`apps/desktop/release/win-unpacked/data`
+* OpenClaw 状态：`data/user-data/runtime/openclaw/state`
+* Claw-Pi 配置：`data/nexu-home`
+
+打包命令：
+
+[source,powershell]
+----
+$env:NEXU_DESKTOP_USE_EXISTING_BUILDS='1'
+$env:NEXU_DESKTOP_USE_EXISTING_RUNTIME_INSTALL='1'
+$env:NEXU_DESKTOP_ARCHIVE_OPENCLAW_SIDECAR='0'
+pnpm --filter @nexu/desktop dist:win:portable
+----
+
+== 8. 横切概念
+
+=== 8.1 权限模式
+
+工作台支持 `basic`、`confirm`、`full` 三档权限。默认 `full`，但破坏性操作仍需保护。权限约束由 Controller 注入到用户消息前面。
+
+=== 8.2 Session Key
+
+工作台 session 映射为：
+
+[source,text]
+----
+agent:{agentId}:workbench:{sessionId}
+----
+
+该 key 必须稳定，才能让 OpenClaw 恢复同一会话上下文。
+
+=== 8.3 模型选择
+
+默认模型来自桌面当前选择；若未设置，则回退到 bot 模型或 runtime 默认模型。当前测试要求只使用：
+
+* 对话：`link/gpt-5.5`
+* 生图：`clawpi-image/gpt-image-2`
+
+=== 8.4 Latency 分层
+
+必须区分：
+
+* HTTP/SSE header 建立时间。
+* OpenClaw WS request ack 时间。
+* OpenClaw session-init/dispatch 时间。
+* LLM 首字时间。
+* OpenClaw final event 到 UI 完成时间。
+
+== 9. 架构决策
+
+=== ADR-001: 工作台走 OpenClaw runner
+
+*状态：已采纳*
+
+原因：工作台需要本机执行权、文件处理、技能、工具和 OpenClaw session。直连 `/v1/chat/completions` 只能提供普通聊天。
+
+结果：新增 Controller `AgentChatService`，使用 OpenClaw `agent` runner。
+
+=== ADR-005: 工作台使用 OpenClaw `agent` 方法并启用 lightweight bootstrap
+
+*状态：已采纳*
+
+原因：`chat.send` 是 WebChat 专用 schema，不接受 `extraSystemPrompt` 和 `bootstrapContextMode`。工作台需要跳过新工作区 bootstrap/onboarding 上下文，同时保留 OpenClaw runner、工具和会话能力。
+
+结果：工作台改为调用 OpenClaw `agent` 方法；sessionKey 继续使用 `agent:{agentId}:workbench:{sessionId}`；请求设置 `deliver=false`、`thinking=off`、`bootstrapContextMode=lightweight`。
+
+=== ADR-002: 保留兼容直连模型接口
+
+*状态：已采纳*
+
+原因：龙虾大脑、诊断工具和旧路径仍依赖 OpenAI-compatible 接口。
+
+结果：工作台迁移不删除 `/v1/chat/completions`。
+
+=== ADR-003: 禁用 OpenClaw pricing bootstrap
+
+*状态：已采纳*
+
+原因：OpenRouter pricing catalog 网络超时会阻塞首条工作台消息。
+
+结果：OpenClaw sidecar patch 支持 `OPENCLAW_SKIP_MODEL_PRICING=1`，Controller 启动 OpenClaw 时注入该环境变量。
+
+=== ADR-004: SSE 先建立，再等待 OpenClaw ready
+
+*状态：已采纳*
+
+原因：OpenClaw 冷启动或 WS 鉴权可能耗时较长，若 Controller 在返回 Response 前等待，会让 UI 看起来无响应。
+
+结果：`AgentChatService` 创建 `ReadableStream` 后立即返回 Response，后台等待 Gateway connected。
+
+== 10. 质量需求
+
+=== 10.1 质量场景
+
+[cols="1,2,2",options="header"]
+|===
+|质量属性 |场景 |验收方式
+
+|响应性
+|工作台发送简单消息时，HTTP/SSE header 快速返回。
+|本地测试 headerMs 小于 200ms。
+
+|稳定性
+|OpenClaw 冷启动期间发送消息不会直接 502。
+|SSE 建立，后台等待 OpenClaw ready。
+
+|功能正确性
+|工作台回复来自 OpenClaw agent path。
+|日志出现 `agent` request、OpenClaw `chat` event、`nexu-runtime-model`。
+
+|生图正确性
+|OpenClaw 或 UI 生图使用 `gpt Image2`。
+|Controller image generation 返回 200 并生成 PNG。
+
+|可打包性
+|修复必须进入 portable 包，而不是手工改 release 目录。
+|`dist:win:portable` 成功，sidecar patch 日志出现。
+|===
+
+=== 10.2 当前验证
+
+* `pnpm --filter @nexu/controller exec vitest run tests/bootstrap.test.ts tests/openclaw-ws-client.test.ts tests/agent-chat-service.test.ts tests/openclaw-gateway-service.test.ts` 通过（12 tests）。
+* `pnpm --filter @nexu/controller typecheck` 通过。
+* `pnpm --filter @nexu/controller build` 通过。
+* `node --check apps/desktop/scripts/prepare-openclaw-sidecar.mjs` 通过。
+* `pnpm --filter @nexu/desktop prepare:openclaw-sidecar` 通过，日志出现 `patched models config behavior` 和 `patched model catalog replace-mode behavior`。
+* `pnpm --filter @nexu/desktop build` 通过（本轮早期验证）。
+* `pnpm --filter @nexu/desktop dist:win:portable` 通过（本轮早期验证，当前最新 controller 通过手动替换 bundle 进入 `win-unpacked`）。
+* 当前 `win-unpacked` 手动替换 controller bundle 和 OpenClaw dist 后验证：工作台 `link/gpt-5.5` warm 请求 12.2s 返回 `OK-WARM-AFTER-PATCH`。
+* 最终 sanity 请求 `codex-agent-final-warm-20260525232231` 返回 `OK-FINAL-WARM`，总耗时 22.4s；阶段日志显示 WS request 29ms、session 排队 1ms，主要耗时在模型解析和云雾/Link API 返回。
+* 冷启动无重复 `syncAll()` 后，`model-catalog` 从约 68-69s 降到约 5.9s；加入 replace-mode fast path 后，日志显示 `replace-config-ready elapsedMs=0 entries=13`、`complete elapsedMs=3 entries=13`。
+* 一次冷启动请求遇到云雾账号并发限制：`Concurrency limit exceeded for account, please retry later`。该错误来自上游账号并发限制，不是工作台路由失败。
+* UI 来源工作台请求 `ask-1779722069929-alh041` 日志显示 `first_text elapsedMs=6565`、`stream_finish elapsedMs=6933`。
+* 日志验证：lightweight 后不再出现工作台 AGENTS/SOUL/BOOTSTRAP 截断和 MEMORY 读取失败。
+* 生图 `clawpi-image/gpt-image-2` 返回 200 并生成 PNG。
+
+== 11. 技术风险
+
+[cols="1,3,2",options="header"]
+|===
+|风险 |说明 |处理策略
+
+|OpenClaw 冷启动慢
+|replace-mode model catalog 已降到毫秒级，但 OpenClaw 进程启动、WS connected 和外部模型 API 仍可能导致首条请求几十秒等待。
+|继续记录 `agent_chat_gateway_ready`、`openclaw_ws_connected`、`first_text`，后续优化 process startup/session-init。
+
+|Gateway health 与 WS 状态短暂不一致
+|冷启动时 health 可能已显示 active，但 Controller WS 尚未完成握手，首条工作台请求会等待 `agent_chat_gateway_ready`。
+|后续可让 health/前端同时参考 `OpenClawWsClient.isConnected()`，或缩短 WS 握手卡死等待。
+
+|配置热 reload 抖动
+|Controller 多次写 OpenClaw config 可能触发 reload，占用事件循环。
+|已限制首次 WS connected 后的重复 `syncAll()`；后续继续减少无差异写入，增加 config fingerprint 去重。
+
+|附件能力不足
+|当前已保存附件，但 DOCX/PPTX/XLSX/PDF 的深度解析仍需补齐。
+|后续按文件类型逐步接入文档解析和 OpenClaw tool 读取。
+
+|侧车补丁维护成本
+|OpenClaw dist 文件名和 anchor 可能随上游版本变化。
+|patch 脚本必须 anchor 校验；升级 OpenClaw 时先跑 sidecar prepare。
+
+|权限边界
+|Full 模式需要执行能力，但不能变成无限制本机控制。
+|破坏性操作保留确认或阻断策略。
+|===
+
+== 12. 术语表
+
+[cols="1,3",options="header"]
+|===
+|术语 |说明
+
+|OpenClaw
+|本项目里的 agent runner，负责工具、技能、会话和本机执行。
+
+|模型大脑
+|云雾或其他模型供应商提供的对话/推理/生图模型。
+
+|龙虾工作台
+|Claw-Pi SaaS/桌面中的工作台式用户入口，目标是 OpenClaw-backed agent client。
+
+|龙虾大脑
+|现有普通问答入口，仍可使用 OpenAI-compatible 兼容路径。
+
+|SSE
+|Server-Sent Events，用于前端流式展示模型回复。
+
+|Sidecar
+|随 Electron portable 包一起发布的 Controller、Web、OpenClaw runtime。
+|===
