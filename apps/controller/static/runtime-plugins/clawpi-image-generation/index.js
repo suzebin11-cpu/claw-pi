@@ -192,12 +192,20 @@ const plugin = {
             return textResult(`生图失败：${message}`);
           }
 
-          const resultText =
-            typeof data.markdown === "string" && data.markdown.trim()
-              ? `图片已生成。\n${data.markdown.trim()}`
-              : typeof data.url === "string" && data.url.trim()
-                ? `图片已生成。\n${data.url.trim()}`
-                : "图片已生成。";
+          // 构建结果文本，包含兜底模型提示
+          let resultText = "图片已生成。";
+          if (data.fallbackUsed && data.fallbackFrom && data.fallbackTo) {
+            // 提取模型简称
+            const fromModel = data.fallbackFrom.split("/").pop() || data.fallbackFrom;
+            const toModel = data.fallbackTo.split("/").pop() || data.fallbackTo;
+            resultText = `图片已生成（使用了备用模型 ${toModel}，原模型 ${fromModel} 暂时繁忙）。`;
+          }
+
+          if (typeof data.markdown === "string" && data.markdown.trim()) {
+            resultText += `\n${data.markdown.trim()}`;
+          } else if (typeof data.url === "string" && data.url.trim()) {
+            resultText += `\n${data.url.trim()}`;
+          }
 
           const mediaUrls = [data.url].filter(
             (value) => typeof value === "string" && value.trim(),
@@ -214,6 +222,9 @@ const plugin = {
             mimeType: data.mimeType,
             markdown: data.markdown,
             durationMs: data.durationMs,
+            fallbackUsed: data.fallbackUsed,
+            fallbackFrom: data.fallbackFrom,
+            fallbackTo: data.fallbackTo,
             media: {
               mediaUrl: mediaUrls[0],
               mediaUrls,

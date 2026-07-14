@@ -147,4 +147,172 @@ describe("ImageGenerationService", () => {
       ),
     ).toBe("图片生成超时，请稍后重试");
   });
+
+  it("falls back to stable model when primary model fails with 503", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
+    const requests: Array<{ url: string; body: Record<string, unknown> }> = [];
+
+    const configStore = {
+      async getConfig() {
+        return {
+          runtime: {
+            defaultImageGenerationModelId: "clawpi-image/gpt-image-2",
+          },
+          desktop: {
+            cloud: {
+              connected: true,
+              linkUrl: "https://yunwu.example",
+              apiKey: "sk-test",
+            },
+          },
+        };
+      },
+      async getDesktopCloudStatus() {
+        return {
+          linkUrl: "https://yunwu.example",
+        };
+      },
+    } as unknown as NexuConfigStore;
+
+    const service = new ImageGenerationService(
+      configStore,
+      createEnv(tempDir),
+      {
+        fetchImpl: async (url, options) => {
+          const body = JSON.parse(String(options?.body ?? "{}")) as Record<
+            string,
+            unknown
+          >;
+          requests.push({ url: String(url), body });
+
+          // gpt-image-2 的所有调用都返回 503（包括重试）
+          if (body.model === "gpt-image-2") {
+            return new Response(
+              JSON.stringify({
+                error: { message: "Service temporarily unavailable" },
+              }),
+              { status: 503, headers: { "Content-Type": "application/json" } },
+            );
+          }
+
+          // gpt-image-1.5 成功
+          return new Response(
+            JSON.stringify({ data: [{ b64_json: ONE_PIXEL_PNG }] }),
+            { status: 200, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    );
+
+    const result = await service.generateImage({
+      prompt: "a small green robot",
+    });
+
+    // 验证调用顺序：gpt-image-2 失败（含重试），然后兜底到 gpt-image-1.5 成功
+    expect(requests.length).toBeGreaterThan(1);
+    const gptImage2Calls = requests.filter(
+      (r) => r.body.model === "gpt-image-2",
+    );
+    const gptImage15Calls = requests.filter(
+      (r) => r.body.model === "gpt-image-1.5",
+    );
+
+    expect(gptImage2Calls.length).toBeGreaterThan(0);
+    expect(gptImage15Calls.length).toBe(1);
+    expect(requests[requests.length - 1]?.body.model).toBe("gpt-image-1.5");
+
+    // 验证兜底标记
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.fallbackFrom).toBe("clawpi-image/gpt-image-2");
+    expect(result.fallbackTo).toBe("clawpi-image/gpt-image-1.5");
+    expect(result.modelId).toBe("clawpi-image/gpt-image-1.5");
+  });
+
+  it("does not fallback for balance errors", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
+
+    const configStore = {
+      async getConfig() {
+        return {
+          runtime: {
+            defaultImageGenerationModelId: "clawpi-image/gpt-image-2",
+          },
+          desktop: {
+            cloud: {
+              connected: true,
+              linkUrl: "https://yunwu.example",
+              apiKey: "sk-test",
+            },
+          },
+        };
+      },
+      async getDesktopCloudStatus() {
+        return {
+          linkUrl: "https://yunwu.example",
+        };
+      },
+    } as unknown as NexuConfigStore;
+
+    const service = new ImageGenerationService(
+      configStore,
+      createEnv(tempDir),
+      {
+        fetchImpl: async () => {
+          return new Response(
+            JSON.stringify({ error: { message: "余额不足，请及时充值" } }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    );
+
+    await expect(
+      service.generateImage({ prompt: "a small green robot" }),
+    ).rejects.toThrow("余额不足，请及时充值");
+  });
+
+  it("does not fallback for safety rejection", async () => {
+    tempDir = await mkdtemp(path.join(tmpdir(), "clawpi-image-test-"));
+
+    const configStore = {
+      async getConfig() {
+        return {
+          runtime: {
+            defaultImageGenerationModelId: "clawpi-image/gpt-image-2",
+          },
+          desktop: {
+            cloud: {
+              connected: true,
+              linkUrl: "https://yunwu.example",
+              apiKey: "sk-test",
+            },
+          },
+        };
+      },
+      async getDesktopCloudStatus() {
+        return {
+          linkUrl: "https://yunwu.example",
+        };
+      },
+    } as unknown as NexuConfigStore;
+
+    const service = new ImageGenerationService(
+      configStore,
+      createEnv(tempDir),
+      {
+        fetchImpl: async () => {
+          return new Response(
+            JSON.stringify({
+              error: { message: "Your request was rejected by safety system" },
+            }),
+            { status: 400, headers: { "Content-Type": "application/json" } },
+          );
+        },
+      },
+    );
+
+    await expect(
+      service.generateImage({ prompt: "a small green robot" }),
+    ).rejects.toThrow("safety system");
+  });
 });

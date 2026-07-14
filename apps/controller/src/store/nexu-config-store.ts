@@ -2475,6 +2475,18 @@ export class NexuConfigStore {
     await this.setDesktopCloudState(input);
   }
 
+  async importDesktopCloudStateIfNeeded(
+    input: DesktopCloudState,
+  ): Promise<boolean> {
+    const current = readDesktopCloud(await this.getConfig());
+    if (current.connected && current.apiKey) {
+      return false;
+    }
+
+    await this.setDesktopCloudState(input);
+    return true;
+  }
+
   async setDesktopCloudModels(enabledModelIds: string[]) {
     await this.store.update((config) => {
       const cloud = readDesktopCloud(config);

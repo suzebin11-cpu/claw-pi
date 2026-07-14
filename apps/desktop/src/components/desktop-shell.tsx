@@ -14,13 +14,6 @@ import { SurfaceButton } from "./surface-button";
 import { SurfaceFrame } from "./surface-frame";
 import { UpdateBanner } from "./update-banner";
 
-function getWebviewPreloadUrl(): string {
-  return new URL(
-    "../dist-electron/preload/webview-preload.js",
-    document.location.href,
-  ).href;
-}
-
 export function DesktopShell() {
   const isPackaged = window.clawpiHost.bootstrap.isPackaged;
   const isMacOS =
@@ -146,7 +139,6 @@ export function DesktopShell() {
             src={desktopWebUrl}
             title="nexu Web"
             version={webSurfaceVersion}
-            preload={getWebviewPreloadUrl()}
           />
         </div>
         <div

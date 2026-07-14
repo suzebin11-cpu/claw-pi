@@ -14,6 +14,8 @@ const lockfilePath = path.join(runtimeDir, "package-lock.json");
 const criticalRuntimeFiles = [
   path.join("node_modules", "openclaw", "dist"),
   path.join("node_modules", "openclaw", "package.json"),
+  path.join("node_modules", "chalk", "package.json"),
+  path.join("node_modules", "chalk", "source", "index.js"),
   path.join("node_modules", "tslog", "package.json"),
   path.join("node_modules", "tslog", "esm", "index.js"),
   path.join("node_modules", "@whiskeysockets", "baileys", "lib", "index.js"),
@@ -127,12 +129,7 @@ async function installRuntime() {
   }
 
   try {
-    await runNpm([
-      "install",
-      "--no-audit",
-      "--no-fund",
-      "--prefer-offline",
-    ]);
+    await runNpm(["install", "--no-audit", "--no-fund", "--prefer-offline"]);
     return;
   } catch (error) {
     console.warn(

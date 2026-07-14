@@ -260,9 +260,9 @@ const TELEGRAM_SECRET_CONTRACT_EXPORT_REPLACEMENT = [
 ].join("\n");
 const CONTROL_UI_BUNDLE_PATTERN = /^index-.*\.js$/u;
 const CONTROL_UI_IMAGE_EXTRACTOR_SEARCH =
-  'function ey(e){let t=e.content,n=[];if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&n.push({url:t.url})}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&n.push({url:e.url})}}return n}';
+  "function ey(e){let t=e.content,n=[];if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&n.push({url:t.url})}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&n.push({url:e.url})}}return n}";
 const CONTROL_UI_IMAGE_EXTRACTOR_REPLACEMENT =
-  'function ey(e){let t=e.content,n=[];let r=e=>{if(typeof e!=`string`)return;let t=e.trim();if(!t)return;if(!(/^https?:\\/\\//i.test(t)||/^data:image\\//i.test(t)||t.startsWith(`/`)))return;if(!n.some(e=>e.url===t))n.push({url:t,alt:`生成图片`})};let i=e=>{if(!e||typeof e!=`object`)return;let t=e;typeof t.mediaUrl==`string`&&r(t.mediaUrl);Array.isArray(t.mediaUrls)&&t.mediaUrls.forEach(r);typeof t.url==`string`&&r(t.url);typeof t.fileUrl==`string`&&r(t.fileUrl);t.media&&typeof t.media==`object`&&i(t.media)};if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&r(t.url)}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&r(e.url)}}i(e.details);return n}';
+  "function ey(e){let t=e.content,n=[];let r=e=>{if(typeof e!=`string`)return;let t=e.trim();if(!t)return;if(!(/^https?:\\/\\//i.test(t)||/^data:image\\//i.test(t)||t.startsWith(`/`)))return;if(!n.some(e=>e.url===t))n.push({url:t,alt:`生成图片`})};let i=e=>{if(!e||typeof e!=`object`)return;let t=e;typeof t.mediaUrl==`string`&&r(t.mediaUrl);Array.isArray(t.mediaUrls)&&t.mediaUrls.forEach(r);typeof t.url==`string`&&r(t.url);typeof t.fileUrl==`string`&&r(t.fileUrl);t.media&&typeof t.media==`object`&&i(t.media)};if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&r(t.url)}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&r(e.url)}}i(e.details);return n}";
 const CONTROL_UI_TOOL_OUTPUT_DETAILS_SEARCH =
   '<details class="chat-tool-msg-collapse">';
 const CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT =
@@ -270,18 +270,17 @@ const CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT =
 const CONTROL_UI_TOOL_MEDIA_RENDER_SEARCH =
   "if(!b&&u&&c)return vy(l,n);let T=u&&(t.showToolCalls??!0);if(!b&&!T&&!f&&!m)return g;let ee=o===`tool`||c,E=[...new Set(l.map(e=>e.name))],te=E.length<=3?E.join(`, `):`${E.slice(0,2).join(`, `)} +${E.length-2} more`,D=b&&!te?b.trim().replace(/\\s+/g,` `).slice(0,120):``;";
 const CONTROL_UI_TOOL_MEDIA_RENDER_REPLACEMENT =
-  "let T=u&&(t.showToolCalls??!0),ee=o===`tool`||c;if(ee&&(f||m))return i`<div class=\"${w}\">${gy(d)} ${_y(p)}</div>`;if(!b&&u&&c)return T?vy(l,n):g;if(ee&&!T)return g;if(!b&&!T&&!f&&!m)return g;let E=[...new Set(l.map(e=>e.name))],te=E.length<=3?E.join(`, `):`${E.slice(0,2).join(`, `)} +${E.length-2} more`,D=b&&!te?b.trim().replace(/\\s+/g,` `).slice(0,120):``;";
+  'let T=u&&(t.showToolCalls??!0),ee=o===`tool`||c;if(ee&&(f||m))return i`<div class="${w}">${gy(d)} ${_y(p)}</div>`;if(!b&&u&&c)return T?vy(l,n):g;if(ee&&!T)return g;if(!b&&!T&&!f&&!m)return g;let E=[...new Set(l.map(e=>e.name))],te=E.length<=3?E.join(`, `):`${E.slice(0,2).join(`, `)} +${E.length-2} more`,D=b&&!te?b.trim().replace(/\\s+/g,` `).slice(0,120):``;';
 const CONTROL_UI_TOOL_CALLS_DEFAULT_SEARCH = "chatShowToolCalls:!0";
 const CONTROL_UI_TOOL_CALLS_DEFAULT_REPLACEMENT = "chatShowToolCalls:!1";
 const CONTROL_UI_NODE_LIST_POLL_SEARCH =
   "function Ir(e){e.nodesPollInterval??=window.setInterval(()=>void Fr(e,{quiet:!0}),5e3)}";
 const CONTROL_UI_NODE_LIST_POLL_60S_SEARCH =
   "function Ir(e){e.nodesPollInterval??=window.setInterval(()=>void Fr(e,{quiet:!0}),6e4)}";
-const CONTROL_UI_NODE_LIST_POLL_REPLACEMENT =
-  CONTROL_UI_NODE_LIST_POLL_SEARCH;
-const CONTROL_UI_CSP_IMAGE_SRC_SEARCH = '"img-src \'self\' data: https:",';
+const CONTROL_UI_NODE_LIST_POLL_REPLACEMENT = CONTROL_UI_NODE_LIST_POLL_SEARCH;
+const CONTROL_UI_CSP_IMAGE_SRC_SEARCH = "\"img-src 'self' data: https:\",";
 const CONTROL_UI_CSP_IMAGE_SRC_REPLACEMENT =
-  '"img-src \'self\' data: https: http://127.0.0.1:* http://localhost:*",';
+  "\"img-src 'self' data: https: http://127.0.0.1:* http://localhost:*\",";
 const CONTROL_UI_NODE_LIST_HANDLER_SEARCH = [
   '\t"node.list": async ({ params, respond, context }) => {',
   "\t\tif (!validateNodeListParams(params)) {",
@@ -322,7 +321,7 @@ const PI_EMBEDDED_RUN_QUEUE_TIMING_REPLACEMENT = [
   "\t\tthrowIfAborted();",
   "\t\treturn enqueueGlobal(async () => {",
   "\t\t\tconst __clawpiGlobalDequeuedAt = Date.now();",
-  '\t\t\tconsole.info(`[clawpi-run-timing] runId=${__clawpiRunTimingId} stage=global-dequeued sessionWaitMs=${__clawpiSessionDequeuedAt - __clawpiRunQueuedAt} globalWaitMs=${__clawpiGlobalDequeuedAt - __clawpiSessionDequeuedAt} globalLane=${globalLane}`);',
+  "\t\t\tconsole.info(`[clawpi-run-timing] runId=${__clawpiRunTimingId} stage=global-dequeued sessionWaitMs=${__clawpiSessionDequeuedAt - __clawpiRunQueuedAt} globalWaitMs=${__clawpiGlobalDequeuedAt - __clawpiSessionDequeuedAt} globalLane=${globalLane}`);",
   "\t\t\tthrowIfAborted();",
   "\t\t\tconst started = Date.now();",
 ].join("\n");
@@ -335,13 +334,13 @@ const PI_EMBEDDED_RUN_STAGE_MARK_REPLACEMENT = [
   "\t\t\tlet __clawpiRunStageAt = started;",
   "\t\t\tconst __clawpiMarkRunStage = (stage) => {",
   "\t\t\t\tconst __now = Date.now();",
-  '\t\t\t\tconsole.info(`[clawpi-run-timing] runId=${__clawpiRunTimingId} stage=${stage} deltaMs=${__now - __clawpiRunStageAt} totalMs=${__now - started}`);',
+  "\t\t\t\tconsole.info(`[clawpi-run-timing] runId=${__clawpiRunTimingId} stage=${stage} deltaMs=${__now - __clawpiRunStageAt} totalMs=${__now - started}`);",
   "\t\t\t\t__clawpiRunStageAt = __now;",
   "\t\t\t};",
   "\t\t\tconst workspaceResolution = resolveRunWorkspaceDir({",
 ].join("\n");
 const PI_EMBEDDED_WORKSPACE_MARK_SEARCH =
-  '\t\t\tif (workspaceResolution.usedFallback) log$16.warn(`[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`);\n\t\t\tensureRuntimePluginsLoaded({';
+  "\t\t\tif (workspaceResolution.usedFallback) log$16.warn(`[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`);\n\t\t\tensureRuntimePluginsLoaded({";
 const PI_EMBEDDED_WORKSPACE_MARK_REPLACEMENT =
   '\t\t\tif (workspaceResolution.usedFallback) log$16.warn(`[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`);\n\t\t\t__clawpiMarkRunStage("workspace-resolved");\n\t\t\t__clawpiMarkRunStage("runtime-plugins-load-start");\n\t\t\tensureRuntimePluginsLoaded({';
 const PI_EMBEDDED_RUNTIME_PLUGINS_MARK_SEARCH = [
@@ -350,7 +349,7 @@ const PI_EMBEDDED_RUNTIME_PLUGINS_MARK_SEARCH = [
   "\t\t\t\tworkspaceDir: resolvedWorkspace,",
   "\t\t\t\tallowGatewaySubagentBinding: params.allowGatewaySubagentBinding",
   "\t\t\t});",
-  "\t\t\tlet provider = (params.provider ?? \"openai\").trim() || \"openai\";",
+  '\t\t\tlet provider = (params.provider ?? "openai").trim() || "openai";',
 ].join("\n");
 const PI_EMBEDDED_RUNTIME_PLUGINS_MARK_REPLACEMENT = [
   "\t\t\tensureRuntimePluginsLoaded({",
@@ -359,7 +358,7 @@ const PI_EMBEDDED_RUNTIME_PLUGINS_MARK_REPLACEMENT = [
   "\t\t\t\tallowGatewaySubagentBinding: params.allowGatewaySubagentBinding",
   "\t\t\t});",
   '\t\t\t__clawpiMarkRunStage("runtime-plugins-loaded");',
-  "\t\t\tlet provider = (params.provider ?? \"openai\").trim() || \"openai\";",
+  '\t\t\tlet provider = (params.provider ?? "openai").trim() || "openai";',
 ].join("\n");
 const PI_EMBEDDED_MODELS_JSON_MARK_SEARCH =
   "\t\t\tawait ensureOpenClawModelsJson(params.config, agentDir);\n\t\t\tconst resolvedSessionKey = normalizedSessionKey;";
@@ -500,16 +499,16 @@ const CONTROL_UI_MODELS_LIST_HANDLER_REPLACEMENT = [
   "\t\tconst cfg = loadConfig();",
   "\t\tconst cache = globalThis.__clawpiModelsListCache ??= { models: [], refreshing: false };",
   "\t\tconst configuredModels = Object.entries(cfg?.agents?.defaults?.models ?? {}).map(([key, value]) => {",
-  "\t\t\tconst slashIndex = key.indexOf(\"/\");",
+  '\t\t\tconst slashIndex = key.indexOf("/");',
   "\t\t\tconst provider = slashIndex > 0 ? key.slice(0, slashIndex) : DEFAULT_PROVIDER;",
   "\t\t\tconst id = slashIndex > 0 ? key.slice(slashIndex + 1) : key;",
   "\t\t\treturn {",
   "\t\t\t\tprovider,",
   "\t\t\t\tid,",
-  "\t\t\t\tname: typeof value?.alias === \"string\" && value.alias.trim() ? value.alias : id,",
-  "\t\t\t\tcontextWindow: typeof value?.contextWindow === \"number\" ? value.contextWindow : void 0,",
-  "\t\t\t\treasoning: typeof value?.reasoning === \"boolean\" ? value.reasoning : void 0,",
-  "\t\t\t\tinput: Array.isArray(value?.input) ? value.input : [\"text\", \"image\"]",
+  '\t\t\t\tname: typeof value?.alias === "string" && value.alias.trim() ? value.alias : id,',
+  '\t\t\t\tcontextWindow: typeof value?.contextWindow === "number" ? value.contextWindow : void 0,',
+  '\t\t\t\treasoning: typeof value?.reasoning === "boolean" ? value.reasoning : void 0,',
+  '\t\t\t\tinput: Array.isArray(value?.input) ? value.input : ["text", "image"]',
   "\t\t\t};",
   "\t\t});",
   "\t\tconst immediateModels = configuredModels.length > 0 ? configuredModels : cache.models;",
@@ -576,7 +575,7 @@ const CONTROL_UI_CHAT_HISTORY_DETAILS_STRIP_REPLACEMENT = [
   '\t\t\tif (typeof raw !== "string") return;',
   "\t\t\tconst url = raw.trim();",
   "\t\t\tif (!url) return;",
-  '\t\t\tif (!(/^data:image\\//i.test(url) || /^https?:\\/\\/(?:127(?:\\.\\d{1,3}){3}|localhost):\\d+\\/api\\/internal\\/desktop\\/generated-images\\//i.test(url))) return;',
+  "\t\t\tif (!(/^data:image\\//i.test(url) || /^https?:\\/\\/(?:127(?:\\.\\d{1,3}){3}|localhost):\\d+\\/api\\/internal\\/desktop\\/generated-images\\//i.test(url))) return;",
   "\t\t\tif (!mediaBlocks.some((block) => block?.image_url?.url === url)) {",
   '\t\t\t\tmediaBlocks.push({ type: "image_url", image_url: { url } });',
   "\t\t\t}",
@@ -757,7 +756,7 @@ const MODEL_CATALOG_REPLACE_MODE_SEARCH = [
   "\t\t\t});",
 ].join("\n");
 const MODEL_CATALOG_REPLACE_MODE_REPLACEMENT = [
-  "\t\t\tconst supplemental = cfg.models?.mode === \"replace\" ? [] : await augmentModelCatalogWithProviderPlugins({",
+  '\t\t\tconst supplemental = cfg.models?.mode === "replace" ? [] : await augmentModelCatalogWithProviderPlugins({',
   "\t\t\t\tconfig: cfg,",
   "\t\t\t\tenv: process.env,",
   "\t\t\t\tcontext: {",
@@ -776,21 +775,21 @@ const MODEL_CATALOG_REPLACE_FAST_PATH_REPLACEMENT = [
   "\t\t\tconst cfg = params?.config ?? loadConfig();",
   '\t\t\tif (cfg.models?.mode === "replace" && cfg.models?.providers && Object.keys(cfg.models.providers).length > 0) {',
   "\t\t\t\tfor (const [providerKey, providerConfig] of Object.entries(cfg.models.providers)) {",
-  "\t\t\t\t\tconst provider = normalizeOptionalString(String(providerKey)) ?? \"\";",
+  '\t\t\t\t\tconst provider = normalizeOptionalString(String(providerKey)) ?? "";',
   "\t\t\t\t\tif (!provider || !Array.isArray(providerConfig?.models)) continue;",
   "\t\t\t\t\tfor (const entry of providerConfig.models) {",
-  "\t\t\t\t\t\tconst id = normalizeOptionalString(String(entry?.id ?? \"\")) ?? \"\";",
+  '\t\t\t\t\t\tconst id = normalizeOptionalString(String(entry?.id ?? "")) ?? "";',
   "\t\t\t\t\t\tif (!id) continue;",
   "\t\t\t\t\t\tconst name = normalizeOptionalString(String(entry?.name ?? id)) || id;",
-  "\t\t\t\t\t\tconst contextWindow = typeof entry?.contextWindow === \"number\" && entry.contextWindow > 0 ? entry.contextWindow : void 0;",
-  "\t\t\t\t\t\tconst reasoning = typeof entry?.reasoning === \"boolean\" ? entry.reasoning : void 0;",
+  '\t\t\t\t\t\tconst contextWindow = typeof entry?.contextWindow === "number" && entry.contextWindow > 0 ? entry.contextWindow : void 0;',
+  '\t\t\t\t\t\tconst reasoning = typeof entry?.reasoning === "boolean" ? entry.reasoning : void 0;',
   "\t\t\t\t\t\tconst input = Array.isArray(entry?.input) ? entry.input : void 0;",
   "\t\t\t\t\t\tmodels.push({ id, name, provider, contextWindow, reasoning, input });",
   "\t\t\t\t\t}",
   "\t\t\t\t}",
   "\t\t\t\tconst sorted = sortModels(models);",
-  "\t\t\t\tlogStage(\"replace-config-ready\", `entries=${sorted.length}`);",
-  "\t\t\t\tlogStage(\"complete\", `entries=${sorted.length}`);",
+  '\t\t\t\tlogStage("replace-config-ready", `entries=${sorted.length}`);',
+  '\t\t\t\tlogStage("complete", `entries=${sorted.length}`);',
   "\t\t\t\treturn sorted;",
   "\t\t\t}",
   "\t\t\tawait ensureOpenClawModelsJson(cfg);",
@@ -973,12 +972,7 @@ const openclawSidecarFingerprintInputs = [
 ];
 
 function getPackagedOpenclawEntry(targetSidecarRoot) {
-  return resolve(
-    targetSidecarRoot,
-    "node_modules",
-    "openclaw",
-    "openclaw.mjs",
-  );
+  return resolve(targetSidecarRoot, "node_modules", "openclaw", "openclaw.mjs");
 }
 
 function getSidecarBinDir(targetSidecarRoot) {
@@ -1029,10 +1023,14 @@ async function computeOpenclawSidecarFingerprint() {
   return hash.digest("hex");
 }
 
-async function writeSidecarMetadataAndLaunchers(targetSidecarRoot, fingerprint) {
+async function writeSidecarMetadataAndLaunchers(
+  targetSidecarRoot,
+  fingerprint,
+) {
   const targetSidecarNodeModules = resolve(targetSidecarRoot, "node_modules");
   const targetSidecarBinDir = getSidecarBinDir(targetSidecarRoot);
-  const targetPackagedOpenclawEntry = getPackagedOpenclawEntry(targetSidecarRoot);
+  const targetPackagedOpenclawEntry =
+    getPackagedOpenclawEntry(targetSidecarRoot);
 
   await mkdir(targetSidecarBinDir, { recursive: true });
   await chmod(targetPackagedOpenclawEntry, 0o755).catch(() => null);
@@ -1128,7 +1126,9 @@ async function writeArchivedSidecarMetadata(
 
 async function hasReusableOpenclawSidecarCache(expectedFingerprint) {
   const cacheMetadataPath = resolve(openclawSidecarCacheRoot, "metadata.json");
-  const cachedOpenclawEntry = getPackagedOpenclawEntry(openclawSidecarCacheRoot);
+  const cachedOpenclawEntry = getPackagedOpenclawEntry(
+    openclawSidecarCacheRoot,
+  );
   if (
     !(await pathExists(cacheMetadataPath)) ||
     !(await pathExists(cachedOpenclawEntry))
@@ -1851,7 +1851,8 @@ async function patchGeminiToolSanitization(openclawPackageRoot) {
     } catch {
       continue;
     }
-    if (!entrySource.includes("function normalizeProviderToolSchemas(")) continue;
+    if (!entrySource.includes("function normalizeProviderToolSchemas("))
+      continue;
 
     let patched = false;
     if (
@@ -1985,16 +1986,13 @@ async function patchGeminiToolSanitization(openclawPackageRoot) {
     }
     if (patched) {
       patchedFiles.set(relative(openclawPackageRoot, entryPath), entrySource);
-      console.log(
-        `[openclaw-sidecar] patched pi-embedded runtime in ${entry}`,
-      );
+      console.log(`[openclaw-sidecar] patched pi-embedded runtime in ${entry}`);
     }
   }
 
   // Legacy fallback: sanitizeToolsForGoogle patches (bukGSgEe bundle)
   const legacyBundle = entries.find(
-    (e) =>
-      PI_EMBEDDED_BUNDLE_PATTERN.test(e) && !patchedFiles.has(`dist/${e}`),
+    (e) => PI_EMBEDDED_BUNDLE_PATTERN.test(e) && !patchedFiles.has(`dist/${e}`),
   );
   if (legacyBundle) {
     const bundlePath = resolve(distDir, legacyBundle);
@@ -2027,10 +2025,7 @@ async function patchGeminiToolSanitization(openclawPackageRoot) {
         legacyPatchCount += 1;
       }
       if (legacyPatchCount > 0) {
-        patchedFiles.set(
-          relative(openclawPackageRoot, bundlePath),
-          source,
-        );
+        patchedFiles.set(relative(openclawPackageRoot, bundlePath), source);
         console.log(
           `[openclaw-sidecar] patched ${legacyPatchCount} legacy sanitizeToolsForGoogle call site(s) in ${legacyBundle}`,
         );
@@ -2056,9 +2051,7 @@ async function patchGeminiToolSanitization(openclawPackageRoot) {
       `${entry}: collapse type array to scalar for Gemini`,
     );
     patchedFiles.set(relative(openclawPackageRoot, entryPath), source);
-    console.log(
-      `[openclaw-sidecar] patched type-array collapse in ${entry}`,
-    );
+    console.log(`[openclaw-sidecar] patched type-array collapse in ${entry}`);
   }
 
   if (patchedFiles.size === 0) {
@@ -2226,7 +2219,10 @@ async function patchTelegramBundledSetupEntry(openclawPackageRoot) {
   }
 
   if (patchCount > 0) {
-    patchedFiles.set(relative(openclawPackageRoot, setupEntryPath), setupEntrySource);
+    patchedFiles.set(
+      relative(openclawPackageRoot, setupEntryPath),
+      setupEntrySource,
+    );
     console.log(
       "[openclaw-sidecar] patched Telegram bundled setup entry specifiers",
     );
@@ -2392,7 +2388,10 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
       );
     }
     if (updatedHtml !== html) {
-      patchedFiles.set(relative(openclawPackageRoot, indexHtmlPath), updatedHtml);
+      patchedFiles.set(
+        relative(openclawPackageRoot, indexHtmlPath),
+        updatedHtml,
+      );
       console.log(
         "[openclaw-sidecar] patched Control UI entry asset cache key",
       );
@@ -2699,13 +2698,19 @@ async function stagePatchedOpenclawPackage() {
 }
 
 async function flattenNestedNodeModules(parentNodeModules) {
-  const openclawPkgNodeModules = resolve(parentNodeModules, "openclaw", "node_modules");
+  const openclawPkgNodeModules = resolve(
+    parentNodeModules,
+    "openclaw",
+    "node_modules",
+  );
   if (!(await pathExists(openclawPkgNodeModules))) {
     return;
   }
 
   const rootVersions = new Map();
-  const topEntries = await readdir(openclawPkgNodeModules, { withFileTypes: true });
+  const topEntries = await readdir(openclawPkgNodeModules, {
+    withFileTypes: true,
+  });
   for (const entry of topEntries) {
     if (!entry.isDirectory() || entry.name === ".bin") continue;
 
@@ -2968,7 +2973,7 @@ async function prepareOpenclawSidecar() {
         openclawRuntimeNodeModules,
         sidecarNodeModules,
         {
-          excludeNames: ["openclaw"],
+          excludeNames: ["openclaw", ".package-lock.json"],
         },
       );
       await robustRename(

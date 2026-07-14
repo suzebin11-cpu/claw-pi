@@ -333,13 +333,6 @@ function SummaryCard({
   );
 }
 
-function getWebviewPreloadUrl(): string {
-  return new URL(
-    "../dist-electron/preload/webview-preload.js",
-    document.location.href,
-  ).href;
-}
-
 // SurfaceFrame is imported from the shared component — see components/surface-frame.tsx
 
 function RuntimeUnitCard({
@@ -1146,12 +1139,13 @@ function DesktopShell() {
     runtimeConfig && controllerReady
       ? new URL("/workspace", runtimeConfig.urls.web).toString()
       : null;
-  const desktopOpenClawUrl = runtimeConfig && openclawReady
-    ? new URL(
-        `/chat#token=${encodeURIComponent(runtimeConfig.tokens.gateway)}`,
-        runtimeConfig.urls.openclawBase,
-      ).toString()
-    : null;
+  const desktopOpenClawUrl =
+    runtimeConfig && openclawReady
+      ? new URL(
+          `/chat#token=${encodeURIComponent(runtimeConfig.tokens.gateway)}`,
+          runtimeConfig.urls.openclawBase,
+        ).toString()
+      : null;
   return (
     <div
       className={
@@ -1269,7 +1263,6 @@ function DesktopShell() {
             src={desktopWebUrl}
             title="nexu Web"
             version={webSurfaceVersion}
-            preload={getWebviewPreloadUrl()}
           />
         </div>
         <div

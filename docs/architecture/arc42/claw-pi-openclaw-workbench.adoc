@@ -239,6 +239,10 @@ Controller compileModelsConfig
 * OpenClaw 状态：`data/user-data/runtime/openclaw/state`
 * Claw-Pi 配置：`data/nexu-home`
 
+Windows 开发模式下，`prepare-openclaw-sidecar.mjs` 使用目录 junction 复用 runtime 依赖，并排除 `.package-lock.json` 等需要文件符号链接权限的 npm 元数据。传给 Controller 和 OpenClaw 的状态、技能目录必须由 `userDataPath` 生成绝对路径，不能把未展开的 `~` 再交给 `path.resolve`。runtime 完整性检查覆盖 OpenClaw 入口及关键传递依赖（例如 `chalk`）；缺失时必须重新安装 runtime，不能复用残缺目录。
+
+Electron webview 的 preload 由主进程在 `will-attach-webview` 阶段注入本地文件路径。渲染层不能基于开发服务器的 `http:` 地址拼接 preload URL，否则 Electron 会拒绝加载该桥接脚本。
+
 打包命令：
 
 [source,powershell]
@@ -352,6 +356,10 @@ agent:{agentId}:workbench:{sessionId}
 |可打包性
 |修复必须进入 portable 包，而不是手工改 release 目录。
 |`dist:win:portable` 成功，sidecar patch 日志出现。
+
+|Windows 开发启动
+|Electron 主窗口、Workspace webview 和 OpenClaw 首次冷启动后均可用。
+|日志依次出现 Workspace `did-finish-load`、Gateway ready、`webchat connected` 和 `openclaw_ws_connected`。
 |===
 
 === 10.2 当前验证
@@ -370,6 +378,7 @@ agent:{agentId}:workbench:{sessionId}
 * UI 来源工作台请求 `ask-1779722069929-alh041` 日志显示 `first_text elapsedMs=6565`、`stream_finish elapsedMs=6933`。
 * 日志验证：lightweight 后不再出现工作台 AGENTS/SOUL/BOOTSTRAP 截断和 MEMORY 读取失败。
 * 生图 `clawpi-image/gpt-image-2` 返回 200 并生成 PNG。
+* Windows 开发启动验证：Vite、Controller、Web sidecar、OpenClaw 四个端口均监听；Workspace 和内嵌聊天页完成 `did-finish-load`，首次 Gateway ready 约 77 秒，随后出现 `webchat connected` 与 `openclaw_ws_connected`。
 
 == 11. 技术风险
 
@@ -396,6 +405,10 @@ agent:{agentId}:workbench:{sessionId}
 |侧车补丁维护成本
 |OpenClaw dist 文件名和 anchor 可能随上游版本变化。
 |patch 脚本必须 anchor 校验；升级 OpenClaw 时先跑 sidecar prepare。
+
+|Windows runtime 路径或依赖不完整
+|未展开的 `~` 会生成错误的技能目录；残缺的传递依赖或文件符号链接权限会让 sidecar 启动失败。
+|所有 sidecar 路径从绝对 `userDataPath` 派生；开发链接使用目录 junction 并排除 npm 元数据；postinstall 校验关键依赖后再决定是否复用 runtime。
 
 |权限边界
 |Full 模式需要执行能力，但不能变成无限制本机控制。

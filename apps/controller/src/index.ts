@@ -3,9 +3,14 @@ import { bootstrapController } from "./app/bootstrap.js";
 import { createContainer } from "./app/container.js";
 import { createApp } from "./app/create-app.js";
 import { logger } from "./lib/logger.js";
+import { syncDesktopCloudConfigIfNeeded } from "./store/desktop-config-sync.js";
 
 async function main(): Promise<void> {
   const container = await createContainer();
+
+  // 同步桌面应用的云服务配置（如果需要）
+  await syncDesktopCloudConfigIfNeeded(container.configStore);
+
   const stopBackgroundLoops = await bootstrapController(container);
   const app = createApp(container);
 

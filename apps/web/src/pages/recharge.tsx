@@ -225,7 +225,9 @@ function findPricingModel(model: ApiModel): ModelPrice | undefined {
   );
 }
 
-function buildPricingProviders(models: ApiModel[] | undefined): ProviderGroup[] {
+function buildPricingProviders(
+  models: ApiModel[] | undefined,
+): ProviderGroup[] {
   const selected = new Map<string, ModelPrice>();
   if (models && models.length > 0) {
     for (const model of models) {
@@ -698,7 +700,7 @@ function ModelPricingSection() {
       const { data } = await getApiV1Models();
       return data;
     },
-    refetchInterval: 60_000,
+    refetchInterval: 30_000,
   });
   const providers = useMemo(
     () => buildPricingProviders((modelsData?.models ?? []) as ApiModel[]),
@@ -1027,7 +1029,7 @@ function PendingOrdersSection() {
       const { data } = await getApiInternalPaymentAlipayPendingOrders();
       return data;
     },
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
   });
 
   const cancelMutation = useMutation({
@@ -1136,7 +1138,7 @@ export function RechargePage() {
       }
       return data;
     },
-    refetchInterval: 30_000,
+    refetchInterval: 15_000,
     retry: 2,
   });
 

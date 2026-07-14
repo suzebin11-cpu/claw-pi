@@ -321,6 +321,29 @@ describe("desktop runtime manifests", () => {
   });
 
   describe("createRuntimeUnitManifests", () => {
+    it("uses an absolute user-data skills path in development", () => {
+      const userDataPath = path.resolve("tmp", "desktop-user-data");
+      const runtimeConfig = createRuntimeConfig();
+      runtimeConfig.paths.nexuHome = "~/.claw-pi";
+
+      const manifests = createRuntimeUnitManifests(
+        path.resolve("apps", "desktop"),
+        userDataPath,
+        false,
+        runtimeConfig,
+      );
+      const controllerManifest = manifests.find(
+        (manifest) => manifest.id === "controller",
+      );
+
+      expect(controllerManifest?.env?.OPENCLAW_SKILLS_DIR).toBe(
+        path.resolve(userDataPath, "runtime/openclaw/state/skills"),
+      );
+      expect(
+        path.isAbsolute(controllerManifest?.env?.OPENCLAW_SKILLS_DIR ?? ""),
+      ).toBe(true);
+    });
+
     it("propagates normalized proxy env to dev web and controller manifests", () => {
       const manifests = createRuntimeUnitManifests(
         "/repo/apps/desktop",

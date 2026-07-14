@@ -541,7 +541,9 @@ function installApplicationMenu(): void {
           ? ([
               { role: "quit", label: "退出" },
             ] satisfies MenuItemConstructorOptions[])
-          : ([{ role: "close", label: "关闭窗口" }] satisfies MenuItemConstructorOptions[])),
+          : ([
+              { role: "close", label: "关闭窗口" },
+            ] satisfies MenuItemConstructorOptions[])),
       ] satisfies MenuItemConstructorOptions[],
     },
     {
@@ -590,7 +592,9 @@ function installApplicationMenu(): void {
               { type: "separator" },
               { role: "front", label: "全部置前" },
             ] satisfies MenuItemConstructorOptions[])
-          : ([{ role: "close", label: "关闭" }] satisfies MenuItemConstructorOptions[])),
+          : ([
+              { role: "close", label: "关闭" },
+            ] satisfies MenuItemConstructorOptions[])),
       ] satisfies MenuItemConstructorOptions[],
     },
     helpMenu,
@@ -959,6 +963,7 @@ function createMainWindow(): BrowserWindow {
     "will-attach-webview",
     (_event, webPreferences, _params) => {
       webPreferences.sandbox = false;
+      webPreferences.preload = join(__dirname, "../preload/webview-preload.js");
     },
   );
 
@@ -1087,14 +1092,22 @@ function createMainWindow(): BrowserWindow {
     focusMainWindow();
   }
 
-  void window.loadFile(resolve(__dirname, "../../dist/index.html"));
+  const rendererEntry =
+    !app.isPackaged && process.env.VITE_DEV_SERVER_URL
+      ? process.env.VITE_DEV_SERVER_URL
+      : resolve(__dirname, "../../dist/index.html");
+  if (!app.isPackaged && process.env.VITE_DEV_SERVER_URL) {
+    void window.loadURL(rendererEntry);
+  } else {
+    void window.loadFile(rendererEntry);
+  }
   diagnosticsReporter?.recordStartupProbe({
     source: "main",
     stage: "main:window-load-dispatched",
     status: "ok",
-    detail: resolve(__dirname, "../../dist/index.html"),
+    detail: rendererEntry,
   });
-  logLaunchTimeline("main window loadFile dispatched");
+  logLaunchTimeline(`main window load dispatched entry=${rendererEntry}`);
   mainWindow = window;
   return window;
 }

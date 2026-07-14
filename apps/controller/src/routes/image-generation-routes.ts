@@ -22,6 +22,9 @@ const imageGenerationResponseSchema = z.object({
   url: z.string(),
   markdown: z.string(),
   durationMs: z.number(),
+  fallbackUsed: z.boolean().optional(),
+  fallbackFrom: z.string().optional(),
+  fallbackTo: z.string().optional(),
 });
 
 const imageGenerationErrorSchema = z.object({

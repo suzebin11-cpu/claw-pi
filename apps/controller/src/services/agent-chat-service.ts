@@ -65,11 +65,7 @@ type SavedWorkbenchFile = {
   extractError?: string;
 };
 
-type AttachmentExtractStatus =
-  | "ok"
-  | "truncated"
-  | "unsupported"
-  | "failed";
+type AttachmentExtractStatus = "ok" | "truncated" | "unsupported" | "failed";
 
 type PdfJsTextItem = {
   str?: string;
@@ -170,7 +166,10 @@ function truncateExtractedText(text: string): {
   text: string;
   status: AttachmentExtractStatus;
 } {
-  const normalized = text.replace(/\r\n/gu, "\n").replace(/\u0000/gu, "").trim();
+  const normalized = text
+    .replace(/\r\n/gu, "\n")
+    .replace(/\u0000/gu, "")
+    .trim();
   if (normalized.length <= ATTACHMENT_EXTRACT_MAX_CHARS) {
     return { text: normalized, status: "ok" };
   }
@@ -226,7 +225,9 @@ function isTextLikeAttachment(input: {
 
 function isHtmlAttachment(input: { name: string; type: string }): boolean {
   const extension = path.extname(input.name).toLowerCase();
-  return input.type.includes("html") || extension === ".html" || extension === ".htm";
+  return (
+    input.type.includes("html") || extension === ".html" || extension === ".htm"
+  );
 }
 
 function isPdfAttachment(input: { name: string; type: string }): boolean {
@@ -301,7 +302,9 @@ async function extractAttachmentText(input: {
     }
 
     if (isPdfAttachment(input)) {
-      const extracted = truncateExtractedText(await extractPdfText(input.content));
+      const extracted = truncateExtractedText(
+        await extractPdfText(input.content),
+      );
       if (!extracted.text) {
         return {
           extractStatus: "failed",
@@ -768,7 +771,8 @@ export class AgentChatService {
     for (const attachment of input.attachments ?? []) {
       const name = sanitizeFileName(attachment.name || "attachment");
       const parsed = parseDataUrl(attachment.dataUrl ?? "");
-      const type = attachment.type || parsed?.mimeType || "application/octet-stream";
+      const type =
+        attachment.type || parsed?.mimeType || "application/octet-stream";
       const kind = attachment.kind || "file";
       if (!parsed?.content) {
         extractedAttachments.push({
@@ -1130,6 +1134,28 @@ export class AgentChatService {
       if (state === "final") {
         writeText(messageText);
         if (!lastText) {
+          // 特殊处理：检查工具返回中是否有生图结果
+          // 即使 OpenClaw 没有在 final 文本中输出图片链接，也尝试从 payload 中提取
+          const imageMarkdown = extractGeneratedImageText(
+            isObject(payload.message) ? payload.message : {},
+          );
+          if (imageMarkdown) {
+            writeText(imageMarkdown);
+            logger.info(
+              {
+                route: "agentChat.stream",
+                agentId: input.agentId,
+                sessionId: input.sessionId,
+                sessionKey,
+                runId,
+                elapsedMs: Date.now() - streamStartedAt,
+              },
+              "agent_chat_image_fallback_extracted",
+            );
+            finish();
+            return;
+          }
+
           if (autoContinueTurns < AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS) {
             autoContinueTurns += 1;
             const continuationRunId = randomUUID();
@@ -1163,10 +1189,7 @@ export class AgentChatService {
                 ? "agent_chat_empty_attachment_retry_start"
                 : "agent_chat_empty_final_retry_start",
             );
-            void sendAgentRun(
-              continuationRunId,
-              emptyFinalRetryMessage,
-            )
+            void sendAgentRun(continuationRunId, emptyFinalRetryMessage)
               .then(() => {
                 logger.info(
                   {
@@ -1472,10 +1495,7 @@ export class AgentChatService {
       "agents",
       sanitizeSessionPart(input.agentId || "main"),
       "wb",
-      createHash("sha256")
-        .update(input.sessionId)
-        .digest("hex")
-        .slice(0, 16),
+      createHash("sha256").update(input.sessionId).digest("hex").slice(0, 16),
     );
     await mkdir(uploadDir, { recursive: true });
 
@@ -1571,7 +1591,10 @@ function formatSavedFileList(
   return files.map((file) => formatSavedFile(file, includePath)).join("\n\n");
 }
 
-function formatSavedFile(file: SavedWorkbenchFile, includePath: boolean): string {
+function formatSavedFile(
+  file: SavedWorkbenchFile,
+  includePath: boolean,
+): string {
   const lines = [
     `- ${file.name} (${file.kind}, ${file.type})${includePath ? `: ${file.path}` : ""}`,
   ];

@@ -45,6 +45,9 @@ export type GeneratedImageResult = {
   url: string;
   markdown: string;
   durationMs: number;
+  fallbackUsed?: boolean;
+  fallbackFrom?: string;
+  fallbackTo?: string;
 };
 
 type OpenAiImageResponse = {
@@ -58,6 +61,16 @@ type OpenAiImageResponse = {
   };
 };
 
+class ImageGenerationError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number | null = null,
+  ) {
+    super(message);
+    this.name = "ImageGenerationError";
+  }
+}
+
 const DEFAULT_IMAGE_SIZE = "1024x1024";
 const IMAGE_GENERATION_TIMEOUT_MS = 180_000;
 const IMAGE_DOWNLOAD_TIMEOUT_MS = 90_000;
@@ -65,6 +78,16 @@ const IMAGE_GENERATION_RETRY_DELAYS_MS = [1_500, 3_000] as const;
 const MAX_INPUT_IMAGES = 4;
 const MAX_PROMPT_CHARS = 4000;
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
+
+// 生图模型兜底策略：仅针对 OpenAI 系列模型
+const IMAGE_MODEL_FALLBACK_CHAIN: Record<string, string[]> = {
+  "clawpi-image/gpt-image-2": [
+    "clawpi-image/gpt-image-1.5",
+    "clawpi-image/gpt-image-1-mini",
+  ],
+  "clawpi-image/gpt-image-1.5": ["clawpi-image/gpt-image-1-mini"],
+  "clawpi-image/gpt-image-1-mini": [], // 最稳定的模型，无需兜底
+};
 
 function getGeneratedImagesDir(env: ControllerEnv): string {
   return path.join(env.nexuHomeDir, "generated-images");
@@ -238,6 +261,41 @@ function shouldRetryTransientImageError(
   );
 }
 
+function shouldFallbackToStableModel(
+  status: number | null,
+  message: string,
+): boolean {
+  // 不兜底的情况：用户问题或内容问题
+  if (isInsufficientBalanceError(message)) {
+    return false; // 余额不足是用户问题
+  }
+  if (isImageSafetyRejection(message)) {
+    return false; // 安全拒绝是内容问题
+  }
+
+  // 兜底的情况：上游服务问题
+  if (status !== null && [429, 502, 503, 504].includes(status)) {
+    return true; // 上游过载、限流、不可用
+  }
+
+  // 超时和网络错误
+  if (/timeout|timed out|超时/iu.test(message)) {
+    return true;
+  }
+  if (isImageNetworkError(message)) {
+    return true;
+  }
+
+  // 上游明确表示繁忙或过载
+  if (
+    /overloaded|busy|queue|upstream|限流|负载|繁忙|饱和|排队/iu.test(message)
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -361,6 +419,109 @@ export class ImageGenerationService {
       .filter(Boolean)
       .slice(0, MAX_INPUT_IMAGES);
 
+    const requestedModelId = settings.modelId;
+
+    // 尝试使用请求的模型
+    try {
+      return await this.generateImageWithModel({
+        settings,
+        input,
+        inputImages,
+        startedAt,
+      });
+    } catch (error) {
+      // 检查是否应该尝试兜底模型
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      const errorStatus =
+        error instanceof ImageGenerationError ? error.status : null;
+
+      if (!shouldFallbackToStableModel(errorStatus, errorMessage)) {
+        // 不适合兜底，直接抛出错误
+        throw error;
+      }
+
+      // 获取兜底模型链
+      const fallbackChain = IMAGE_MODEL_FALLBACK_CHAIN[requestedModelId] || [];
+      if (fallbackChain.length === 0) {
+        // 没有可用的兜底模型
+        logger.info(
+          { modelId: requestedModelId },
+          "image_generation_no_fallback_available",
+        );
+        throw error;
+      }
+
+      logger.warn(
+        {
+          requestedModelId,
+          fallbackChain,
+          errorMessage,
+          errorStatus,
+        },
+        "image_generation_attempting_fallback",
+      );
+
+      // 尝试兜底模型链
+      let lastFallbackError = error;
+      for (const fallbackModelId of fallbackChain) {
+        try {
+          const fallbackSettings = { ...settings, modelId: fallbackModelId };
+          const result = await this.generateImageWithModel({
+            settings: fallbackSettings,
+            input,
+            inputImages,
+            startedAt,
+          });
+
+          // 成功！标记使用了兜底模型
+          result.fallbackUsed = true;
+          result.fallbackFrom = requestedModelId;
+          result.fallbackTo = fallbackModelId;
+
+          logger.info(
+            {
+              requestedModelId,
+              fallbackModelId,
+              durationMs: result.durationMs,
+            },
+            "image_generation_fallback_success",
+          );
+
+          return result;
+        } catch (fallbackError) {
+          lastFallbackError = fallbackError;
+          logger.warn(
+            {
+              fallbackModelId,
+              errorMessage:
+                fallbackError instanceof Error
+                  ? fallbackError.message
+                  : String(fallbackError),
+            },
+            "image_generation_fallback_attempt_failed",
+          );
+          // 继续尝试下一个兜底模型
+        }
+      }
+
+      // 所有兜底模型都失败了，抛出最后一个错误
+      logger.error(
+        { requestedModelId, fallbackChain },
+        "image_generation_all_fallbacks_failed",
+      );
+      throw lastFallbackError;
+    }
+  }
+
+  private async generateImageWithModel(params: {
+    settings: DesktopCloudImageSettings;
+    input: GenerateImageInput;
+    inputImages: string[];
+    startedAt: number;
+  }): Promise<GeneratedImageResult> {
+    const { settings, input, inputImages, startedAt } = params;
+
     const cloudModelId = runtimeModelIdToCloudModelId(settings.modelId);
     const size = normalizeSize(input);
     const payload =
@@ -368,14 +529,14 @@ export class ImageGenerationService {
         ? await this.callImageEdit({
             settings,
             modelId: cloudModelId,
-            prompt,
+            prompt: input.prompt,
             size,
             inputImages,
           })
         : await this.callImageGeneration({
             settings,
             modelId: cloudModelId,
-            prompt,
+            prompt: input.prompt,
             size,
           });
 
@@ -396,7 +557,7 @@ export class ImageGenerationService {
       bytes: image.bytes,
       mimeType: image.mimeType,
       modelId: settings.modelId,
-      prompt,
+      prompt: input.prompt,
       startedAt,
     });
 
@@ -506,7 +667,10 @@ export class ImageGenerationService {
         },
         "image_generation_failed",
       );
-      throw new Error(normalizeImageGenerationErrorMessage(message));
+      throw new ImageGenerationError(
+        normalizeImageGenerationErrorMessage(message),
+        response.status,
+      );
     }
   }
 

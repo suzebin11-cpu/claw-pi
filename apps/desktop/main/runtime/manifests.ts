@@ -631,13 +631,10 @@ export function createRuntimeUnitManifests(
     path.resolve(openclawRuntimeRoot, "state"),
   );
   const openclawTempDir = ensureDir(path.resolve(openclawRuntimeRoot, "tmp"));
-  ensureDir(
+  const openclawSkillsDir = ensureDir(
     isPackaged
       ? getOpenclawSkillsDir(userDataPath)
-      : path.resolve(
-          runtimeConfig.paths.nexuHome,
-          "runtime/openclaw/state/skills",
-        ),
+      : path.resolve(openclawStateDir, "skills"),
   );
   ensureDir(path.resolve(openclawStateDir, "plugin-docs"));
   ensureDir(path.resolve(openclawStateDir, "agents"));
@@ -731,14 +728,7 @@ export function createRuntimeUnitManifests(
         NEXU_HOME: runtimeConfig.paths.nexuHome,
         OPENCLAW_STATE_DIR: openclawStateDir,
         OPENCLAW_CONFIG_PATH: path.resolve(openclawConfigDir, "openclaw.json"),
-        OPENCLAW_SKILLS_DIR: isPackaged
-          ? getOpenclawSkillsDir(userDataPath)
-          : ensureDir(
-              path.resolve(
-                runtimeConfig.paths.nexuHome,
-                "runtime/openclaw/state/skills",
-              ),
-            ),
+        OPENCLAW_SKILLS_DIR: openclawSkillsDir,
         SKILLHUB_STATIC_SKILLS_DIR: isPackaged
           ? path.resolve(electronRoot, "static/bundled-skills")
           : path.resolve(repoRoot, "apps/desktop/static/bundled-skills"),
@@ -746,7 +736,9 @@ export function createRuntimeUnitManifests(
           ? path.resolve(electronRoot, "static/platform-templates")
           : path.resolve(repoRoot, "apps/controller/static/platform-templates"),
         OPENCLAW_BIN: openclawBinPath,
-        ...(isPackaged ? { OPENCLAW_ELECTRON_EXECUTABLE: process.execPath } : {}),
+        ...(isPackaged
+          ? { OPENCLAW_ELECTRON_EXECUTABLE: process.execPath }
+          : {}),
         OPENCLAW_EXTENSIONS_DIR: path.resolve(
           openclawPackageRoot,
           "dist/extensions",

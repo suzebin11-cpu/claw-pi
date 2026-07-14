@@ -49,6 +49,7 @@ const HOP_BY_HOP = new Set([
 const PROXY_RETRY_ATTEMPTS = 10;
 const PROXY_RETRY_DELAY_MS = 500;
 const PROXY_TIMEOUT_MS = 120_000;
+const DESKTOP_READY_PATH = "/api/internal/desktop/ready";
 
 async function sleep(ms) {
   return new Promise((resolveSleep) => setTimeout(resolveSleep, ms));
@@ -85,6 +86,9 @@ function proxyOnce(inReq, outRes, pathname, pipeBody) {
           if (!HOP_BY_HOP.has(key) && value != null) {
             responseHeaders[key] = value;
           }
+        }
+        if (pathname === DESKTOP_READY_PATH) {
+          responseHeaders["access-control-allow-origin"] = "*";
         }
 
         outRes.writeHead(upRes.statusCode ?? 502, responseHeaders);
