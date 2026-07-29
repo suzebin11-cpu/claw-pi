@@ -188,6 +188,8 @@ Workbench UI
   -> UI renders assistant reply
 ----
 
+生图请求属于同一条工作台 Agent 流。runtime plugin 调用 Controller 时不能使用短于 Agent 流生命周期的固定超时；当前 Controller 请求和 Agent Chat 均使用 600 秒上限。生成成功后，plugin 将 `markdown`、`mediaUrl` 和本地 `filePath` 放入 tool details，`AgentChatService` 从 tool details 提取图片 Markdown 并继续通过同一条 SSE 返回。
+
 === 6.2 生图
 
 [source,text]
@@ -261,6 +263,24 @@ If the cloud balance request fails:
 
 该兜底只补充当前余额，不伪造累计充值金额。若两条路径都失败，投喂页保留在当前页面并提供重新加载，不触发账号断开或重新登录。
 
+=== 6.7 桌面客户端自动更新
+
+[source,text]
+----
+Developer merges desktop changes and a higher package version to main
+  -> desktop-auto-tag validates SemVer and creates v{version}
+  -> desktop-release builds signed macOS and Windows installers in GitHub Actions
+  -> CI validates manifests, referenced files, hashes, blockmaps, and checksums
+  -> CI uploads immutable binaries first and latest*.yml last
+  -> CI reads the public update feed and verifies every required artifact
+  -> GitHub Release changes from draft to published
+  -> installed client checks immediately and every 15 minutes
+  -> electron-updater downloads the update in the background
+  -> user restarts immediately, or the update installs on normal app exit
+----
+
+桌面发布不要求 Ubuntu API 服务器检出或运行 Electron 源码，也不触发服务端进程重启。服务端更新域名只暴露 Cloudflare R2 中的静态更新产物；平台差异、签名和公证由对应的 GitHub Actions runner 负责。
+
 == 7. 部署视图
 
 Windows 本地开发验收可使用 portable 目录，正式发布使用 NSIS 安装包：
@@ -280,7 +300,7 @@ Windows 本地开发验收可使用 portable 目录，正式发布使用 NSIS �
 * 校验文件：`desktop-win-x64-sha256.txt`
 * R2 更新源：`{channel}/win/x64`
 
-已安装的 NSIS 客户端默认启用自动更新；portable 构建不进入自动更新链路。运维可通过 `NEXU_DESKTOP_AUTO_UPDATE_ENABLED=false` 显式关闭已安装客户端的自动更新。
+已安装的 NSIS 客户端默认启用自动更新并在后台下载新版本；下载完成后可以由用户立即重启安装，也会在应用正常退出时自动安装。portable 构建不进入自动更新链路。运维可通过 `NEXU_DESKTOP_AUTO_UPDATE_ENABLED=false` 显式关闭已安装客户端的自动更新。
 
 Windows 开发模式下，`prepare-openclaw-sidecar.mjs` 使用目录 junction 复用 runtime 依赖，并排除 `.package-lock.json` 等需要文件符号链接权限的 npm 元数据。传给 Controller 和 OpenClaw 的状态、技能目录必须由 `userDataPath` 生成绝对路径，不能把未展开的 `~` 再交给 `path.resolve`。runtime 完整性检查覆盖 OpenClaw 入口及关键传递依赖（例如 `chalk`）；缺失时必须重新安装 runtime，不能复用残缺目录。
 
@@ -296,7 +316,7 @@ $env:NEXU_DESKTOP_ARCHIVE_OPENCLAW_SIDECAR='0'
 pnpm --filter @nexu/desktop dist:win:portable
 ----
 
-正式安装包由版本标签触发 `.github/workflows/desktop-release.yml` 在 `windows-latest` 构建。流水线将安装包、`latest.yml`、`.blockmap` 和 SHA-256 同时上传到 GitHub Release 与 Cloudflare R2。发布失败时不得更新客户端；回滚时恢复上一版本的安装包和 `.blockmap`，最后恢复上一版本 `latest.yml`，避免客户端读取到引用不完整产物的元数据。
+正式发布以 `apps/desktop/package.json` 的版本号为闸门。更高版本进入 `main` 后，`.github/workflows/desktop-auto-tag.yml` 校验 SemVer 和单调递增关系并创建 `v{version}` 标签；标签触发 `.github/workflows/desktop-release.yml`，在 macOS 和 Windows runner 上完成签名构建。流水线先校验完整产物，再上传安装包、ZIP、`.blockmap` 和 SHA-256，最后上传 `latest.yml` 或 `latest-mac.yml`。只有公网更新源返回目标版本且所有必需对象均可访问后，GitHub Release 才从草稿转为正式发布。发布失败时客户端继续读取上一版清单；回滚也必须最后恢复上一版更新清单。
 
 == 8. 横切概念
 
@@ -406,6 +426,14 @@ Reason: live WebChat replies arrive at the Control UI as Markdown text. The exis
 
 Result: the sidecar preparation step patches the Control UI bundle to allow only loopback URLs under `/api/internal/desktop/generated-images/` with common image extensions. Arbitrary remote HTTP images remain text, `data:` images remain supported, and the bundle entry query key is incremented so browsers do not reuse the previous patched asset.
 
+=== ADR-011: 桌面版本号驱动 CI 自动发布
+
+*状态：已采纳*
+
+原因：远程 Ubuntu 服务端不具备 Windows/macOS Electron 的签名构建环境，直接让服务器拉取本地源码也无法向已安装客户端分发可验证的安装包。与此同时，任何普通代码 push 都自动发布会把未准备好的变更推送给全部用户。
+
+结果：服务器只托管更新静态产物；GitHub Actions 负责多平台构建、签名、公证和发布。只有 `main` 上桌面版本号单调递增才自动创建发布标签。更新清单是最后写入的发布指针，公网反向验证通过后才公开 GitHub Release。
+
 == 10. 质量需求
 
 === 10.1 质量场景
@@ -448,7 +476,11 @@ Result: the sidecar preparation step patches the Control UI bundle to allow only
 
 |Windows 自动升级
 |已安装的旧版客户端检查到 R2 `stable/win/x64/latest.yml` 中存在更高版本。
-|客户端下载对应安装包或差分块，校验成功后完成安装并重启；portable 客户端不发起自动升级。
+|客户端自动在后台下载对应安装包或差分块，校验成功后允许立即重启安装，并在正常退出时自动安装；portable 客户端不发起自动升级。
+
+|桌面发布完整性
+|更高桌面版本进入 `main`，CI 准备向稳定更新源发布。
+|本地清单版本、SHA-512、文件大小和必需产物校验通过；二进制先于清单上传；公网清单与全部必需对象验证通过后 GitHub Release 才正式发布。
 
 |网页端实时生图
 |网页端发起生图，服务端返回带本地生成图 URL 的 Markdown 回复。
@@ -474,7 +506,7 @@ Result: the sidecar preparation step patches the Control UI bundle to allow only
 * Windows 开发启动验证：Vite、Controller、Web sidecar、OpenClaw 四个端口均监听；Workspace 和内嵌聊天页完成 `did-finish-load`，首次 Gateway ready 约 77 秒，随后出现 `webchat connected` 与 `openclaw_ws_connected`。
 * 余额兜底单元测试通过（2 tests）；Controller 与 Web TypeScript 检查通过。
 * 2026-07-17 本地运行验证：云端 `/api/auth/balance` 因上游管理令牌临时封禁失败时，`/api/internal/activation/balance` 通过用户账单接口返回 `{"ok":true,"balance_cents":91}`。
-* Windows 发布需验证 NSIS 安装包、`latest.yml`、`.blockmap` 和 SHA-256 均存在，且 `latest.yml` 引用的文件名与 R2 对象一致。
+* 桌面发布验证脚本覆盖 Windows/macOS 清单版本、引用文件、SHA-512、文件大小和必需产物，并在上传后通过公网更新地址再次验证。
 
 == 11. 技术风险
 
@@ -521,6 +553,14 @@ Result: the sidecar preparation step patches the Control UI bundle to allow only
 |Windows 更新源发布不完整
 |`latest.yml` 已上传，但安装包或 `.blockmap` 缺失，客户端会发现新版本却无法完成下载。
 |流水线先准备并校验全部产物，再上传二进制与块映射，最后上传 `latest.yml`；回滚同样最后恢复旧版 `latest.yml`。
+
+|macOS 更新源发布不完整
+|`latest-mac.yml` 先于 ZIP/DMG 上传，客户端可能在发布窗口内读取到无法下载的新版本。
+|macOS 与 Windows 使用相同的原子发布顺序，并在目标架构更新源和兼容更新源上执行公网验证。
+
+|普通代码变更被意外发布
+|功能分支或不含版本升级的 `main` push 若直接触发 OTA，会把未准备好的构建分发给全部客户端。
+|自动标签仅监听 `main` 的桌面 package 变更，并要求版本符合 SemVer 且相对上一版本单调递增。
 
 |portable 与安装版更新语义混淆
 |portable 目录没有稳定安装位置，自动替换可能损坏人工维护的数据或程序文件。

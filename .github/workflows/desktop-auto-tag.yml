@@ -1,91 +1,183 @@
-name: Desktop Auto-Tag on Release PR Merge
+name: Desktop Auto-Tag on Version Change
 
-# When a release/* PR is merged to main, automatically:
-# 1. Read the version from apps/desktop/package.json
-# 2. Push the git tag (v0.1.8, etc.)
-# 3. Create a GitHub Release using the PR body as release notes
-#
-# This bridges the gap between "merge Release PR" and "desktop-release.yml"
-# which triggers on tag push to build + sign + publish artifacts.
-#
-# IMPORTANT: Uses RELEASE_PAT (Personal Access Token) instead of GITHUB_TOKEN
-# for git push. Tags pushed by GITHUB_TOKEN don't trigger downstream workflows
-# (GitHub's anti-recursion safeguard), so we need a PAT to ensure
-# desktop-release.yml fires on the tag push event.
-
+# Publishing is deliberately gated by the desktop package version. Ordinary
+# source pushes do not ship an update; a higher version on main creates a tag.
 on:
-  pull_request:
-    types: [closed]
+  push:
     branches: [main]
+    paths:
+      - "apps/desktop/package.json"
 
 permissions:
   contents: write
 
+concurrency:
+  group: desktop-auto-tag-main
+  cancel-in-progress: false
+
 jobs:
   auto-tag:
-    # Only run when a release/* PR is merged (not just closed)
-    if: >-
-      github.event.pull_request.merged == true &&
-      startsWith(github.event.pull_request.head.ref, 'release/')
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout merged commit
+      - name: Checkout main
         uses: actions/checkout@v4
         with:
-          # Use PAT for checkout so git push triggers downstream workflows
           token: ${{ secrets.RELEASE_PAT }}
-          ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0
 
-      - name: Read version from package.json
+      - name: Validate desktop version change
         id: version
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          CURRENT_SHA: ${{ github.sha }}
+        shell: bash
         run: |
           set -euo pipefail
-          version=$(node -e 'process.stdout.write(require("./apps/desktop/package.json").version)')
-          tag="v${version}"
 
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          echo "Detected version: $version → tag: $tag"
+          node <<'EOF' >> "$GITHUB_OUTPUT"
+          const { execFileSync } = require("node:child_process");
+          const fs = require("node:fs");
 
-      - name: Check if tag already exists
-        id: check
+          const packagePath = "apps/desktop/package.json";
+          const currentSha = process.env.CURRENT_SHA;
+          const beforeSha = process.env.BEFORE_SHA;
+          const currentVersion = JSON.parse(
+            fs.readFileSync(packagePath, "utf8"),
+          ).version;
+
+          const parseVersion = (value) => {
+            const match = String(value).match(
+              /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/,
+            );
+            if (!match) {
+              throw new Error(`Invalid SemVer desktop version: ${value}`);
+            }
+            return {
+              core: match.slice(1, 4).map(Number),
+              prerelease: match[4]?.split(".") ?? [],
+            };
+          };
+
+          const compareIdentifiers = (left, right) => {
+            const leftNumeric = /^\d+$/.test(left);
+            const rightNumeric = /^\d+$/.test(right);
+            if (leftNumeric && rightNumeric) {
+              return Number(left) - Number(right);
+            }
+            if (leftNumeric !== rightNumeric) {
+              return leftNumeric ? -1 : 1;
+            }
+            return left.localeCompare(right);
+          };
+
+          const compareVersions = (leftValue, rightValue) => {
+            const left = parseVersion(leftValue);
+            const right = parseVersion(rightValue);
+            for (let index = 0; index < left.core.length; index += 1) {
+              if (left.core[index] !== right.core[index]) {
+                return left.core[index] - right.core[index];
+              }
+            }
+            if (left.prerelease.length === 0 || right.prerelease.length === 0) {
+              return left.prerelease.length === right.prerelease.length
+                ? 0
+                : left.prerelease.length === 0
+                  ? 1
+                  : -1;
+            }
+            const length = Math.max(
+              left.prerelease.length,
+              right.prerelease.length,
+            );
+            for (let index = 0; index < length; index += 1) {
+              if (left.prerelease[index] === undefined) return -1;
+              if (right.prerelease[index] === undefined) return 1;
+              const result = compareIdentifiers(
+                left.prerelease[index],
+                right.prerelease[index],
+              );
+              if (result !== 0) return result;
+            }
+            return 0;
+          };
+
+          parseVersion(currentVersion);
+          let previousVersion = null;
+          if (beforeSha && !/^0+$/.test(beforeSha)) {
+            try {
+              previousVersion = JSON.parse(
+                execFileSync(
+                  "git",
+                  ["show", `${beforeSha}:${packagePath}`],
+                  { encoding: "utf8" },
+                ),
+              ).version;
+            } catch {
+              previousVersion = null;
+            }
+          }
+
+          if (previousVersion === currentVersion) {
+            console.error(
+              `Desktop version is unchanged at ${currentVersion}; no release tag is needed.`,
+            );
+            console.log("publish=false");
+            process.exit(0);
+          }
+          if (
+            previousVersion !== null &&
+            compareVersions(currentVersion, previousVersion) <= 0
+          ) {
+            throw new Error(
+              `Desktop version must increase: ${previousVersion} -> ${currentVersion}`,
+            );
+          }
+
+          console.error(
+            `Desktop release version: ${previousVersion ?? "(new)"} -> ${currentVersion}`,
+          );
+          console.log("publish=true");
+          console.log(`version=${currentVersion}`);
+          console.log(`tag=v${currentVersion}`);
+          console.log(`commit=${currentSha}`);
+          EOF
+
+      - name: Check release tag
+        if: steps.version.outputs.publish == 'true'
+        id: tag
+        env:
+          TAG_NAME: ${{ steps.version.outputs.tag }}
+          CURRENT_SHA: ${{ steps.version.outputs.commit }}
+        shell: bash
         run: |
-          if git rev-parse "${{ steps.version.outputs.tag }}" >/dev/null 2>&1; then
+          set -euo pipefail
+
+          if git show-ref --tags --verify --quiet "refs/tags/$TAG_NAME"; then
+            tag_sha=$(git rev-list -n 1 "$TAG_NAME")
+            if [ "$tag_sha" != "$CURRENT_SHA" ]; then
+              echo "Tag $TAG_NAME already points to $tag_sha, expected $CURRENT_SHA" >&2
+              exit 1
+            fi
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Tag ${{ steps.version.outputs.tag }} already exists, skipping"
+            echo "Tag $TAG_NAME already points to the current commit"
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Push tag
-        if: steps.check.outputs.exists == 'false'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ steps.version.outputs.tag }}" "${{ github.event.pull_request.merge_commit_sha }}"
-          git push origin "${{ steps.version.outputs.tag }}"
-          echo "Pushed tag ${{ steps.version.outputs.tag }}"
-
-      - name: Create GitHub Release with PR body as release notes
-        if: steps.check.outputs.exists == 'false'
+      - name: Push release tag
+        if: >-
+          steps.version.outputs.publish == 'true' &&
+          steps.tag.outputs.exists == 'false'
         env:
-          GH_TOKEN: ${{ secrets.RELEASE_PAT }}
+          TAG_NAME: ${{ steps.version.outputs.tag }}
+          CURRENT_SHA: ${{ steps.version.outputs.commit }}
+        shell: bash
         run: |
           set -euo pipefail
 
-          tag="${{ steps.version.outputs.tag }}"
-          pr_number="${{ github.event.pull_request.number }}"
-
-          # Extract PR body (the release notes)
-          pr_body=$(gh pr view "$pr_number" --json body --jq '.body')
-
-          # Create the release (draft: false so it publishes immediately)
-          # desktop-release.yml will detect the tag and upload build artifacts
-          gh release create "$tag" \
-            --title "$tag" \
-            --notes "$pr_body" \
-            --target "${{ github.event.pull_request.merge_commit_sha }}"
-
-          echo "Created GitHub Release $tag with notes from PR #$pr_number"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "$TAG_NAME" "$CURRENT_SHA"
+          git push origin "$TAG_NAME"
+          echo "Pushed $TAG_NAME; desktop-release.yml will build and publish it"

@@ -269,6 +269,9 @@ jobs:
             exit 1
           fi
 
+          original_dmg=$(basename "${dmg_files[0]}")
+          original_zip=$(basename "${zip_files[0]}")
+
           latest_name_prefix="nexu-latest-mac-${ARCH}"
           if [ "$channel" != "stable" ]; then
             latest_name_prefix="nexu-latest-${channel}-mac-${ARCH}"
@@ -292,6 +295,8 @@ jobs:
 
           {
             echo "channel=$channel"
+            echo "original_dmg=$original_dmg"
+            echo "original_zip=$original_zip"
             echo "versioned_dmg=$versioned_dmg"
             echo "versioned_zip=$versioned_zip"
             echo "latest_dmg=$latest_dmg"
@@ -366,6 +371,8 @@ jobs:
           VERSION: ${{ steps.meta.outputs.desktop_version }}
           CHANNEL: ${{ steps.artifacts.outputs.channel }}
           ARCH: ${{ matrix.arch }}
+          ORIGINAL_DMG: ${{ steps.artifacts.outputs.original_dmg }}
+          ORIGINAL_ZIP: ${{ steps.artifacts.outputs.original_zip }}
           VERSIONED_DMG: ${{ steps.artifacts.outputs.versioned_dmg }}
           VERSIONED_ZIP: ${{ steps.artifacts.outputs.versioned_zip }}
         shell: bash
@@ -377,21 +384,39 @@ jobs:
             exit 0
           fi
 
-          # electron-builder generates filenames without the final public naming format.
-          original_dmg="nexu-${VERSION}-${ARCH}.dmg"
-          original_zip="nexu-${VERSION}-${ARCH}.zip"
-
           echo "Patching latest-mac.yml:"
-          echo "  ${original_dmg} → ${VERSIONED_DMG}"
-          echo "  ${original_zip} → ${VERSIONED_ZIP}"
+          echo "  ${ORIGINAL_DMG} → ${VERSIONED_DMG}"
+          echo "  ${ORIGINAL_ZIP} → ${VERSIONED_ZIP}"
 
           sed -i.bak \
-            -e "s|${original_dmg}|${VERSIONED_DMG}|g" \
-            -e "s|${original_zip}|${VERSIONED_ZIP}|g" \
+            -e "s|${ORIGINAL_DMG}|${VERSIONED_DMG}|g" \
+            -e "s|${ORIGINAL_ZIP}|${VERSIONED_ZIP}|g" \
             apps/desktop/release/latest-mac.yml
 
           echo "Patched latest-mac.yml:"
           cat apps/desktop/release/latest-mac.yml
+
+      - name: Validate macOS update artifacts
+        env:
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+          VERSIONED_DMG: ${{ steps.artifacts.outputs.versioned_dmg }}
+          VERSIONED_ZIP: ${{ steps.artifacts.outputs.versioned_zip }}
+          LATEST_DMG: ${{ steps.artifacts.outputs.latest_dmg }}
+          LATEST_ZIP: ${{ steps.artifacts.outputs.latest_zip }}
+          CHECKSUM_FILE: ${{ steps.artifacts.outputs.checksum_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          node scripts/validate-desktop-update.mjs \
+            --manifest apps/desktop/release/latest-mac.yml \
+            --artifact-dir apps/desktop/release-artifacts \
+            --version "$VERSION" \
+            --required "$VERSIONED_DMG" \
+            --required "$VERSIONED_ZIP" \
+            --required "$LATEST_DMG" \
+            --required "$LATEST_ZIP" \
+            --required "$CHECKSUM_FILE"
 
       - name: Upload to Cloudflare R2
         env:
@@ -411,11 +436,6 @@ jobs:
 
             echo "[r2] uploading to prefix: ${prefix}/"
 
-            if [ -f "apps/desktop/release/latest-mac.yml" ]; then
-              echo "Uploading latest-mac.yml → ${prefix}/latest-mac.yml"
-              npx wrangler r2 object put "nexu-desktop-releases/${prefix}/latest-mac.yml" --file "apps/desktop/release/latest-mac.yml" --remote
-            fi
-
             echo "Uploading ${VERSIONED_DMG} → ${prefix}/${VERSIONED_DMG}"
             npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${VERSIONED_DMG}" --file "apps/desktop/release-artifacts/${VERSIONED_DMG}" --remote
 
@@ -430,6 +450,9 @@ jobs:
 
             echo "Uploading ${{ steps.artifacts.outputs.checksum_file }} → ${prefix}/${{ steps.artifacts.outputs.checksum_file }}"
             npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${{ steps.artifacts.outputs.checksum_file }}" --file "apps/desktop/release-artifacts/${{ steps.artifacts.outputs.checksum_file }}" --remote
+
+            echo "Uploading latest-mac.yml last → ${prefix}/latest-mac.yml"
+            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/latest-mac.yml" --file "apps/desktop/release/latest-mac.yml" --remote
           }
 
           upload_prefix "${CHANNEL}/${ARCH}"
@@ -437,6 +460,35 @@ jobs:
           if [ "${ARCH}" = "arm64" ]; then
             echo "[r2] uploading legacy arm64 compatibility feed to prefix: ${CHANNEL}/"
             upload_prefix "${CHANNEL}"
+          fi
+
+      - name: Verify public macOS update feed
+        env:
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+          CHANNEL: ${{ steps.artifacts.outputs.channel }}
+          ARCH: ${{ matrix.arch }}
+          VERSIONED_DMG: ${{ steps.artifacts.outputs.versioned_dmg }}
+          VERSIONED_ZIP: ${{ steps.artifacts.outputs.versioned_zip }}
+          CHECKSUM_FILE: ${{ steps.artifacts.outputs.checksum_file }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          verify_feed() {
+            local feed_url="$1"
+            node scripts/validate-desktop-update.mjs \
+              --feed-url "$feed_url" \
+              --manifest-name latest-mac.yml \
+              --version "$VERSION" \
+              --required "$VERSIONED_DMG" \
+              --required "$VERSIONED_ZIP" \
+              --required "$CHECKSUM_FILE"
+          }
+
+          verify_feed "https://api.clawpi.app:9443/updates/${CHANNEL}/${ARCH}"
+
+          if [ "$ARCH" = "arm64" ]; then
+            verify_feed "https://api.clawpi.app:9443/updates/${CHANNEL}"
           fi
 
   release-windows:
@@ -600,6 +652,22 @@ jobs:
           "blockmap_name=$installerName.blockmap" >> $env:GITHUB_OUTPUT
           "checksum_name=$checksumName" >> $env:GITHUB_OUTPUT
 
+      - name: Validate Windows update artifacts
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+          INSTALLER_NAME: ${{ steps.artifacts.outputs.installer_name }}
+          BLOCKMAP_NAME: ${{ steps.artifacts.outputs.blockmap_name }}
+          CHECKSUM_NAME: ${{ steps.artifacts.outputs.checksum_name }}
+        run: |
+          node scripts/validate-desktop-update.mjs `
+            --manifest apps/desktop/release-artifacts-win/latest.yml `
+            --artifact-dir apps/desktop/release-artifacts-win `
+            --version $env:VERSION `
+            --required $env:INSTALLER_NAME `
+            --required $env:BLOCKMAP_NAME `
+            --required $env:CHECKSUM_NAME
+
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -653,10 +721,46 @@ jobs:
             }
           }
 
-  trigger-e2e:
+      - name: Verify public Windows update feed
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          INSTALLER_NAME: ${{ steps.artifacts.outputs.installer_name }}
+          BLOCKMAP_NAME: ${{ steps.artifacts.outputs.blockmap_name }}
+          CHECKSUM_NAME: ${{ steps.artifacts.outputs.checksum_name }}
+        run: |
+          node scripts/validate-desktop-update.mjs `
+            --feed-url "https://api.clawpi.app:9443/updates/$env:CHANNEL/win/x64" `
+            --manifest-name latest.yml `
+            --version $env:VERSION `
+            --required $env:INSTALLER_NAME `
+            --required $env:BLOCKMAP_NAME `
+            --required $env:CHECKSUM_NAME
+
+  finalize-release:
     needs: release-windows
     runs-on: ubuntu-latest
-    if: always() && needs.release-windows.result == 'success'
+
+    steps:
+      - name: Publish verified GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          gh release view "$TAG_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release edit "$TAG_NAME" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+          echo "Published verified desktop release $TAG_NAME"
+
+  trigger-e2e:
+    needs: finalize-release
+    runs-on: ubuntu-latest
+    if: always() && needs.finalize-release.result == 'success'
     steps:
       - name: Resolve channel
         id: channel

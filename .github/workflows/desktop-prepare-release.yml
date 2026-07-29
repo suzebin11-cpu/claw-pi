@@ -137,7 +137,7 @@ jobs:
           - bump \\`apps/desktop/package.json\\` to \\`${{ steps.version.outputs.desktop_version }}\\`
           - prepare the desktop release branch for tag \\`${{ steps.version.outputs.tag_name }}\\`
 
-          Merge this PR, then push or dispatch the desktop release workflow using \\`${{ steps.version.outputs.tag_name }}\\`.
+          Merging this PR triggers the desktop auto-tag workflow. The generated \\`${{ steps.version.outputs.tag_name }}\\` tag then starts the signed desktop release workflow.
           EOF
 
           existing_pr=$(gh pr list \

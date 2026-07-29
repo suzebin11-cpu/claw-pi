@@ -90,7 +90,7 @@ type PdfJsModule = {
   getDocument(data: Buffer | { data: Uint8Array }): Promise<PdfJsDocument>;
 };
 
-const AGENT_CHAT_TIMEOUT_MS = 300_000;
+const AGENT_CHAT_TIMEOUT_MS = 600_000;
 const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS = 6;
@@ -546,6 +546,14 @@ function extractGeneratedImageText(value: Record<string, unknown>): string {
     return markdown;
   }
 
+  const details = isObject(value.details) ? value.details : null;
+  if (details) {
+    const detailsMarkdown = extractGeneratedImageText(details);
+    if (detailsMarkdown) {
+      return detailsMarkdown;
+    }
+  }
+
   const mediaUrl =
     typeof value.mediaUrl === "string"
       ? value.mediaUrl.trim()
@@ -877,6 +885,7 @@ export class AgentChatService {
     let firstTextLogged = false;
     let firstToolActivityLogged = false;
     let toolActivitySeen = false;
+    let generatedImageMarkdown = "";
     let activeRunId: string | null = runId;
     let waitingForSessionContinuation = false;
     let autoContinueTurns = 0;
@@ -1078,6 +1087,12 @@ export class AgentChatService {
       const payloadRunId =
         typeof payload.runId === "string" ? payload.runId : null;
       const messageText = extractMessageText(payload.message);
+      const messageImageMarkdown = isObject(payload.message)
+        ? extractGeneratedImageText(payload.message)
+        : "";
+      if (messageImageMarkdown) {
+        generatedImageMarkdown = messageImageMarkdown;
+      }
       if (isToolActivityEvent(event)) {
         noteToolActivity(event.event);
       }
@@ -1133,6 +1148,23 @@ export class AgentChatService {
 
       if (state === "final") {
         writeText(messageText);
+        if (
+          generatedImageMarkdown &&
+          !lastText.includes(generatedImageMarkdown)
+        ) {
+          writeText(generatedImageMarkdown);
+          logger.info(
+            {
+              route: "agentChat.stream",
+              agentId: input.agentId,
+              sessionId: input.sessionId,
+              sessionKey,
+              runId,
+              elapsedMs: Date.now() - streamStartedAt,
+            },
+            "agent_chat_image_fallback_extracted",
+          );
+        }
         if (!lastText) {
           // 特殊处理：检查工具返回中是否有生图结果
           // 即使 OpenClaw 没有在 final 文本中输出图片链接，也尝试从 payload 中提取

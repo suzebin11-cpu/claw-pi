@@ -1,6 +1,8 @@
 const PLUGIN_ID = "clawpi-image-generation";
 const DEFAULT_CONTROLLER_URL = "http://127.0.0.1:3010";
-const CONTROLLER_FETCH_TIMEOUT_MS = 190_000;
+// Keep the tool request alive for the full long-running agent turn. Upstream
+// image generation may include retries or fallback model selection.
+const CONTROLLER_FETCH_TIMEOUT_MS = 600_000;
 const CONTROLLER_FETCH_RETRY_DELAYS_MS = [500, 1_500, 3_000];
 
 const IMAGE_TOOL_PROMPT =

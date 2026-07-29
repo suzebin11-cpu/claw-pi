@@ -132,7 +132,7 @@ export class UpdateManager {
     this.launchdCtx = options?.launchd;
     this.currentFeedUrl = getDefaultR2FeedUrl(this.channel);
 
-    autoUpdater.autoDownload = options?.autoDownload ?? false;
+    autoUpdater.autoDownload = options?.autoDownload ?? true;
     autoUpdater.autoInstallOnAppQuit = true;
     autoUpdater.forceDevUpdateConfig = !app.isPackaged;
     this.configureFeedUrl();

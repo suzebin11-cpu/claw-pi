@@ -873,4 +873,49 @@ describe("AgentChatService", () => {
     expect(body).toContain("generated-images/abc.png");
     expect(body).not.toContain("reply_to_current");
   });
+
+  it("keeps image details when the tool event has no assistant text", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "image-details-only-session",
+      message: "generate image",
+      permissionMode: "full",
+    });
+
+    const send = fakeWs.requests.find((request) => request.method === "agent");
+    const runId = String(send?.params.idempotencyKey);
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:image-details-only-session",
+        runId,
+        state: "tool",
+        message: {
+          role: "toolResult",
+          details: {
+            markdown:
+              "![生成图片](http://127.0.0.1:50800/api/internal/desktop/generated-images/slow.png)",
+          },
+        },
+      },
+    });
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:image-details-only-session",
+        runId,
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "已完成。" }],
+        },
+      },
+    });
+
+    const body = await response.text();
+    expect(body).toContain("已完成。");
+    expect(body).toContain("generated-images/slow.png");
+  });
 });
