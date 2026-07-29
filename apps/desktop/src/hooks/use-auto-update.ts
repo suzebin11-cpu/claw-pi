@@ -31,6 +31,34 @@ export function restorePhaseAfterInstall(
     : state;
 }
 
+/**
+ * Fold an incoming `update:error` event into the current state.
+ *
+ * Errors from automatic/background update checks are suppressed: a packaged
+ * user must never see a scary update-feed error banner on launch just because
+ * the update server returned 404 / an auth failure. Only errors from a check
+ * the user explicitly triggered (via "Check for updates") surface as the error
+ * phase. A suppressed error clears any transient "checking" phase back to idle.
+ */
+export function reduceUpdateError(
+  state: UpdateState,
+  message: string,
+): UpdateState {
+  if (!state.userInitiated) {
+    return {
+      ...state,
+      phase: state.phase === "checking" ? "idle" : state.phase,
+      errorMessage: null,
+    };
+  }
+  return {
+    ...state,
+    phase: "error",
+    errorMessage: message,
+    userInitiated: false,
+  };
+}
+
 export function useAutoUpdate() {
   const [state, setState] = useState<UpdateState>({
     phase: "idle",
@@ -120,12 +148,7 @@ export function useAutoUpdate() {
       updater.onEvent(
         "update:error",
         (data: UpdaterEventMap["update:error"]) => {
-          setState((prev) => ({
-            ...prev,
-            phase: "error",
-            errorMessage: data.message,
-            userInitiated: false,
-          }));
+          setState((prev) => reduceUpdateError(prev, data.message));
         },
       ),
     );

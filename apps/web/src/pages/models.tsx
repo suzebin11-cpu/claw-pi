@@ -1,6 +1,11 @@
 import { LanguageSwitcher } from "@/components/language-switcher";
 import { ModelLogo, ProviderLogo } from "@/components/provider-logo";
 import { openLocalFolderUrl, pathToFileUrl } from "@/lib/desktop-links";
+import {
+  resolveBackendModelId,
+  resolveDisplayModelId,
+  withDisplayAliasModels,
+} from "@/lib/model-display-alias";
 import { track } from "@/lib/tracking";
 import { cn } from "@/lib/utils";
 import { selectPreferredModel } from "@nexu/shared";
@@ -1636,9 +1641,9 @@ export function ModelsPage() {
     },
   });
 
-  const currentModelId = defaultModelData?.modelId ?? "";
+  const currentModelId = resolveDisplayModelId(defaultModelData?.modelId ?? "");
   const currentImageModelId = defaultImageModelData?.modelId ?? "";
-  const models = modelsData?.models ?? [];
+  const models = withDisplayAliasModels(modelsData?.models ?? []);
   const { data: desktopReadyData } = useQuery({
     queryKey: ["desktop-ready"],
     queryFn: async () => {
@@ -1651,9 +1656,13 @@ export function ModelsPage() {
   const updateModel = useMutation({
     mutationFn: async (modelId: string) => {
       userSwitchRef.current = true;
+      // A placeholder display id (e.g. link/gpt-5.6) resolves to its real
+      // backend model; this also records the display choice so 龙虾窝 / 问答
+      // stay in sync with what was picked here.
+      const backendModelId = resolveBackendModelId(modelId);
       const toastId = toast.loading(t("models.switchingModel"));
       const { data, error } = await putApiInternalDesktopDefaultModel({
-        body: { modelId },
+        body: { modelId: backendModelId },
       });
       if (error) {
         const message =
@@ -2352,10 +2361,7 @@ function ManagedProviderDetail({
           </div>
           <div className="space-y-0.5">
             {orderedProviderModels.map((model) => {
-              const isSelected = isProviderModelSelected(
-                model,
-                currentModelId,
-              );
+              const isSelected = isProviderModelSelected(model, currentModelId);
               return (
                 <button
                   key={model.id}

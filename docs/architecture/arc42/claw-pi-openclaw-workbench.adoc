@@ -228,9 +228,42 @@ Controller compileModelsConfig
 
 这个路径只影响 OpenClaw sidecar 的模型发现阶段，不改变龙虾大脑、微信/飞书渠道和 `/v1/chat/completions` 的兼容路径。
 
+=== 6.5 隐式 main agent 鉴权同步
+
+[source,text]
+----
+Controller compiles OpenClaw config
+  -> agents.list contains explicit agents
+     -> write provider auth profiles to each explicit agent workspace
+  -> agents.list is empty
+     -> Workbench chat resolves the missing agent to "main"
+     -> write the same provider auth profiles to agents/main/agent/auth-profiles.json
+----
+
+OpenClaw 允许不声明 `agents.list`，此时工作台聊天仍使用隐式 `main` agent。鉴权同步必须覆盖这个隐式 workspace，否则模型配置中虽然已有 API Key，运行时仍会因 `main` 缺少 `auth-profiles.json` 而无法调用模型。
+
+=== 6.6 投喂页余额查询
+
+[source,text]
+----
+Recharge UI
+  -> Controller GET /api/internal/activation/balance
+  -> Claw-Pi cloud GET /api/auth/balance with activation JWT
+  -> return balance and cumulative recharge when available
+
+If the cloud balance request fails:
+  -> Controller reads the locally stored activation API key
+  -> Yunwu GET /v1/dashboard/billing/subscription
+  -> Yunwu GET /v1/dashboard/billing/usage
+  -> calculate balance_cents = hard_limit_usd * 100 - total_usage
+  -> return the current balance without exposing or logging the API key
+----
+
+该兜底只补充当前余额，不伪造累计充值金额。若两条路径都失败，投喂页保留在当前页面并提供重新加载，不触发账号断开或重新登录。
+
 == 7. 部署视图
 
-当前目标部署形态是 Windows portable：
+Windows 本地开发验收可使用 portable 目录，正式发布使用 NSIS 安装包：
 
 * 可执行文件：`apps/desktop/release/win-unpacked/Claw-Pi.exe`
 * Controller bundle：`resources/runtime/controller/dist/index.js`
@@ -238,6 +271,16 @@ Controller compileModelsConfig
 * 用户数据：`apps/desktop/release/win-unpacked/data`
 * OpenClaw 状态：`data/user-data/runtime/openclaw/state`
 * Claw-Pi 配置：`data/nexu-home`
+
+正式 Windows 发布产物：
+
+* 安装包：`claw-pi-setup-{version}-x64.exe`
+* 差分升级元数据：`latest.yml`
+* 差分升级块映射：`claw-pi-setup-{version}-x64.exe.blockmap`
+* 校验文件：`desktop-win-x64-sha256.txt`
+* R2 更新源：`{channel}/win/x64`
+
+已安装的 NSIS 客户端默认启用自动更新；portable 构建不进入自动更新链路。运维可通过 `NEXU_DESKTOP_AUTO_UPDATE_ENABLED=false` 显式关闭已安装客户端的自动更新。
 
 Windows 开发模式下，`prepare-openclaw-sidecar.mjs` 使用目录 junction 复用 runtime 依赖，并排除 `.package-lock.json` 等需要文件符号链接权限的 npm 元数据。传给 Controller 和 OpenClaw 的状态、技能目录必须由 `userDataPath` 生成绝对路径，不能把未展开的 `~` 再交给 `path.resolve`。runtime 完整性检查覆盖 OpenClaw 入口及关键传递依赖（例如 `chalk`）；缺失时必须重新安装 runtime，不能复用残缺目录。
 
@@ -252,6 +295,8 @@ $env:NEXU_DESKTOP_USE_EXISTING_RUNTIME_INSTALL='1'
 $env:NEXU_DESKTOP_ARCHIVE_OPENCLAW_SIDECAR='0'
 pnpm --filter @nexu/desktop dist:win:portable
 ----
+
+正式安装包由版本标签触发 `.github/workflows/desktop-release.yml` 在 `windows-latest` 构建。流水线将安装包、`latest.yml`、`.blockmap` 和 SHA-256 同时上传到 GitHub Release 与 Cloudflare R2。发布失败时不得更新客户端；回滚时恢复上一版本的安装包和 `.blockmap`，最后恢复上一版本 `latest.yml`，避免客户端读取到引用不完整产物的元数据。
 
 == 8. 横切概念
 
@@ -329,6 +374,38 @@ agent:{agentId}:workbench:{sessionId}
 
 结果：`AgentChatService` 创建 `ReadableStream` 后立即返回 Response，后台等待 Gateway connected。
 
+=== ADR-006: 空 agent 列表同步隐式 main 鉴权
+
+*状态：已采纳*
+
+原因：工作台聊天在没有活动 bot 时会自动选择 `main`，而 OpenClaw 配置可合法省略 `agents.list`。仅遍历显式 agent 会漏写 `main` 的 `auth-profiles.json`，造成“配置中已有 API Key，但聊天鉴权不可用”。
+
+结果：鉴权 writer 优先同步所有显式 agent workspace；当列表为空时，改为同步 `agents/main`。显式列表存在时不额外创建无关鉴权副本。
+
+=== ADR-007: 余额查询使用用户账单接口作为本地兜底
+
+*状态：已采纳*
+
+原因：云端余额聚合依赖管理令牌；管理令牌被上游限流或临时封禁时，用户 API key 和模型调用仍可能完全正常。把该错误解释为登录失效会造成不必要的账号重连，且无法恢复余额展示。
+
+结果：Controller 先请求云端余额接口；失败时使用本地激活 API key 查询云雾 subscription 和 usage，计算当前余额。API key 不进入日志或响应，前端仅在两条路径都失败时展示可重试的临时故障。
+
+=== ADR-008: Windows 安装版使用独立自动更新源
+
+*状态：已采纳*
+
+原因：macOS 已使用 `{channel}/{arch}` 更新源，Windows 的 `latest.yml` 和 NSIS 产物不能与 `latest-mac.yml`、DMG/ZIP 混放。portable 目录也不具备可靠的安装替换语义。
+
+结果：macOS 保持既有更新源不变；Windows x64 安装版使用 `{channel}/win/x64`，默认启用自动更新。portable 构建明确禁用自动更新，只用于本地验证或人工分发。
+
+=== ADR-009: Restricted local Markdown image rendering for live generation results
+
+*Status: accepted*
+
+Reason: live WebChat replies arrive at the Control UI as Markdown text. The existing renderer only emitted `<img>` for `data:image/...`, so a successfully generated Claw-Pi image URL was shown as plain alt text while historical messages still worked through structured media blocks.
+
+Result: the sidecar preparation step patches the Control UI bundle to allow only loopback URLs under `/api/internal/desktop/generated-images/` with common image extensions. Arbitrary remote HTTP images remain text, `data:` images remain supported, and the bundle entry query key is incremented so browsers do not reuse the previous patched asset.
+
 == 10. 质量需求
 
 === 10.1 质量场景
@@ -360,6 +437,22 @@ agent:{agentId}:workbench:{sessionId}
 |Windows 开发启动
 |Electron 主窗口、Workspace webview 和 OpenClaw 首次冷启动后均可用。
 |日志依次出现 Workspace `did-finish-load`、Gateway ready、`webchat connected` 和 `openclaw_ws_connected`。
+
+|隐式 main agent 鉴权
+|`agents.list` 为空，模型 provider 已保存有效 API Key，工作台发起聊天。
+|Controller 在 `agents/main/agent/auth-profiles.json` 写入 provider 凭据，OpenClaw `main` agent 可正常调用模型。
+
+|余额查询可靠性
+|云端余额管理令牌失效，但用户 API key 仍有效且模型可调用。
+|Controller 使用用户账单接口返回实际 `balance_cents`；投喂页不要求重新登录。
+
+|Windows 自动升级
+|已安装的旧版客户端检查到 R2 `stable/win/x64/latest.yml` 中存在更高版本。
+|客户端下载对应安装包或差分块，校验成功后完成安装并重启；portable 客户端不发起自动升级。
+
+|网页端实时生图
+|网页端发起生图，服务端返回带本地生成图 URL 的 Markdown 回复。
+|实时回复直接显示图片；历史消息重新加载后仍通过结构化媒体显示。下载操作先获取图片 Blob，再通过临时对象 URL 交给浏览器下载，不能把内嵌工作台导航到图片地址；复制图片成功、降级为复制链接或失败时均提供明确反馈。
 |===
 
 === 10.2 当前验证
@@ -379,6 +472,9 @@ agent:{agentId}:workbench:{sessionId}
 * 日志验证：lightweight 后不再出现工作台 AGENTS/SOUL/BOOTSTRAP 截断和 MEMORY 读取失败。
 * 生图 `clawpi-image/gpt-image-2` 返回 200 并生成 PNG。
 * Windows 开发启动验证：Vite、Controller、Web sidecar、OpenClaw 四个端口均监听；Workspace 和内嵌聊天页完成 `did-finish-load`，首次 Gateway ready 约 77 秒，随后出现 `webchat connected` 与 `openclaw_ws_connected`。
+* 余额兜底单元测试通过（2 tests）；Controller 与 Web TypeScript 检查通过。
+* 2026-07-17 本地运行验证：云端 `/api/auth/balance` 因上游管理令牌临时封禁失败时，`/api/internal/activation/balance` 通过用户账单接口返回 `{"ok":true,"balance_cents":91}`。
+* Windows 发布需验证 NSIS 安装包、`latest.yml`、`.blockmap` 和 SHA-256 均存在，且 `latest.yml` 引用的文件名与 R2 对象一致。
 
 == 11. 技术风险
 
@@ -413,6 +509,26 @@ agent:{agentId}:workbench:{sessionId}
 |权限边界
 |Full 模式需要执行能力，但不能变成无限制本机控制。
 |破坏性操作保留确认或阻断策略。
+
+|上游余额管理令牌失效
+|云端管理令牌被限流、封禁或轮换失败时，余额聚合接口不可用，但用户 API key 和模型调用可能仍正常。
+|Controller 使用用户账单 subscription/usage 接口兜底；两条路径都失败时显示可重试故障，不把它误判为登录失效。
+
+|账单接口兼容性
+|非云雾的 OpenAI-compatible provider 可能不实现 `/v1/dashboard/billing/*`，或字段单位发生变化。
+|仅在响应成功且字段为有限数值时采用兜底结果；否则保留原始失败语义，并用单元测试锁定当前云雾字段和单位。
+
+|Windows 更新源发布不完整
+|`latest.yml` 已上传，但安装包或 `.blockmap` 缺失，客户端会发现新版本却无法完成下载。
+|流水线先准备并校验全部产物，再上传二进制与块映射，最后上传 `latest.yml`；回滚同样最后恢复旧版 `latest.yml`。
+
+|portable 与安装版更新语义混淆
+|portable 目录没有稳定安装位置，自动替换可能损坏人工维护的数据或程序文件。
+|portable 构建始终关闭自动更新；只有 NSIS 安装版默认进入自动更新链路。
+
+|Control UI bundle cache
+|The sidecar contains the renderer fix, but the browser continues using an older asset query key.
+|The prepare script increments the Control UI asset cache key and release validation checks the generated-image allowlist in the bundled asset.
 |===
 
 == 12. 术语表
@@ -439,3 +555,16 @@ agent:{agentId}:workbench:{sessionId}
 |Sidecar
 |随 Electron portable 包一起发布的 Controller、Web、OpenClaw runtime。
 |===
+== ADR-010: HTTP listening is not business readiness
+
+*Status:* accepted
+
+The packaged desktop can observe the Controller port before the OpenClaw
+Gateway WebSocket handshake completes. Treating any HTTP 200 response as
+ready lets the web image-generation plugin call the Controller during this
+window and surface a misleading connection failure.
+
+The ready endpoint keeps HTTP 200 for polling compatibility but reports
+`ready=false` until runtime health, runtime state, Gateway WS handshake, and
+model state are all ready. The desktop launchd probe parses the JSON field and
+continues polling.

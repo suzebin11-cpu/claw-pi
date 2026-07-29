@@ -70,7 +70,7 @@ describe("OpenClawAuthProfilesWriter", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("writes provider api keys into each agent auth-profiles store", async () => {
+  it("writes provider api keys into main and each agent auth-profiles store", async () => {
     const env = createEnv(tempDir);
     const writer = new OpenClawAuthProfilesWriter(
       new OpenClawAuthProfilesStore(env),
@@ -127,6 +127,61 @@ describe("OpenClawAuthProfilesWriter", () => {
       type: "api_key",
       provider: "anthropic",
       key: "anthropic-key",
+    });
+
+    const mainAuthProfilesPath = resolve(
+      env.openclawStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const mainParsed = JSON.parse(
+      readFileSync(mainAuthProfilesPath, "utf8"),
+    ) as {
+      profiles: Record<string, { type: string; provider: string; key: string }>;
+    };
+    expect(mainParsed.profiles).toEqual(parsed.profiles);
+  });
+
+  it("writes provider api keys for the implicit main agent", async () => {
+    const env = createEnv(tempDir);
+    const writer = new OpenClawAuthProfilesWriter(
+      new OpenClawAuthProfilesStore(env),
+    );
+
+    await writer.writeForAgents({
+      agents: {
+        list: [],
+      },
+      models: {
+        mode: "merge",
+        providers: {
+          custom_abc: {
+            baseUrl: "https://litellm.example.com",
+            apiKey: "test-api-key",
+            api: "openai-completions",
+            models: [{ id: "openai/gpt-4.1", name: "openai/gpt-4.1" }],
+          },
+        },
+      },
+    } as never);
+
+    const authProfilesPath = resolve(
+      env.openclawStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const parsed = JSON.parse(readFileSync(authProfilesPath, "utf8")) as {
+      profiles: Record<string, { type: string; provider: string; key: string }>;
+    };
+
+    expect(parsed.profiles["custom_abc:default"]).toEqual({
+      type: "api_key",
+      provider: "custom_abc",
+      key: "test-api-key",
     });
   });
 });

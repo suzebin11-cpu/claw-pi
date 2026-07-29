@@ -76,6 +76,47 @@ function stripAssistantReplyPrefix(raw: string): string {
 }
 
 /**
+ * Strip the 龙虾工作台 injected constraint/context wrappers from a user message
+ * so the built-in system prompts are not shown in the conversation history.
+ *
+ * The wrappers are produced server-side in agent-chat-service.ts
+ * (buildAgentMessage / appendSavedFileReferences) and ask.tsx
+ * (buildAgentWorkbenchMessage). This is a display-side fallback that mirrors the
+ * controller's stripWorkbenchInjectedPrompt for already-stored transcripts; the
+ * real user text always follows the LAST "用户当前消息(如下)？：" / "用户原始任务："
+ * marker. Pure system-directive turns (auto-continue / empty-attachment retry)
+ * carry no user text and collapse to an empty string, which the thread filters
+ * out. Keep these patterns in sync with the controller constants.
+ */
+const WORKBENCH_INJECTION_PREFIX =
+  /^(?:以下为龙虾工作台注入的运行约束|以下是龙虾工作台传入的上下文|你是 OpenClaw 龙虾 agent)/u;
+const WORKBENCH_USER_MESSAGE_MARKER =
+  /^[\s\S]*(?:用户当前消息如下：|用户当前消息：|用户原始任务：)\s*([\s\S]*)$/u;
+const WORKBENCH_SAVED_FILE_SUFFIX =
+  /\n{2,}(?:工作台附件已保存到当前 OpenClaw|工作台已接收上传附件)[\s\S]*$/u;
+const WORKBENCH_SYSTEM_DIRECTIVE_PREFIXES = [
+  "继续执行当前任务。",
+  "上一轮没有产生可见回复。",
+];
+
+function stripWorkbenchInjectedPrompt(raw: string): string {
+  const trimmed = raw.trimStart();
+  for (const prefix of WORKBENCH_SYSTEM_DIRECTIVE_PREFIXES) {
+    if (trimmed.startsWith(prefix)) {
+      return "";
+    }
+  }
+  if (!WORKBENCH_INJECTION_PREFIX.test(trimmed)) {
+    return raw;
+  }
+  const markerMatch = trimmed.match(WORKBENCH_USER_MESSAGE_MARKER);
+  if (markerMatch?.[1] == null) {
+    return raw;
+  }
+  return markerMatch[1].replace(WORKBENCH_SAVED_FILE_SUFFIX, "").trim();
+}
+
+/**
  * Extract sender name from raw message text metadata.
  *
  * Looks for the `[message_id: ...]\nsenderName: actualMessage` pattern
@@ -167,7 +208,7 @@ function extractMessage(msg: Record<string, unknown>): ExtractedMessage {
   const sanitizedText =
     msg.role === "assistant"
       ? stripAssistantReplyPrefix(stripMetadata(raw))
-      : stripMetadata(raw);
+      : stripWorkbenchInjectedPrompt(stripMetadata(raw));
   const extractedReply = extractReplyContextPrefix(sanitizedText);
   const text = extractedReply.text;
   replyContextText ??= extractedReply.replyContextText;

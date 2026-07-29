@@ -8,6 +8,16 @@ import {
   readAskActivity,
   subscribeAskActivity,
 } from "@/lib/ask-activity";
+import {
+  copyImageToClipboard,
+  downloadImage,
+} from "@/lib/image-actions";
+import {
+  resolveBackendModelId,
+  resolveDisplayModelId,
+  subscribeModelDisplayChoice,
+  withDisplayAliasModels,
+} from "@/lib/model-display-alias";
 import { useBootGrace } from "@/lib/runtime-startup";
 import { cn } from "@/lib/utils";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -227,7 +237,7 @@ const CHAT_MODEL_PRICING: Array<{
   { matchIds: ["gpt-5.4-nano"], inputPerM: 0.2, outputPerM: 1.25 },
   { matchIds: ["gpt-5.4-mini"], inputPerM: 0.75, outputPerM: 4.5 },
   { matchIds: ["gpt-5.4"], inputPerM: 2.5, outputPerM: 15 },
-  { matchIds: ["gpt-5.5"], inputPerM: 5, outputPerM: 30 },
+  { matchIds: ["gpt-5.5", "gpt-5.6"], inputPerM: 5, outputPerM: 30 },
   { matchIds: ["deepseek-v4-flash"], inputPerM: 1, outputPerM: 2 },
   { matchIds: ["deepseek-v4-pro"], inputPerM: 12, outputPerM: 24 },
   { matchIds: ["grok-4.2-fast"], inputPerM: 0.4, outputPerM: 3 },
@@ -744,9 +754,7 @@ function attachmentSummary(attachment: ChatAttachment): string {
   return `${attachment.name} (${attachment.type || "unknown"}, ${formatBytes(attachment.size)})`;
 }
 
-function buildDisplayText(
-  input: string,
-): string {
+function buildDisplayText(input: string): string {
   const trimmed = input.trim();
   if (trimmed.length > 0) return trimmed;
   return "";
@@ -1081,7 +1089,8 @@ function classifyWorkbenchRequest(input: {
     );
   if (
     imageGenerationRequest ||
-    (hasImageAttachment && hasRecentImageGenerationContext(input.recentMessages))
+    (hasImageAttachment &&
+      hasRecentImageGenerationContext(input.recentMessages))
   ) {
     return "image_generation";
   }
@@ -1373,36 +1382,6 @@ async function copyTextToClipboard(text: string): Promise<void> {
   await navigator.clipboard.writeText(text);
 }
 
-async function copyImageToClipboard(src: string): Promise<boolean> {
-  try {
-    const response = await fetch(src);
-    const blob = await response.blob();
-    if (
-      "ClipboardItem" in window &&
-      typeof navigator.clipboard.write === "function"
-    ) {
-      await navigator.clipboard.write([
-        new ClipboardItem({ [blob.type || "image/png"]: blob }),
-      ]);
-      return true;
-    }
-  } catch {
-    // Fall through to text copy.
-  }
-  await navigator.clipboard.writeText(src);
-  return false;
-}
-
-function downloadUrl(src: string, name: string) {
-  const anchor = document.createElement("a");
-  anchor.href = src;
-  anchor.download = name || "image.png";
-  anchor.rel = "noopener noreferrer";
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-}
-
 function AttachmentIcon({ kind }: { kind: AttachmentKind }) {
   if (kind === "image") return <ImageIcon size={13} />;
   if (kind === "video") return <Video size={13} />;
@@ -1435,12 +1414,23 @@ function MessageBubble({
 
   const handleCopyImage = async (src: string) => {
     try {
-      const copiedImage = await copyImageToClipboard(src);
+      const result = await copyImageToClipboard(src);
       toast.success(
-        copiedImage ? t("ask.toast.imageCopied") : t("ask.toast.linkCopied"),
+        result === "image"
+          ? t("ask.toast.imageCopied")
+          : t("ask.toast.linkCopied"),
       );
     } catch {
       toast.error(t("ask.toast.copyFailed"));
+    }
+  };
+
+  const handleDownloadImage = async (src: string, name: string) => {
+    try {
+      await downloadImage(src, name);
+      toast.success(t("ask.toast.imageDownloaded"));
+    } catch {
+      toast.error(t("ask.toast.downloadFailed"));
     }
   };
 
@@ -1539,7 +1529,10 @@ function MessageBubble({
                     <button
                       type="button"
                       onClick={() =>
-                        downloadUrl(attachment.dataUrl ?? "", attachment.name)
+                        void handleDownloadImage(
+                          attachment.dataUrl ?? "",
+                          attachment.name,
+                        )
                       }
                       className="inline-flex h-6 w-6 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary"
                       aria-label={t("ask.downloadImage")}
@@ -1594,7 +1587,7 @@ function MessageBubble({
                   </button>
                   <button
                     type="button"
-                    onClick={() => downloadUrl(url, name)}
+                    onClick={() => void handleDownloadImage(url, name)}
                     className="inline-flex h-7 w-7 items-center justify-center rounded text-text-muted transition-colors hover:bg-surface-2 hover:text-text-primary"
                     aria-label={t("ask.downloadImage")}
                     title={t("ask.downloadImage")}
@@ -1668,6 +1661,30 @@ export function AskPage() {
   const [knowledgeTitle, setKnowledgeTitle] = useState("");
   const [knowledgeContent, setKnowledgeContent] = useState("");
   const [previewImage, setPreviewImage] = useState<PreviewImage | null>(null);
+
+  const handlePreviewCopyImage = useCallback(async () => {
+    if (!previewImage) return;
+    try {
+      const result = await copyImageToClipboard(previewImage.src);
+      toast.success(
+        result === "image"
+          ? t("ask.toast.imageCopied")
+          : t("ask.toast.linkCopied"),
+      );
+    } catch {
+      toast.error(t("ask.toast.copyFailed"));
+    }
+  }, [previewImage, t]);
+
+  const handlePreviewDownloadImage = useCallback(async () => {
+    if (!previewImage) return;
+    try {
+      await downloadImage(previewImage.src, previewImage.name);
+      toast.success(t("ask.toast.imageDownloaded"));
+    } catch {
+      toast.error(t("ask.toast.downloadFailed"));
+    }
+  }, [previewImage, t]);
   const [sessions, setSessionsState] = useState<ChatSession[]>(() =>
     getAskSessions(t("ask.newChat")),
   );
@@ -1734,10 +1751,17 @@ export function AskPage() {
   });
 
   const models = useMemo(
-    () => (modelsData?.models ?? []) as Model[],
+    () => withDisplayAliasModels((modelsData?.models ?? []) as Model[]),
     [modelsData],
   );
-  const currentModelId = defaultModelData?.modelId ?? "";
+  const currentModelId = resolveDisplayModelId(defaultModelData?.modelId ?? "");
+  // Re-render when the display-alias choice changes elsewhere (龙虾窝 / 模型广场)
+  // so the shown model name stays consistent.
+  const [, forceModelRerender] = useState(0);
+  useEffect(
+    () => subscribeModelDisplayChoice(() => forceModelRerender((n) => n + 1)),
+    [],
+  );
   const assistantLabel = getAssistantDisplayName(currentModelId);
   const pickerModels = useMemo(() => {
     if (
@@ -1758,9 +1782,10 @@ export function AskPage() {
 
   const updateModel = useMutation({
     mutationFn: async (modelId: string) => {
+      const backendModelId = resolveBackendModelId(modelId);
       const toastId = toast.loading(t("models.switchingModel"));
       const { data, error } = await putApiInternalDesktopDefaultModel({
-        body: { modelId },
+        body: { modelId: backendModelId },
       });
       if (error) {
         const message =
@@ -2325,7 +2350,7 @@ export function AskPage() {
       .map(serializeHistoryMessage)
       .filter((message): message is ChatCompletionMessage => message !== null)
       .slice(-MAX_CONTEXT_MESSAGES);
-    let payloadMessages = [
+    const payloadMessages = [
       ...(summaryMessage ? [summaryMessage] : []),
       ...(knowledgeMessage ? [knowledgeMessage] : []),
       ...history,
@@ -2339,7 +2364,7 @@ export function AskPage() {
       knowledgeMessage,
       recentHistoryContext,
     });
-    let inputTokenEstimate = estimateTokensFromMessages(payloadMessages);
+    const inputTokenEstimate = estimateTokensFromMessages(payloadMessages);
 
     updateSessionMessages(targetSessionId, (previous, session) => ({
       title:
@@ -2575,7 +2600,7 @@ export function AskPage() {
             <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border px-4 py-3">
               <button
                 type="button"
-                onClick={() => void copyImageToClipboard(previewImage.src)}
+                onClick={() => void handlePreviewCopyImage()}
                 className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-[12px] text-text-secondary transition-colors hover:bg-surface-1 hover:text-text-primary"
               >
                 <Copy size={13} />
@@ -2583,7 +2608,7 @@ export function AskPage() {
               </button>
               <button
                 type="button"
-                onClick={() => downloadUrl(previewImage.src, previewImage.name)}
+                onClick={() => void handlePreviewDownloadImage()}
                 className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-[12px] text-text-secondary transition-colors hover:bg-surface-1 hover:text-text-primary"
               >
                 <Download size={13} />

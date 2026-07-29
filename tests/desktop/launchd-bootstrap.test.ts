@@ -221,6 +221,16 @@ describe("getLogDir", () => {
   });
 });
 
+describe("controller startup readiness contract", () => {
+  it("allows enough time for a slow first Gateway handshake", async () => {
+    const { DEFAULT_CONTROLLER_STARTUP_TIMEOUT_MS } = await import(
+      "../../apps/desktop/main/services/launchd-bootstrap"
+    );
+
+    expect(DEFAULT_CONTROLLER_STARTUP_TIMEOUT_MS).toBe(120_000);
+  });
+});
+
 describe("resolveLaunchdPaths", () => {
   it("resolves dev paths from workspace root", async () => {
     const { resolveLaunchdPaths } = await import(
@@ -272,7 +282,11 @@ describe("bootstrapWithLaunchd", () => {
     // Mock fetch for controller readiness probe
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ status: 200, ok: true }),
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: vi.fn().mockResolvedValue({ ready: true }),
+      }),
     );
   });
 

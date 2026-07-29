@@ -1,6 +1,5 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createWriteStream } from "node:fs";
 import {
   chmod,
   cp,
@@ -18,6 +17,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { findMissingRuntimeFiles } from "../../../openclaw-runtime/runtime-integrity.mjs";
 import {
   electronRoot,
   getSidecarRoot,
@@ -263,6 +263,10 @@ const CONTROL_UI_IMAGE_EXTRACTOR_SEARCH =
   "function ey(e){let t=e.content,n=[];if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&n.push({url:t.url})}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&n.push({url:e.url})}}return n}";
 const CONTROL_UI_IMAGE_EXTRACTOR_REPLACEMENT =
   "function ey(e){let t=e.content,n=[];let r=e=>{if(typeof e!=`string`)return;let t=e.trim();if(!t)return;if(!(/^https?:\\/\\//i.test(t)||/^data:image\\//i.test(t)||t.startsWith(`/`)))return;if(!n.some(e=>e.url===t))n.push({url:t,alt:`生成图片`})};let i=e=>{if(!e||typeof e!=`object`)return;let t=e;typeof t.mediaUrl==`string`&&r(t.mediaUrl);Array.isArray(t.mediaUrls)&&t.mediaUrls.forEach(r);typeof t.url==`string`&&r(t.url);typeof t.fileUrl==`string`&&r(t.fileUrl);t.media&&typeof t.media==`object`&&i(t.media)};if(Array.isArray(t))for(let e of t){if(typeof e!=`object`||!e)continue;let t=e;if(t.type===`image`){let e=t.source;if(e?.type===`base64`&&typeof e.data==`string`){let t=e.data,r=e.media_type||`image/png`,i=t.startsWith(`data:`)?t:`data:${r};base64,${t}`;n.push({url:i})}else typeof t.url==`string`&&r(t.url)}else if(t.type===`image_url`){let e=t.image_url;typeof e?.url==`string`&&r(e.url)}}i(e.details);return n}";
+const CONTROL_UI_MARKDOWN_IMAGE_RENDERER_SEARCH =
+  "var wg=new q.Renderer;wg.html=({text:e})=>Eg(e),wg.image=e=>{let t=Tg(e.text),n=e.href?.trim()??``;return gg.test(n)?`<img class=\"markdown-inline-image\" src=\"${Eg(n)}\" alt=\"${Eg(t)}\">`:Eg(t)};function Tg(e){return e?.trim()||`image`}";
+const CONTROL_UI_MARKDOWN_IMAGE_RENDERER_REPLACEMENT =
+  "var wg=new q.Renderer;wg.html=({text:e})=>Eg(e),wg.image=e=>{let t=Tg(e.text),n=e.href?.trim()??``;return (gg.test(n)||/^https?:\\/\\/(?:127\\.0\\.0\\.1|localhost|\\[::1\\]):\\d+\\/api\\/internal\\/desktop\\/generated-images\\/[^\\s?#]+\\.(?:png|jpe?g|webp|gif)(?:[?#].*)?$/i.test(n))?`<img class=\"markdown-inline-image\" src=\"${Eg(n)}\" alt=\"${Eg(t)}\">`:Eg(t)};function Tg(e){return e?.trim()||`image`}";
 const CONTROL_UI_TOOL_OUTPUT_DETAILS_SEARCH =
   '<details class="chat-tool-msg-collapse">';
 const CONTROL_UI_TOOL_OUTPUT_DETAILS_REPLACEMENT =
@@ -1290,28 +1294,6 @@ async function collectFiles(rootPath) {
   return files;
 }
 
-async function createZipArchive(sourceRoot, archivePath) {
-  const { ZipFile } = require("yazl");
-  const zipFile = new ZipFile();
-  const output = createWriteStream(archivePath);
-  const done = new Promise((resolveZip, rejectZip) => {
-    zipFile.outputStream.on("error", rejectZip);
-    output.on("error", rejectZip);
-    output.on("close", resolveZip);
-  });
-
-  zipFile.outputStream.pipe(output);
-  for (const filePath of await collectFiles(sourceRoot)) {
-    zipFile.addFile(
-      filePath,
-      relative(sourceRoot, filePath).replace(/\\/g, "/"),
-    );
-  }
-  zipFile.end();
-
-  await done;
-}
-
 /**
  * LZMA2-compressed 7z archive produced via the `7za.exe` bundled by 7zip-bin.
  * Used on Windows where a single sealed archive dramatically reduces NSIS
@@ -2309,6 +2291,18 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
       patchCount += 1;
     }
     if (
+      source.includes(CONTROL_UI_MARKDOWN_IMAGE_RENDERER_SEARCH) &&
+      !source.includes(CONTROL_UI_MARKDOWN_IMAGE_RENDERER_REPLACEMENT)
+    ) {
+      source = applyExactReplacement(
+        source,
+        CONTROL_UI_MARKDOWN_IMAGE_RENDERER_SEARCH,
+        CONTROL_UI_MARKDOWN_IMAGE_RENDERER_REPLACEMENT,
+        `${entry}: render local generated images in live Markdown replies`,
+      );
+      patchCount += 1;
+    }
+    if (
       source.includes(CONTROL_UI_TOOL_MEDIA_RENDER_SEARCH) &&
       !source.includes(CONTROL_UI_TOOL_MEDIA_RENDER_REPLACEMENT)
     ) {
@@ -2384,7 +2378,7 @@ async function patchControlUiGeneratedImageRendering(openclawPackageRoot) {
     for (const entry of patchedControlUiBundles) {
       updatedHtml = updatedHtml.replace(
         `src="./assets/${entry}"`,
-        `src="./assets/${entry}?clawpi-media=1&clawpi-node-poll=5s"`,
+        `src="./assets/${entry}?clawpi-media=2&clawpi-node-poll=5s"`,
       );
     }
     if (updatedHtml !== html) {
@@ -2912,9 +2906,11 @@ async function liftBundledExtensionDeps(parentNodeModules) {
 }
 
 async function prepareOpenclawSidecar() {
-  if (!(await pathExists(openclawRoot))) {
+  const missingRuntimeFiles =
+    await findMissingRuntimeFiles(openclawRuntimeRoot);
+  if (missingRuntimeFiles.length > 0) {
     throw new Error(
-      `OpenClaw runtime dependency not found at ${openclawRoot}. Run pnpm openclaw-runtime:install first.`,
+      `OpenClaw runtime is incomplete; missing: ${missingRuntimeFiles.join(", ")}. Run pnpm openclaw-runtime:install first.`,
     );
   }
 

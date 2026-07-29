@@ -42,3 +42,6 @@ apps/desktop/build-config.json
 .claude/settings.local.json
 .claude/worktrees
 .claude/worktrees/
+.codex-run/
+$out/
+PARTITION_FIX_SUMMARY.md

@@ -10,6 +10,7 @@ import {
   Loader2,
   QrCode,
   Receipt,
+  RefreshCw,
   Wallet,
   X,
   Zap,
@@ -40,7 +41,7 @@ interface ModelPrice {
   outputPerM: number;
   modelRatio: number;
   completionRatio: number;
-  tag?: "cheapest" | "recommended" | "powerful";
+  tag?: "cheapest" | "recommended" | "powerful" | "strongest";
 }
 
 interface ProviderGroup {
@@ -162,6 +163,17 @@ const CLOUD_PRICING_MODELS: ModelPrice[] = [
     inputPerM: 5,
     outputPerM: 30,
     tag: "powerful",
+  },
+  {
+    id: "gpt-5.6",
+    name: "GPT-5.6",
+    provider: "openai",
+    matchIds: ["gpt-5.6"],
+    modelRatio: 2.5,
+    completionRatio: 6,
+    inputPerM: 5,
+    outputPerM: 30,
+    tag: "strongest",
   },
   {
     id: "deepseek-v4-flash",
@@ -288,6 +300,12 @@ const TAG_CONFIG = {
     dot: "bg-purple-400",
     ring: "ring-purple-400/20",
     text: "text-purple-600 dark:text-purple-400",
+  },
+  strongest: {
+    label: "最强智力",
+    dot: "bg-amber-400",
+    ring: "ring-amber-400/20",
+    text: "text-amber-600 dark:text-amber-400",
   },
 } as const;
 
@@ -632,10 +650,7 @@ function UsageLogList() {
               className="flex items-center justify-between gap-3 px-3 py-3 border-b border-border-subtle last:border-b-0"
             >
               <div className="min-w-0 flex-1">
-                <div className="text-[12px] font-medium text-text-primary truncate">
-                  {log.model_name}
-                </div>
-                <div className="text-[10px] text-text-muted mt-0.5">
+                <div className="text-[12px] text-text-secondary">
                   {dateStr} · {log.prompt_tokens.toLocaleString()} 输入 +{" "}
                   {log.completion_tokens.toLocaleString()} 输出 ={" "}
                   {totalTokens.toLocaleString()} tokens
@@ -1116,7 +1131,6 @@ function PendingOrdersSection() {
 
 export function RechargePage() {
   const { t } = useTranslation();
-  // const queryClient = useQueryClient();
   // Redemption code input — disabled now that Alipay orders are live
   // const [code, setCode] = useState("");
   // const [successMsg, setSuccessMsg] = useState<string | null>(null);
@@ -1126,6 +1140,8 @@ export function RechargePage() {
     data: balanceData,
     isLoading: balanceLoading,
     isError: balanceError,
+    isFetching: balanceFetching,
+    refetch: refetchBalance,
   } = useQuery({
     queryKey: ["user-balance"],
     queryFn: async () => {
@@ -1133,9 +1149,7 @@ export function RechargePage() {
       if (error || !data) {
         throw new Error("Failed to fetch balance");
       }
-      if (!data.ok) {
-        throw new Error(data.error ?? "Balance unavailable");
-      }
+      // Don't throw when data.ok is false - return the response so we can show specific error
       return data;
     },
     refetchInterval: 15_000,
@@ -1174,10 +1188,13 @@ export function RechargePage() {
   //   redeemMutation.mutate(code.trim());
   // };
 
+  const hasBalanceError = balanceData && !balanceData.ok;
+  const balanceErrorMessage = hasBalanceError ? balanceData.error : undefined;
   const balanceCents = balanceData?.balance_cents ?? 0;
-  const totalRecharged = balanceData?.total_recharged ?? 0;
+  const totalRecharged = balanceData?.total_recharged;
   const balanceYuan = (balanceCents / 100).toFixed(2);
-  const totalYuan = (totalRecharged / 100).toFixed(2);
+  const totalYuan =
+    totalRecharged == null ? null : (totalRecharged / 100).toFixed(2);
 
   return (
     <div
@@ -1203,9 +1220,35 @@ export function RechargePage() {
               <div className="text-[13px] text-text-muted">
                 {t("recharge.loadingBalance")}
               </div>
-            ) : balanceError ? (
-              <div className="text-[13px] text-red-500">
-                {t("recharge.balanceUnavailable")}
+            ) : balanceError || hasBalanceError ? (
+              <div className="flex flex-col gap-2">
+                <div className="text-[13px] text-red-500">
+                  {t("recharge.balanceUnavailable")}
+                </div>
+                {balanceErrorMessage && (
+                  <div className="text-[11px] text-text-muted">
+                    {balanceErrorMessage === "Not authenticated"
+                      ? "请先登录账户"
+                      : balanceErrorMessage === "Server unreachable"
+                        ? "无法连接到服务器，请检查网络连接"
+                        : balanceErrorMessage.includes("invalid tokens") ||
+                            balanceErrorMessage.includes("wait")
+                          ? t("recharge.providerUnavailable")
+                          : balanceErrorMessage}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => void refetchBalance()}
+                  disabled={balanceFetching}
+                  className="mt-1 flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-accent hover:bg-accent-hover disabled:opacity-50 disabled:cursor-not-allowed transition-all w-fit"
+                >
+                  <RefreshCw
+                    size={12}
+                    className={balanceFetching ? "animate-spin" : undefined}
+                  />
+                  {t("recharge.retryBalance")}
+                </button>
               </div>
             ) : (
               <div className="text-2xl font-bold text-text-primary tabular-nums">
@@ -1214,12 +1257,15 @@ export function RechargePage() {
             )}
           </div>
         </div>
-        {!balanceLoading && !balanceError && (
-          <div className="text-[12px] text-text-muted">
-            {t("recharge.totalRecharged")}:{" "}
-            {t("recharge.balanceCurrency", { amount: totalYuan })}
-          </div>
-        )}
+        {!balanceLoading &&
+          !balanceError &&
+          !hasBalanceError &&
+          totalYuan != null && (
+            <div className="text-[12px] text-text-muted">
+              {t("recharge.totalRecharged")}:{" "}
+              {t("recharge.balanceCurrency", { amount: totalYuan })}
+            </div>
+          )}
       </div>
 
       {/* Online payment */}

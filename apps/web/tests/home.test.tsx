@@ -33,14 +33,12 @@ function renderHomePage(): string {
 }
 
 describe("HomePage", () => {
-  it("renders the alpha hero as a looping muted autoplay video", () => {
+  it("renders the operational workspace dashboard without the retired alpha hero", () => {
     const markup = renderHomePage();
 
-    expect(markup).toContain('src="/nexu-alpha.mp4"');
-    expect(markup).toContain('poster="/nexu-alpha-poster.jpg"');
-    expect(markup).toContain('autoPlay=""');
-    expect(markup).toContain('playsInline=""');
-    expect(markup).toContain('muted=""');
-    expect(markup).toContain('loop=""');
+    expect(markup).toContain("home.status.starting");
+    expect(markup).toContain("home.channelsTitle");
+    expect(markup).toContain("home.recentActivity");
+    expect(markup).not.toContain("/nexu-alpha.mp4");
   });
 });

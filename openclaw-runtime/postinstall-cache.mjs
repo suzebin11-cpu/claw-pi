@@ -11,6 +11,7 @@ export const cacheInputs = [
   "postinstall-cache.mjs",
   "prune-runtime.mjs",
   "prune-runtime-paths.mjs",
+  "runtime-integrity.mjs",
   "utils.mjs",
 ];
 

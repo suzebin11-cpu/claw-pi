@@ -260,7 +260,8 @@ const en = {
   "ask.local.capability.web": "Websites & apps",
   "ask.local.capability.workspace": "Files / sheets / decks",
   "ask.local.confirmTitle": "Run this local action?",
-  "ask.local.confirmHint": "Delete, overwrite, and arbitrary commands are not allowed.",
+  "ask.local.confirmHint":
+    "Delete, overwrite, and arbitrary commands are not allowed.",
   "ask.local.toast.enableFirst":
     "Basic mode is active. Switch to Confirm actions or Full access first.",
   "ask.local.toast.actionDisabled":
@@ -291,6 +292,8 @@ const en = {
   "ask.toast.copyFailed": "Copy failed",
   "ask.toast.imageCopied": "Image copied",
   "ask.toast.linkCopied": "Image link copied",
+  "ask.toast.imageDownloaded": "Image download started",
+  "ask.toast.downloadFailed": "Image download failed",
   "ask.toast.contextCleared":
     "Context cleared for this chat. Visible history is kept.",
   "ask.toast.knowledgeEmpty": "Add knowledge content first",
@@ -1214,6 +1217,9 @@ const en = {
   "recharge.totalRecharged": "Total recharged",
   "recharge.loadingBalance": "Loading balance...",
   "recharge.balanceUnavailable": "Unable to load balance",
+  "recharge.providerUnavailable":
+    "Balance reporting is temporarily unavailable. Model calls are unaffected.",
+  "recharge.retryBalance": "Reload",
   "recharge.codePlaceholder": "Enter recharge code",
   "recharge.codeHint":
     "Enter the recharge code you purchased to add balance to your account",

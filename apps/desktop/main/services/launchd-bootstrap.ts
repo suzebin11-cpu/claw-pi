@@ -96,7 +96,7 @@ export interface LaunchdBootstrapEnv {
   amplitudeApiKey?: string;
   /** Optional structured logger for packaged mode (console.log is lost in packaged builds) */
   log?: (message: string) => void;
-  /** Optional override for controller startup validation timeout (tests only). */
+  /** Optional override for controller startup validation timeout. */
   controllerStartupValidationTimeoutMs?: number;
 }
 
@@ -120,6 +120,12 @@ export interface LaunchdBootstrapResult {
 }
 
 type ControllerReadyResult = { ok: true } | { ok: false; error: Error };
+
+/**
+ * Gateway startup can be substantially slower than the Controller HTTP bind,
+ * especially on the first packaged launch while the runtime initializes.
+ */
+export const DEFAULT_CONTROLLER_STARTUP_TIMEOUT_MS = 120_000;
 
 /** Metadata persisted between sessions for attach discovery */
 interface RuntimePortsMetadata {
@@ -174,7 +180,7 @@ async function ensureLogDir(nexuHome?: string): Promise<string> {
  */
 async function waitForControllerReadiness(
   port: number,
-  timeoutMs = 15000,
+  timeoutMs = DEFAULT_CONTROLLER_STARTUP_TIMEOUT_MS,
 ): Promise<void> {
   const startedAt = Date.now();
   let attempt = 0;
@@ -206,7 +212,8 @@ type ControllerProbeFailureReason =
   | "port_unreachable"
   | "probe_timeout"
   | "probe_error"
-  | "probe_status";
+  | "probe_status"
+  | "probe_not_ready";
 
 type ControllerStartupFailureReason =
   | "launchd_stopped"
@@ -260,7 +267,30 @@ async function probeControllerReady(
       signal: AbortSignal.timeout(timeoutMs),
     });
     if (response.ok) {
-      return { ok: true, probeUrl: readyUrl, status: response.status };
+      let payload: unknown;
+      try {
+        payload = await response.json();
+      } catch {
+        return {
+          ok: false,
+          probeUrl: readyUrl,
+          reason: "probe_error",
+          status: response.status,
+        };
+      }
+      if (
+        typeof payload === "object" &&
+        payload !== null &&
+        (payload as { ready?: unknown }).ready === true
+      ) {
+        return { ok: true, probeUrl: readyUrl, status: response.status };
+      }
+      return {
+        ok: false,
+        probeUrl: readyUrl,
+        reason: "probe_not_ready",
+        status: response.status,
+      };
     }
     if (response.status !== 404) {
       return {
@@ -343,7 +373,8 @@ async function waitForControllerStartupValidation(opts: {
   timeoutMs?: number;
   probeTimeoutMs?: number;
 }): Promise<ControllerStartupValidationResult> {
-  const timeoutMs = opts.timeoutMs ?? 15000;
+  const timeoutMs =
+    opts.timeoutMs ?? DEFAULT_CONTROLLER_STARTUP_TIMEOUT_MS;
   const startedAt = Date.now();
   let attempt = 0;
   let lastResult: ControllerStartupValidationResult | null = null;
@@ -979,7 +1010,9 @@ export async function bootstrapWithLaunchd(
       launchd,
       label: labels.controller,
       port: effectivePorts.controllerPort,
-      timeoutMs: env.controllerStartupValidationTimeoutMs ?? 15000,
+      timeoutMs:
+        env.controllerStartupValidationTimeoutMs ??
+        DEFAULT_CONTROLLER_STARTUP_TIMEOUT_MS,
       probeTimeoutMs: 3000,
     });
 
@@ -1016,7 +1049,9 @@ export async function bootstrapWithLaunchd(
       launchd,
       label: labels.controller,
       port: retryPort,
-      timeoutMs: env.controllerStartupValidationTimeoutMs ?? 15000,
+      timeoutMs:
+        env.controllerStartupValidationTimeoutMs ??
+        DEFAULT_CONTROLLER_STARTUP_TIMEOUT_MS,
       probeTimeoutMs: 3000,
     });
     if (retryValidation.ok) {

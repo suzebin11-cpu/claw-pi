@@ -19,6 +19,7 @@ describe("desktop update feed resolution", () => {
         channel: "nightly",
         feedUrl: null,
         arch: "arm64",
+        platform: "darwin",
       }),
     ).toBe("https://api.clawpi.app:9443/updates/nightly/arm64");
   });
@@ -30,20 +31,48 @@ describe("desktop update feed resolution", () => {
         channel: "stable",
         feedUrl: null,
         arch: "x64",
+        platform: "darwin",
       }),
     ).toBe("https://api.clawpi.app:9443/updates/stable/x64");
   });
 
-  it("throws for unsupported mac architectures", () => {
+  it("uses a platform-specific feed for Windows installers", () => {
+    expect(
+      resolveUpdateFeedUrlForTests({
+        source: "r2",
+        channel: "stable",
+        feedUrl: null,
+        arch: "x64",
+        platform: "win32",
+      }),
+    ).toBe("https://api.clawpi.app:9443/updates/stable/win/x64");
+  });
+
+  it("throws for unsupported desktop architectures", () => {
     expect(() =>
       resolveUpdateFeedUrlForTests({
         source: "r2",
         channel: "stable",
         feedUrl: null,
         arch: "x86_64",
+        platform: "darwin",
       }),
     ).toThrow(
-      '[update-manager] Unsupported mac architecture "x86_64". Expected "x64" or "arm64".',
+      '[update-manager] Unsupported desktop architecture "x86_64". Expected "x64" or "arm64".',
+    );
+  });
+
+  it("throws for unsupported desktop platforms", () => {
+    expect(() =>
+      resolveUpdateFeedUrlForTests({
+        source: "r2",
+        channel: "stable",
+        feedUrl: null,
+        arch: "x64",
+        platform: "linux",
+      }),
+    ).toThrow(
+      '[update-manager] Unsupported desktop platform "linux". Expected "darwin" or "win32".',
     );
   });
 
@@ -77,6 +106,7 @@ describe("desktop update feed resolution", () => {
         channel: "stable",
         feedUrl: null,
         arch: "x64",
+        platform: "darwin",
       }),
     ).toBe("https://api.clawpi.app:9443/updates/stable/x64");
   });

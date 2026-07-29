@@ -247,7 +247,11 @@ describe("Launchd Startup Scenarios", () => {
     // Controller readiness probe succeeds
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ status: 200, ok: true }),
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: vi.fn().mockResolvedValue({ ready: true }),
+      }),
     );
   });
 
@@ -295,7 +299,11 @@ describe("Launchd Startup Scenarios", () => {
     // Health probes: controller HTTP ok, openclaw port listening
     vi.stubGlobal(
       "fetch",
-      vi.fn().mockResolvedValue({ status: 200, ok: true }),
+      vi.fn().mockResolvedValue({
+        status: 200,
+        ok: true,
+        json: vi.fn().mockResolvedValue({ ready: true }),
+      }),
     );
 
     const { bootstrapWithLaunchd } = await import(
@@ -335,7 +343,11 @@ describe("Launchd Startup Scenarios", () => {
         if (url.includes("/health")) {
           return Promise.reject(new Error("ECONNREFUSED"));
         }
-        return Promise.resolve({ status: 200, ok: true });
+        return Promise.resolve({
+          status: 200,
+          ok: true,
+          json: vi.fn().mockResolvedValue({ ready: true }),
+        });
       }),
     );
 
@@ -1610,10 +1622,18 @@ describe("Launchd Startup Scenarios", () => {
         if (url.includes("/api/internal/desktop/ready")) {
           readyAttempts++;
           if (readyAttempts < 3) {
-            return Promise.resolve({ ok: false, status: 503 });
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: vi.fn().mockResolvedValue({ ready: false }),
+            });
           }
         }
-        return Promise.resolve({ ok: true, status: 200 });
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: vi.fn().mockResolvedValue({ ready: true }),
+        });
       }),
     );
 

@@ -277,6 +277,8 @@ const zhCN = {
   "ask.toast.copyFailed": "复制失败",
   "ask.toast.imageCopied": "图片已复制",
   "ask.toast.linkCopied": "已复制图片链接",
+  "ask.toast.imageDownloaded": "图片已开始下载",
+  "ask.toast.downloadFailed": "图片下载失败",
   "ask.toast.contextCleared": "已清除当前对话上下文，历史记录仍保留",
   "ask.toast.knowledgeEmpty": "先填写知识库内容",
   "ask.toast.knowledgeSaved": "已加入知识库",
@@ -592,7 +594,8 @@ const zhCN = {
   // ── Channels Page ──
   "channels.pageTitle": "龙虾出没",
   "channels.pageSubtitle": "把小龙虾放到你的聊天平台里，让它帮你干活",
-  "channels.comingSoon": "微信、QQ、飞书已支持；Microsoft Teams、Line 等更多平台即将支持",
+  "channels.comingSoon":
+    "微信、QQ、飞书已支持；Microsoft Teams、Line 等更多平台即将支持",
   "channels.backToConfig": "返回配置",
   "channels.statusConnected": "{{platform}} 助手已连接",
   "channels.statusConnecting": "连接中...",
@@ -1142,6 +1145,8 @@ const zhCN = {
   "recharge.totalRecharged": "累计充值",
   "recharge.loadingBalance": "加载余额中...",
   "recharge.balanceUnavailable": "无法加载余额",
+  "recharge.providerUnavailable": "余额统计服务暂时不可用，模型调用不受影响",
+  "recharge.retryBalance": "重新加载",
   "recharge.codePlaceholder": "输入充值码",
   "recharge.codeHint": "输入您购买的充值码，为账户增加余额",
   "recharge.redeemButton": "充值",

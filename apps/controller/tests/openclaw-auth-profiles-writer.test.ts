@@ -93,4 +93,61 @@ describe("OpenClawAuthProfilesWriter", () => {
       key: "sk-link",
     });
   });
+
+  it("writes auth profiles for the implicit main agent when agents.list is empty", async () => {
+    const writer = new OpenClawAuthProfilesWriter(
+      new OpenClawAuthProfilesStore(env),
+    );
+    const config = makeConfig(
+      path.join(env.openclawStateDir, "agents", "unused"),
+    );
+    config.agents.list = [];
+
+    await writer.writeForAgents(config);
+
+    const authPath = path.join(
+      env.openclawStateDir,
+      "agents",
+      "main",
+      "agent",
+      "auth-profiles.json",
+    );
+    const data = JSON.parse(await readFile(authPath, "utf8")) as {
+      profiles: Record<string, unknown>;
+    };
+    expect(data.profiles["link:default"]).toEqual({
+      type: "api_key",
+      provider: "link",
+      key: "sk-link",
+    });
+  });
+
+  it("writes auth profiles for implicit main and configured agent workspaces", async () => {
+    const workspace = path.join(env.openclawStateDir, "agents", "agent-1");
+    const writer = new OpenClawAuthProfilesWriter(
+      new OpenClawAuthProfilesStore(env),
+    );
+
+    await writer.writeForAgents(makeConfig(workspace));
+
+    for (const authPath of [
+      path.join(
+        env.openclawStateDir,
+        "agents",
+        "main",
+        "agent",
+        "auth-profiles.json",
+      ),
+      path.join(workspace, "agent", "auth-profiles.json"),
+    ]) {
+      const data = JSON.parse(await readFile(authPath, "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      expect(data.profiles["link:default"]).toEqual({
+        type: "api_key",
+        provider: "link",
+        key: "sk-link",
+      });
+    }
+  });
 });

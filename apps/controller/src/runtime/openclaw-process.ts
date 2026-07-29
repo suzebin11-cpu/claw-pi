@@ -183,14 +183,15 @@ export class OpenClawProcessManager {
             "openclaw.mjs",
           )
         : null;
-      const sidecarEntryPath = resolveOpenClawEntryFromBin(this.env.openclawBin);
+      const sidecarEntryPath = resolveOpenClawEntryFromBin(
+        this.env.openclawBin,
+      );
 
-      const entry =
-        existsSync(sidecarEntryPath)
-          ? sidecarEntryPath
-          : runtimeEntryPath && existsSync(runtimeEntryPath)
-            ? runtimeEntryPath
-            : sidecarEntryPath;
+      const entry = existsSync(sidecarEntryPath)
+        ? sidecarEntryPath
+        : runtimeEntryPath && existsSync(runtimeEntryPath)
+          ? runtimeEntryPath
+          : sidecarEntryPath;
 
       cmd = electronExec;
       args = [entry, "gateway", "run"];
@@ -648,6 +649,10 @@ export class OpenClawProcessManager {
   }
 
   private killOrphanedOpenClawProcesses(): void {
+    if (process.platform === "win32") {
+      return;
+    }
+
     try {
       const procEntries = readdirSync("/proc");
       for (const entry of procEntries) {

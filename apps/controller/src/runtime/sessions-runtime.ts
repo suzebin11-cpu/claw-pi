@@ -97,6 +97,32 @@ const FEISHU_MENTION_TAGS_SYSTEM_LINE =
 const FEISHU_SELF_MENTION_SYSTEM_LINE =
   /\n*\[System: If user_id is "[^"]+", that mention refers to you\.\]\s*$/u;
 
+// Workbench (龙虾工作台) wraps every user message with an injected constraint
+// block before sending it to the OpenClaw runner, so the persisted transcript's
+// user message contains those system prompts rather than just what the user
+// typed. The wrappers are built in agent-chat-service.ts (buildAgentMessage /
+// appendSavedFileReferences) and ask.tsx (buildAgentWorkbenchMessage). The real
+// user text always follows the LAST "用户当前消息：" / "用户当前消息如下：" /
+// "用户原始任务：" marker. Some turns are pure system directives (auto-continue /
+// empty-attachment retry) with no user text at all — those are hidden entirely.
+// We only strip display-side; the stored transcript is left untouched.
+const WORKBENCH_INJECTION_PREFIX_PATTERN =
+  /^(?:以下为龙虾工作台注入的运行约束|以下是龙虾工作台传入的上下文|你是 OpenClaw 龙虾 agent)/u;
+// The real user text always follows the LAST marker — the greedy leading
+// [\s\S]* forces the alternation to bind to the final occurrence, so the inner
+// (ask.tsx) context wrapper nested inside the outer (agent-chat-service.ts)
+// constraint wrapper is skipped too.
+const WORKBENCH_USER_MESSAGE_MARKER_PATTERN =
+  /^[\s\S]*(?:用户当前消息如下：|用户当前消息：|用户原始任务：)\s*([\s\S]*)$/u;
+// Trailing block appended by appendSavedFileReferences after the real message.
+const WORKBENCH_SAVED_FILE_SUFFIX_PATTERN =
+  /\n{2,}(?:工作台附件已保存到当前 OpenClaw|工作台已接收上传附件)[\s\S]*$/u;
+// Pure system directives injected as standalone user turns (no user text).
+const WORKBENCH_SYSTEM_DIRECTIVE_PREFIXES = [
+  "继续执行当前任务。",
+  "上一轮没有产生可见回复。",
+];
+
 function sessionMetadataPath(filePath: string): string {
   return filePath.replace(/\.jsonl$/, ".meta.json");
 }
@@ -742,8 +768,10 @@ export class SessionsRuntime {
   ): SanitizedUserMessageText {
     const replyContextFromMetadata = this.extractReplyContextFromMetadata(text);
     const withoutMetadata = this.stripTranscriptMetadataBlocks(text);
+    const withoutWorkbenchInjection =
+      this.stripWorkbenchInjectedPrompt(withoutMetadata);
     const withoutChannelSuffix = this.stripChannelSystemSuffix(
-      withoutMetadata,
+      withoutWorkbenchInjection,
       channelType,
     );
 
@@ -792,6 +820,36 @@ export class SessionsRuntime {
         /Replied message \(untrusted, for context\):\s*```json\s*[\s\S]*?```\s*/gu,
         "",
       );
+  }
+
+  private stripWorkbenchInjectedPrompt(text: string): string {
+    const trimmed = text.trimStart();
+
+    // Pure system-directive turns (auto-continue / empty-attachment retry)
+    // carry no user text — hide the whole message.
+    for (const prefix of WORKBENCH_SYSTEM_DIRECTIVE_PREFIXES) {
+      if (trimmed.startsWith(prefix)) {
+        return "";
+      }
+    }
+
+    // Only treat as an injected wrapper when it starts with a known workbench
+    // preamble, so genuine user text that merely contains a marker phrase is
+    // left alone.
+    if (!WORKBENCH_INJECTION_PREFIX_PATTERN.test(trimmed)) {
+      return text;
+    }
+
+    const markerMatch = trimmed.match(WORKBENCH_USER_MESSAGE_MARKER_PATTERN);
+    if (markerMatch?.[1] == null) {
+      return text;
+    }
+
+    // Drop the trailing saved-file references block appended after the real
+    // message, then return only the user's own text.
+    return markerMatch[1]
+      .replace(WORKBENCH_SAVED_FILE_SUFFIX_PATTERN, "")
+      .trim();
   }
 
   private stripChannelSystemSuffix(

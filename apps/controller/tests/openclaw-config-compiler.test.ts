@@ -191,6 +191,11 @@ describe("compileOpenClawConfig", () => {
     expect(result.plugins?.allow).toContain("openclaw-weixin");
     expect(result.plugins?.entries?.["openclaw-weixin"]?.enabled).toBe(true);
     expect(result.channels?.["openclaw-weixin"]?.enabled).toBe(true);
+    expect(
+      result.plugins?.entries?.["clawpi-image-generation"]?.config,
+    ).toMatchObject({
+      controllerUrl: "http://127.0.0.1:3010",
+    });
     expect(result.skills?.load?.extraDirs).toEqual([
       "/tmp/openclaw/skills",
       "/tmp/.agents/skills",
@@ -214,6 +219,19 @@ describe("compileOpenClawConfig", () => {
     expect(result.agents.defaults).not.toHaveProperty("contextPruning");
     expect(result.agents.defaults).not.toHaveProperty("reserveTokensFloor");
     expect(result.agents.defaults).not.toHaveProperty("blockStreamingDefault");
+  });
+
+  it("injects the actual controller port into the image plugin", () => {
+    const result = compileOpenClawConfig(
+      createConfig(),
+      createEnv({ port: 50917 }),
+    );
+
+    expect(
+      result.plugins?.entries?.["clawpi-image-generation"]?.config,
+    ).toMatchObject({
+      controllerUrl: "http://127.0.0.1:50917",
+    });
   });
 
   it("keeps WeChat plugin entry stable before and after first account connect", () => {

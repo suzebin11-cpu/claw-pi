@@ -1,7 +1,13 @@
+import {
+  resolveBackendModelId,
+  resolveDisplayModelId,
+  subscribeModelDisplayChoice,
+  withDisplayAliasModels,
+} from "@/lib/model-display-alias";
 import { track } from "@/lib/tracking";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import {
   getApiInternalDesktopDefaultModel,
@@ -39,7 +45,6 @@ function getProviderIdFromModelId(
 
 export function InlineModelSelector() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   // Fetch current model
@@ -60,16 +65,24 @@ export function InlineModelSelector() {
     },
   });
 
-  const models = (modelsData?.models ?? []) as Model[];
-  const currentModelId = defaultModelData?.modelId ?? "";
+  const models = withDisplayAliasModels((modelsData?.models ?? []) as Model[]);
+  // Re-render when the display-alias choice changes on another page so the
+  // shown model (e.g. GPT-5.6) stays in sync across 龙虾窝 / 问答 / 模型广场.
+  const [, forceRerender] = useState(0);
+  useEffect(
+    () => subscribeModelDisplayChoice(() => forceRerender((n) => n + 1)),
+    [],
+  );
+  const currentModelId = resolveDisplayModelId(defaultModelData?.modelId ?? "");
   const emptyModelLabel = t("models.noModelConfigured");
 
   // Update model mutation
   const updateModel = useMutation({
     mutationFn: async (modelId: string) => {
+      const backendModelId = resolveBackendModelId(modelId);
       const toastId = toast.loading(t("models.switchingModel"));
       const { data, error } = await putApiInternalDesktopDefaultModel({
-        body: { modelId },
+        body: { modelId: backendModelId },
       });
       if (error) {
         const message =

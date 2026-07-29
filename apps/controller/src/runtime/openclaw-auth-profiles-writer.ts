@@ -23,6 +23,8 @@ type AuthProfileRecord =
 
 type AuthProfileEntry = [string, AuthProfileRecord];
 
+const IMPLICIT_MAIN_AGENT_ID = "main";
+
 function isApiKeyProfile(profile: unknown): profile is { type: "api_key" } {
   return (
     typeof profile === "object" &&
@@ -156,17 +158,23 @@ export class OpenClawAuthProfilesWriter {
     const shouldKeepOpenAiCodexOAuth = Object.values(profiles).some(
       (profile) => getProfileProvider(profile) === "openai-codex",
     );
-    await Promise.all(
-      (config.agents?.list ?? []).map(async (agent) => {
-        if (
-          typeof agent.workspace !== "string" ||
-          agent.workspace.length === 0
-        ) {
-          return;
-        }
 
-        const authProfilesPath =
-          this.authProfilesStore.authProfilesPathForWorkspace(agent.workspace);
+    const configuredAgentPaths = (config.agents?.list ?? []).flatMap((agent) =>
+      typeof agent.workspace === "string" && agent.workspace.length > 0
+        ? [this.authProfilesStore.authProfilesPathForWorkspace(agent.workspace)]
+        : [],
+    );
+    const authProfilesPaths = [
+      ...new Set([
+        this.authProfilesStore.authProfilesPathForAgentId(
+          IMPLICIT_MAIN_AGENT_ID,
+        ),
+        ...configuredAgentPaths,
+      ]),
+    ];
+
+    await Promise.all(
+      authProfilesPaths.map(async (authProfilesPath) => {
         const preservedKeys: string[] = [];
         const droppedKeys: string[] = [];
 
@@ -202,7 +210,7 @@ export class OpenClawAuthProfilesWriter {
         if (preservedKeys.length > 0) {
           logger.debug(
             {
-              agent: agent.workspace,
+              authProfilesPath,
               preservedKeys,
             },
             "Preserved non-api_key auth profiles during config sync",
@@ -211,7 +219,7 @@ export class OpenClawAuthProfilesWriter {
         if (droppedKeys.length > 0) {
           logger.info(
             {
-              agent: agent.workspace,
+              authProfilesPath,
               droppedKeys,
             },
             "Dropped stale openai-codex auth profiles during config sync",

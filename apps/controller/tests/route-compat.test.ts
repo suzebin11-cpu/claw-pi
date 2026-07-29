@@ -940,4 +940,33 @@ describe("controller route compatibility", () => {
       path.join(rootDir, ".openclaw", "agents", bot.id),
     );
   });
+
+  it("does not report desktop ready before the gateway handshake and runtime are complete", async () => {
+    const app = createApp(container);
+
+    const warmingResponse = await app.request("/api/internal/desktop/ready");
+    expect(warmingResponse.status).toBe(200);
+    expect((await warmingResponse.json()).ready).toBe(false);
+
+    const config = await container.configStore.getConfig();
+    await mkdir(path.dirname(container.env.openclawRuntimeModelStatePath), {
+      recursive: true,
+    });
+    await writeFile(
+      container.env.openclawRuntimeModelStatePath,
+      JSON.stringify({
+        selectedModelRef: config.runtime.defaultModelId,
+        availableModelRefs: [config.runtime.defaultModelId],
+      }),
+      "utf8",
+    );
+    container.runtimeState.bootPhase = "ready";
+    container.runtimeState.status = "active";
+    container.runtimeState.gatewayStatus = "active";
+    vi.spyOn(container.gatewayService, "isConnected").mockReturnValue(true);
+
+    const readyResponse = await app.request("/api/internal/desktop/ready");
+    expect(readyResponse.status).toBe(200);
+    expect((await readyResponse.json()).ready).toBe(true);
+  });
 });

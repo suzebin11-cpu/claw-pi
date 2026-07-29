@@ -804,6 +804,109 @@ describe("SessionsRuntime", () => {
     ]);
   });
 
+  it("strips 龙虾工作台 injected system prompts from workbench user messages", async () => {
+    rootDir = await mkdtemp(path.join(tmpdir(), "nexu-sessions-runtime-"));
+    const runtime = new SessionsRuntime(
+      createEnv({
+        openclawStateDir: rootDir,
+        openclawConfigPath: path.join(rootDir, "openclaw.json"),
+        openclawSkillsDir: path.join(rootDir, "skills"),
+        openclawCuratedSkillsDir: path.join(rootDir, "bundled-skills"),
+        openclawWorkspaceTemplatesDir: path.join(
+          rootDir,
+          "workspace-templates",
+        ),
+      }),
+    );
+
+    const sessionsDir = path.join(rootDir, "agents", "bot-web", "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    const sessionPath = path.join(sessionsDir, "workbench.jsonl");
+    await writeFile(
+      sessionPath.replace(/\.jsonl$/, ".meta.json"),
+      JSON.stringify(
+        { title: "Workbench thread", channelType: "web" },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const innerWrapper = [
+      "以下是龙虾工作台传入的上下文，只用于理解当前问题；真正要回答的是最后的用户当前消息。",
+      "最近对话：\n用户：帮我生成一张写真照\n\n助手：已生成：",
+      "用户当前消息：\n再帮我换一个背景",
+    ].join("\n\n");
+    const outerWrapper = [
+      "以下为龙虾工作台注入的运行约束，优先级高于用户当前消息：",
+      "你是 OpenClaw 龙虾 agent，必须通过 OpenClaw runner 完成工作台任务；不要退化成普通聊天模型。\n\n权限=完全访问：用户要求操作电脑、读写文件时，直接使用可用工具执行。",
+      "用户当前消息如下：",
+      innerWrapper,
+    ].join("\n\n");
+    const withSavedFiles = [
+      "以下为龙虾工作台注入的运行约束，优先级高于用户当前消息：",
+      "你是 OpenClaw 龙虾 agent，必须通过 OpenClaw runner 完成工作台任务。",
+      "用户当前消息如下：",
+      "帮我总结这个文件\n\n工作台附件已保存到当前 OpenClaw agent workspace。若用户要求总结、分析、读取、处理附件，必须优先使用下列附件内容或文件路径。\n\n- report.pdf (document): /tmp/report.pdf",
+    ].join("\n\n");
+
+    await writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          type: "message",
+          id: "msg-wrapped",
+          timestamp: "2026-03-23T02:02:00.000Z",
+          message: {
+            role: "user",
+            timestamp: Date.parse("2026-03-23T02:02:00.000Z"),
+            content: [{ type: "text", text: outerWrapper }],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "msg-attachments",
+          timestamp: "2026-03-23T02:03:00.000Z",
+          message: {
+            role: "user",
+            timestamp: Date.parse("2026-03-23T02:03:00.000Z"),
+            content: [{ type: "text", text: withSavedFiles }],
+          },
+        }),
+        JSON.stringify({
+          type: "message",
+          id: "msg-auto-continue",
+          timestamp: "2026-03-23T02:04:00.000Z",
+          message: {
+            role: "user",
+            timestamp: Date.parse("2026-03-23T02:04:00.000Z"),
+            content: [
+              {
+                type: "text",
+                text: "继续执行当前任务。不要只回复计划、状态或道歉；需要本机/文件/网页/生图操作时，立即调用 OpenClaw 可用工具完成。",
+              },
+            ],
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = await runtime.getChatHistory("workbench.jsonl");
+
+    // The pure auto-continue directive collapses to empty text and is dropped;
+    // the two wrapped messages surface only the user's own words.
+    expect(result.messages).toHaveLength(2);
+    expect(result.messages[0]).toMatchObject({ id: "msg-wrapped" });
+    expect(result.messages[0]?.content).toStrictEqual([
+      { type: "text", text: "再帮我换一个背景" },
+    ]);
+    expect(result.messages[1]).toMatchObject({ id: "msg-attachments" });
+    expect(result.messages[1]?.content).toStrictEqual([
+      { type: "text", text: "帮我总结这个文件" },
+    ]);
+  });
+
   it("strips Feishu system suffixes even when channelType casing differs", async () => {
     rootDir = await mkdtemp(path.join(tmpdir(), "nexu-sessions-runtime-"));
     const runtime = new SessionsRuntime(

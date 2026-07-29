@@ -439,10 +439,224 @@ jobs:
             upload_prefix "${CHANNEL}"
           fi
 
-  trigger-e2e:
+  release-windows:
     needs: release
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Restore npm cache for runtime installs
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: desktop-npm-cache-${{ runner.os }}-x64-${{ hashFiles('openclaw-runtime/package-lock.json', 'apps/controller/static/runtime-plugins/openclaw-weixin/package-lock.json') }}
+          restore-keys: |
+            desktop-npm-cache-${{ runner.os }}-x64-
+            desktop-npm-cache-${{ runner.os }}-
+
+      - name: Restore Electron build caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+            apps/desktop/.cache
+          key: desktop-electron-cache-${{ runner.os }}-x64-${{ hashFiles('pnpm-lock.yaml', 'apps/desktop/package.json') }}
+          restore-keys: |
+            desktop-electron-cache-${{ runner.os }}-x64-
+            desktop-electron-cache-${{ runner.os }}-
+
+      - name: Resolve release metadata
+        id: meta
+        shell: pwsh
+        run: |
+          $desktopPackage = Get-Content apps/desktop/package.json -Raw | ConvertFrom-Json
+          $desktopVersion = $desktopPackage.version
+          $expectedTag = "v$desktopVersion"
+          $legacyExpectedTag = "desktop-v$desktopVersion"
+          $tagName = if ("${{ github.event_name }}" -eq "workflow_dispatch") {
+            "${{ inputs.tag_name }}"
+          } else {
+            "${{ github.ref_name }}"
+          }
+
+          if ($tagName -ne $expectedTag -and $tagName -ne $legacyExpectedTag) {
+            throw "Expected desktop release tag $expectedTag (legacy: $legacyExpectedTag) but received $tagName"
+          }
+
+          $prerelease = $desktopVersion.Contains("-")
+          $channel = if ($prerelease) { "beta" } else { "stable" }
+          $commitSha = git rev-parse HEAD
+
+          "desktop_version=$desktopVersion" >> $env:GITHUB_OUTPUT
+          "tag_name=$tagName" >> $env:GITHUB_OUTPUT
+          "channel=$channel" >> $env:GITHUB_OUTPUT
+          "commit_sha=$commitSha" >> $env:GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate build config
+        shell: pwsh
+        env:
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          SENTRY_ENV: "prod"
+          BUILD_COMMIT: ${{ steps.meta.outputs.commit_sha }}
+          SENTRY_DSN_TEST: ${{ secrets.SENTRY_DSN_NEXU_DESKTOP_TEST }}
+          SENTRY_DSN_PROD: ${{ secrets.SENTRY_DSN_NEXU_DESKTOP_PROD }}
+        run: |
+          $env:BUILT_AT = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+          @'
+          const { version } = require("./apps/desktop/package.json");
+          const sentryDsnByEnvironment = {
+            test: process.env.SENTRY_DSN_TEST,
+            prod: process.env.SENTRY_DSN_PROD,
+          };
+          const sentryDsn = sentryDsnByEnvironment[process.env.SENTRY_ENV] ?? "";
+          const config = {
+            NEXU_CLOUD_URL: "https://api.clawpi.app:9443",
+            NEXU_LINK_URL: "https://api.clawpi.app:9443",
+            NEXU_SENTRY_ENV: process.env.SENTRY_ENV,
+            CLAWPI_UPDATE_FEED_URL: "",
+            NEXU_DESKTOP_APP_VERSION: version,
+            NEXU_DESKTOP_UPDATE_CHANNEL: process.env.CHANNEL,
+            NEXU_DESKTOP_BUILD_SOURCE: "release",
+            NEXU_DESKTOP_BUILD_BRANCH: "",
+            NEXU_DESKTOP_BUILD_COMMIT: process.env.BUILD_COMMIT,
+            NEXU_DESKTOP_BUILD_TIME: process.env.BUILT_AT,
+          };
+          if (sentryDsn) {
+            config.NEXU_DESKTOP_SENTRY_DSN = sentryDsn;
+          }
+          require("fs").writeFileSync(
+            "apps/desktop/build-config.json",
+            JSON.stringify(config, null, 2) + "\n"
+          );
+          '@ | node
+
+          Write-Host "[build] Generated build-config.json for Windows release:"
+          Get-Content apps/desktop/build-config.json
+
+      - name: Build Windows installer
+        env:
+          NEXU_DESKTOP_TARGET_ARCH: x64
+          SENTRY_AUTH_TOKEN: ${{ secrets.SENTRY_AUTH_TOKEN }}
+          VITE_AMPLITUDE_API_KEY: ${{ secrets.AMPLITUDE_API_KEY }}
+          AMPLITUDE_API_KEY: ${{ secrets.AMPLITUDE_API_KEY }}
+        run: pnpm --filter @nexu/desktop dist:win
+
+      - name: Prepare release artifacts
+        id: artifacts
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+        run: |
+          $artifactDir = "apps/desktop/release-artifacts-win"
+          New-Item -ItemType Directory -Force $artifactDir | Out-Null
+          Remove-Item "$artifactDir/*" -Force -ErrorAction SilentlyContinue
+
+          $installerName = "claw-pi-setup-$env:VERSION-x64.exe"
+          $installerPath = "apps/desktop/release/$installerName"
+          $blockmapPath = "$installerPath.blockmap"
+          $latestPath = "apps/desktop/release/latest.yml"
+
+          foreach ($path in @($installerPath, $blockmapPath, $latestPath)) {
+            if (-not (Test-Path -LiteralPath $path)) {
+              throw "Missing Windows release artifact: $path"
+            }
+          }
+
+          Copy-Item -LiteralPath $installerPath -Destination $artifactDir
+          Copy-Item -LiteralPath $blockmapPath -Destination $artifactDir
+          Copy-Item -LiteralPath $latestPath -Destination $artifactDir
+
+          $checksumName = "desktop-win-x64-sha256.txt"
+          $checksumPath = Join-Path $artifactDir $checksumName
+          Get-ChildItem $artifactDir -File |
+            Where-Object { $_.Name -ne $checksumName } |
+            ForEach-Object {
+              $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $_.FullName).Hash.ToLowerInvariant()
+              "$hash  $($_.Name)"
+            } | Set-Content -Encoding ascii $checksumPath
+
+          "installer_name=$installerName" >> $env:GITHUB_OUTPUT
+          "blockmap_name=$installerName.blockmap" >> $env:GITHUB_OUTPUT
+          "checksum_name=$checksumName" >> $env:GITHUB_OUTPUT
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-${{ steps.meta.outputs.tag_name }}-win-x64
+          path: apps/desktop/release-artifacts-win/*
+          if-no-files-found: error
+
+      - name: Upload assets to GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          INSTALLER_NAME: ${{ steps.artifacts.outputs.installer_name }}
+          BLOCKMAP_NAME: ${{ steps.artifacts.outputs.blockmap_name }}
+          CHECKSUM_NAME: ${{ steps.artifacts.outputs.checksum_name }}
+        run: |
+          gh release view $env:TAG_NAME | Out-Null
+          gh release upload $env:TAG_NAME `
+            "apps/desktop/release-artifacts-win/$env:INSTALLER_NAME" `
+            "apps/desktop/release-artifacts-win/$env:BLOCKMAP_NAME" `
+            "apps/desktop/release-artifacts-win/latest.yml" `
+            "apps/desktop/release-artifacts-win/$env:CHECKSUM_NAME" `
+            --clobber
+
+      - name: Upload to Cloudflare R2
+        shell: pwsh
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          INSTALLER_NAME: ${{ steps.artifacts.outputs.installer_name }}
+          BLOCKMAP_NAME: ${{ steps.artifacts.outputs.blockmap_name }}
+          CHECKSUM_NAME: ${{ steps.artifacts.outputs.checksum_name }}
+        run: |
+          $prefix = "$env:CHANNEL/win/x64"
+          $artifactDir = "apps/desktop/release-artifacts-win"
+          $artifacts = @(
+            $env:INSTALLER_NAME,
+            $env:BLOCKMAP_NAME,
+            $env:CHECKSUM_NAME,
+            "latest.yml"
+          )
+
+          foreach ($artifact in $artifacts) {
+            Write-Host "[r2] Uploading $artifact to $prefix/$artifact"
+            npx wrangler r2 object put "nexu-desktop-releases/$prefix/$artifact" `
+              --file "$artifactDir/$artifact" `
+              --remote
+            if ($LASTEXITCODE -ne 0) {
+              throw "R2 upload failed for $artifact"
+            }
+          }
+
+  trigger-e2e:
+    needs: release-windows
     runs-on: ubuntu-latest
-    if: always() && needs.release.result == 'success'
+    if: always() && needs.release-windows.result == 'success'
     steps:
       - name: Resolve channel
         id: channel

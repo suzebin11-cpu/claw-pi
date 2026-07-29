@@ -700,7 +700,7 @@ describe("setChannel", () => {
 });
 
 describe("setSource", () => {
-  it("reconfigures feed URL to github provider when source is github", async () => {
+  it("keeps using the R2 fallback when source is github", async () => {
     const { mgr } = await createManager();
 
     mockAutoUpdater.setFeedURL.mockClear();
@@ -708,9 +708,8 @@ describe("setSource", () => {
     mgr.setSource("github");
 
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
-      provider: "github",
-      owner: "nexu-io",
-      repo: "nexu",
+      provider: "generic",
+      url: expect.stringContaining("desktop-releases.nexu.io/stable/win/x64"),
     });
   });
 
@@ -745,15 +744,14 @@ describe("configureFeedUrl (via constructor)", () => {
     });
   });
 
-  it("sets github provider when resolved feed URL is github://", async () => {
+  it("uses the R2 fallback when source is github", async () => {
     mockAutoUpdater.setFeedURL.mockClear();
 
     await createManager(undefined, { source: "github", channel: "stable" });
 
     expect(mockAutoUpdater.setFeedURL).toHaveBeenCalledWith({
-      provider: "github",
-      owner: "nexu-io",
-      repo: "nexu",
+      provider: "generic",
+      url: expect.stringContaining("desktop-releases.nexu.io/stable/win/x64"),
     });
   });
 

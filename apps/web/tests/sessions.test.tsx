@@ -216,9 +216,8 @@ describe("SessionsPage", () => {
     );
 
     expect(markup).not.toContain('<img src="https://example.com/pixel"');
-    expect(markup).toContain(
-      '!<a href="https://example.com/pixel" target="_blank" rel="noopener noreferrer nofollow">tracker</a>',
-    );
+    expect(markup).toContain("https://example.com/pixel");
+    expect(markup).not.toContain('href="https://example.com/pixel"');
   });
 
   it("strips conversation metadata blocks before rendering user text", () => {
@@ -264,6 +263,71 @@ describe("SessionsPage", () => {
     expect(markup).toContain("测试");
     expect(markup).not.toContain("Conversation info (untrusted metadata)");
     expect(markup).not.toContain("openclaw-weixin:1774176546217-9644087e");
+  });
+
+  it("hides 龙虾工作台 injected system prompts and shows only the user text", () => {
+    const queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    queryClient.setQueryData(["session-meta", "sess-workbench"], {
+      id: "sess-workbench",
+      title: "工作台",
+      channelType: "web",
+      messageCount: 2,
+      lastMessageAt: "2026-03-22T10:49:06.000Z",
+      metadata: {},
+    });
+    const wrapped = [
+      "以下为龙虾工作台注入的运行约束，优先级高于用户当前消息：",
+      "你是 OpenClaw 龙虾 agent，必须通过 OpenClaw runner 完成工作台任务；不要退化成普通聊天模型。\n\n权限=完全访问：用户要求操作电脑、读写文件时，直接使用可用工具执行。",
+      "用户当前消息如下：",
+      [
+        "以下是龙虾工作台传入的上下文，只用于理解当前问题；真正要回答的是最后的用户当前消息。",
+        "最近对话：\n用户：帮我生成一张写真照",
+        "用户当前消息：\n帮我换一个背景",
+      ].join("\n\n"),
+    ].join("\n\n");
+    queryClient.setQueryData(["chat-history", "sess-workbench"], {
+      messages: [
+        {
+          id: "msg-wrapped",
+          role: "user",
+          content: wrapped,
+          timestamp: new Date("2026-03-22T10:49:06.000Z").getTime(),
+          createdAt: "2026-03-22T10:49:06.000Z",
+        },
+        {
+          id: "msg-directive",
+          role: "user",
+          content:
+            "继续执行当前任务。不要只回复计划、状态或道歉；需要本机/文件/网页/生图操作时，立即调用 OpenClaw 可用工具完成。",
+          timestamp: new Date("2026-03-22T10:50:06.000Z").getTime(),
+          createdAt: "2026-03-22T10:50:06.000Z",
+        },
+      ],
+    });
+
+    const markup = renderToStaticMarkup(
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter initialEntries={["/workspace/sessions/sess-workbench"]}>
+          <Routes>
+            <Route path="/workspace/sessions/:id" element={<SessionsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+
+    expect(markup).toContain("帮我换一个背景");
+    expect(markup).not.toContain("龙虾工作台注入的运行约束");
+    expect(markup).not.toContain("权限=完全访问");
+    expect(markup).not.toContain("OpenClaw runner");
+    // The pure auto-continue directive collapses to empty text and is filtered.
+    expect(markup).not.toContain("继续执行当前任务");
   });
 
   it("renders a Feishu deep link when the backing channel config is available", () => {

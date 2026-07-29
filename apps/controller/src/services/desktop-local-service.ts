@@ -19,6 +19,21 @@ function maskActivationCode(code: string): string {
   return `${code.slice(0, 4)}...${code.slice(-4)}`;
 }
 
+function parseRemoteError(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+    if (typeof parsed.error === "string") {
+      return parseRemoteError(parsed.error);
+    }
+    if (typeof parsed.message === "string") {
+      return parsed.message;
+    }
+  } catch {
+    // The upstream may return a plain-text error.
+  }
+  return text;
+}
+
 export class DesktopLocalService {
   constructor(
     private readonly configStore: NexuConfigStore,
@@ -304,12 +319,18 @@ export class DesktopLocalService {
         timeoutMs: 10_000,
       });
     } catch {
-      return { ok: false, error: "Server unreachable" };
+      return {
+        ok: false,
+        error: "Server unreachable",
+      };
     }
 
     if (!res.ok) {
       const text = await res.text().catch(() => "Unknown error");
-      return { ok: false, error: text };
+      return {
+        ok: false,
+        error: parseRemoteError(text),
+      };
     }
 
     const data = (await res.json()) as {
@@ -319,7 +340,10 @@ export class DesktopLocalService {
       error?: string;
     };
     if (data.error) {
-      return { ok: false, error: data.error };
+      return {
+        ok: false,
+        error: parseRemoteError(data.error),
+      };
     }
 
     return {

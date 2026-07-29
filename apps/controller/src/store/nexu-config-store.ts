@@ -2417,6 +2417,12 @@ export class NexuConfigStore {
     return activation.jwt;
   }
 
+  async getActivationApiKey(): Promise<string | null> {
+    const config = await this.getConfig();
+    const activation = readDesktopActivation(config);
+    return activation.apiKey;
+  }
+
   async setActivationState(input: {
     activated: boolean;
     email: string | null;

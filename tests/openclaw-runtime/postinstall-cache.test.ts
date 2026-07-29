@@ -6,6 +6,11 @@ import {
   cacheInputs,
   computeFingerprint,
 } from "../../openclaw-runtime/postinstall-cache.mjs";
+import {
+  criticalRuntimeFiles,
+  findMissingRuntimeFiles,
+  hasCompleteRuntimeInstall,
+} from "../../openclaw-runtime/runtime-integrity.mjs";
 
 const tempDirs = [] as string[];
 
@@ -66,5 +71,32 @@ describe("openclaw-runtime postinstall cache fingerprint", () => {
 
     const after = await computeFingerprint(runtimeDir);
     expect(after).not.toBe(before);
+  });
+});
+
+describe("openclaw-runtime integrity", () => {
+  it("reports missing critical files and accepts a complete runtime", async () => {
+    const runtimeDir = await mkdtemp(
+      path.join(tmpdir(), "openclaw-runtime-integrity-"),
+    );
+    tempDirs.push(runtimeDir);
+
+    expect(await hasCompleteRuntimeInstall(runtimeDir)).toBe(false);
+    expect(await findMissingRuntimeFiles(runtimeDir)).toEqual(
+      criticalRuntimeFiles,
+    );
+
+    for (const relativePath of criticalRuntimeFiles) {
+      const absolutePath = path.join(runtimeDir, relativePath);
+      if (path.extname(relativePath) === "") {
+        await mkdir(absolutePath, { recursive: true });
+      } else {
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, "fixture\n", "utf8");
+      }
+    }
+
+    expect(await findMissingRuntimeFiles(runtimeDir)).toEqual([]);
+    expect(await hasCompleteRuntimeInstall(runtimeDir)).toBe(true);
   });
 });

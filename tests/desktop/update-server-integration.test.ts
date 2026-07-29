@@ -242,7 +242,7 @@ describe("Update server integration", () => {
       arch: "x64",
     });
 
-    expect(url).toBe("https://api.clawpi.app:9443/updates/stable/x64");
+    expect(url).toBe("https://api.clawpi.app:9443/updates/stable/win/x64");
   });
 
   // -----------------------------------------------------------------------

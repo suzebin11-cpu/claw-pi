@@ -96,6 +96,12 @@ export class OpenClawAuthProfilesStore {
     return path.join(workspace, "agent", "auth-profiles.json");
   }
 
+  authProfilesPathForAgentId(agentId: string): string {
+    return this.authProfilesPathForWorkspace(
+      path.join(this.env.openclawStateDir, "agents", agentId),
+    );
+  }
+
   async readAuthProfiles(
     filePath: string,
     options?: { missingOk?: boolean },

@@ -492,6 +492,16 @@ export function registerDesktopRoutes(
       const modelReady =
         effectiveModelId !== null &&
         (configuredModelId === null || effectiveModelId === configuredModelId);
+      const gatewayConnected = container.gatewayService.isConnected();
+      // Listening on the Controller port is not enough for desktop features:
+      // the OpenClaw WS handshake and runtime model state must be complete.
+      const ready =
+        runtime.ok &&
+        container.runtimeState.bootPhase === "ready" &&
+        container.runtimeState.status === "active" &&
+        container.runtimeState.gatewayStatus === "active" &&
+        gatewayConnected &&
+        modelReady;
       const bots = await container.configStore.listBots();
       const preferredBot =
         bots.find((bot) => bot.status === "active") ??
@@ -509,7 +519,7 @@ export function registerDesktopRoutes(
 
       return c.json(
         {
-          ready: true,
+          ready,
           workspacePath: preferredBot
             ? path.join(
                 container.env.openclawStateDir,
@@ -519,7 +529,7 @@ export function registerDesktopRoutes(
             : path.join(container.env.openclawStateDir, "agents"),
           runtime,
           status: container.runtimeState.status,
-          gatewayConnected: container.gatewayService.isConnected(),
+          gatewayConnected,
           model: {
             ready: modelReady,
             defaultModelId: configuredModelId,

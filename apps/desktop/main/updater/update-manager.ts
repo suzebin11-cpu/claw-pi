@@ -30,21 +30,32 @@ export interface UpdateManagerOptions {
   };
 }
 
-function getMacFeedArch(arch: string = process.arch): "arm64" | "x64" {
+function getFeedArch(arch: string = process.arch): "arm64" | "x64" {
   if (arch === "x64" || arch === "arm64") {
     return arch;
   }
 
   throw new Error(
-    `[update-manager] Unsupported mac architecture "${arch}". Expected "x64" or "arm64".`,
+    `[update-manager] Unsupported desktop architecture "${arch}". Expected "x64" or "arm64".`,
   );
 }
 
 function getDefaultR2FeedUrl(
   channel: UpdateChannelName,
   arch: string = process.arch,
+  platform: NodeJS.Platform = process.platform,
 ): string {
-  return `${R2_BASE_URL}/${channel}/${getMacFeedArch(arch)}`;
+  const feedArch = getFeedArch(arch);
+  if (platform === "win32") {
+    return `${R2_BASE_URL}/${channel}/win/${feedArch}`;
+  }
+  if (platform === "darwin") {
+    return `${R2_BASE_URL}/${channel}/${feedArch}`;
+  }
+
+  throw new Error(
+    `[update-manager] Unsupported desktop platform "${platform}". Expected "darwin" or "win32".`,
+  );
 }
 
 function sanitizeFeedUrl(feedUrl: string): string {
@@ -69,13 +80,14 @@ function resolveUpdateFeedUrl(options: {
   channel: UpdateChannelName;
   feedUrl: string | null;
   arch?: string;
+  platform?: NodeJS.Platform;
 }): string {
   const overrideUrl = process.env.CLAWPI_UPDATE_FEED_URL ?? options.feedUrl;
   if (overrideUrl) {
     return overrideUrl;
   }
 
-  return getDefaultR2FeedUrl(options.channel, options.arch);
+  return getDefaultR2FeedUrl(options.channel, options.arch, options.platform);
 }
 
 export function resolveUpdateFeedUrlForTests(options: {
@@ -83,6 +95,7 @@ export function resolveUpdateFeedUrlForTests(options: {
   channel: UpdateChannelName;
   feedUrl: string | null;
   arch?: string;
+  platform?: NodeJS.Platform;
 }): string {
   return resolveUpdateFeedUrl(options);
 }

@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { computeFingerprint } from "./postinstall-cache.mjs";
+import { hasCompleteRuntimeInstall } from "./runtime-integrity.mjs";
 import { exists } from "./utils.mjs";
 
 const runtimeDir = path.dirname(fileURLToPath(import.meta.url));
@@ -11,24 +12,6 @@ const nodeModulesDir = path.join(runtimeDir, "node_modules");
 const cacheFileName = ".postinstall-cache.json";
 const cacheFilePath = path.join(runtimeDir, cacheFileName);
 const lockfilePath = path.join(runtimeDir, "package-lock.json");
-const criticalRuntimeFiles = [
-  path.join("node_modules", "openclaw", "dist"),
-  path.join("node_modules", "openclaw", "package.json"),
-  path.join("node_modules", "chalk", "package.json"),
-  path.join("node_modules", "chalk", "source", "index.js"),
-  path.join("node_modules", "tslog", "package.json"),
-  path.join("node_modules", "tslog", "esm", "index.js"),
-  path.join("node_modules", "@whiskeysockets", "baileys", "lib", "index.js"),
-  path.join(
-    "node_modules",
-    "@whiskeysockets",
-    "baileys",
-    "WAProto",
-    "index.js",
-  ),
-  path.join("node_modules", "@whiskeysockets", "baileys", "package.json"),
-];
-
 async function readCachedFingerprint() {
   if (!(await exists(cacheFilePath))) {
     return null;
@@ -81,11 +64,28 @@ async function run(command, args, options = {}) {
 
 function resolveGitBashPath() {
   if (process.platform !== "win32") return null;
-  const candidates = [
+  const candidates = [];
+  try {
+    const gitPaths = execFileSync("where.exe", ["git"], {
+      encoding: "utf8",
+      windowsHide: true,
+    })
+      .split(/\r?\n/u)
+      .map((entry) => entry.trim())
+      .filter(Boolean);
+    for (const gitPath of gitPaths) {
+      candidates.push(
+        path.resolve(path.dirname(gitPath), "..", "bin", "bash.exe"),
+      );
+    }
+  } catch {
+    // Fall through to conventional install locations.
+  }
+  candidates.push(
     "C:\\Program Files\\Git\\bin\\bash.exe",
     "C:\\Program Files\\Git\\usr\\bin\\bash.exe",
     "C:\\Program Files (x86)\\Git\\bin\\bash.exe",
-  ];
+  );
   return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
@@ -136,7 +136,7 @@ async function installRuntime() {
       "openclaw-runtime npm install failed; verifying critical files before giving up.",
     );
     console.warn(error instanceof Error ? error.message : String(error));
-    if (await hasCompleteRuntimeInstall()) {
+    if (await hasCompleteRuntimeInstall(runtimeDir)) {
       console.warn(
         "openclaw-runtime critical files are present, treating npm install exit code as non-fatal (likely a third-party postinstall script issue on Windows).",
       );
@@ -146,21 +146,12 @@ async function installRuntime() {
   }
 }
 
-async function hasCompleteRuntimeInstall() {
-  for (const relativePath of criticalRuntimeFiles) {
-    if (!(await exists(path.join(runtimeDir, relativePath)))) {
-      return false;
-    }
-  }
-  return true;
-}
-
 try {
   const fingerprint = await computeFingerprint(runtimeDir);
   const cachedFingerprint = await readCachedFingerprint();
   const hasNodeModules = await exists(nodeModulesDir);
   const hasCompleteRuntime = hasNodeModules
-    ? await hasCompleteRuntimeInstall()
+    ? await hasCompleteRuntimeInstall(runtimeDir)
     : false;
 
   if (
@@ -188,6 +179,11 @@ try {
 
   await installRuntime();
   await run(process.execPath, ["./prune-runtime.mjs"]);
+  if (!(await hasCompleteRuntimeInstall(runtimeDir))) {
+    throw new Error(
+      "openclaw-runtime install or pruning left required runtime files missing.",
+    );
+  }
 
   await writeFile(
     cacheFilePath,
