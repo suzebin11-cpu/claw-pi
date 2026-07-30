@@ -603,6 +603,17 @@ Result: the sidecar preparation step patches the Control UI bundle to allow only
 |Sidecar
 |随 Electron portable 包一起发布的 Controller、Web、OpenClaw runtime。
 |===
+=== Windows update delivery note (2026-07-30)
+
+The Windows update endpoint at `https://api.clawpi.app:9443/updates/` is
+served by Nginx as an HTTP 302 redirect to the public Cloudflare R2 bucket.
+The Ubuntu server does not proxy or buffer release binaries. This avoids
+making desktop update availability depend on the server's outbound TLS path
+to R2 while keeping the existing client feed URL stable.
+
+This delivery decision currently applies to Windows only. macOS update
+delivery remains outside the scope of this change.
+
 == ADR-010: HTTP listening is not business readiness
 
 *Status:* accepted
