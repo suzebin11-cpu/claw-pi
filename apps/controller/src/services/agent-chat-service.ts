@@ -91,6 +91,8 @@ type PdfJsModule = {
 };
 
 const AGENT_CHAT_TIMEOUT_MS = 600_000;
+const AGENT_CHAT_RETRY_TIMEOUT_MS = 90_000;
+const AGENT_CHAT_HEARTBEAT_MS = 15_000;
 const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS = 6;
@@ -892,7 +894,16 @@ export class AgentChatService {
     let pendingError: Error | null = null;
     let timeout: NodeJS.Timeout | null = null;
     let emptyFinalRetryTimeout: NodeJS.Timeout | null = null;
+    let heartbeat: NodeJS.Timeout | null = null;
     let unsubscribe: (() => void) | null = null;
+    let unsubscribeDisconnected: (() => void) | null = null;
+
+    const clearEmptyFinalRetryTimeout = () => {
+      if (emptyFinalRetryTimeout) {
+        clearTimeout(emptyFinalRetryTimeout);
+        emptyFinalRetryTimeout = null;
+      }
+    };
 
     const sendAgentRun = async (
       requestRunId: string,
@@ -933,12 +944,15 @@ export class AgentChatService {
         clearTimeout(timeout);
         timeout = null;
       }
-      if (emptyFinalRetryTimeout) {
-        clearTimeout(emptyFinalRetryTimeout);
-        emptyFinalRetryTimeout = null;
+      clearEmptyFinalRetryTimeout();
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = null;
       }
       unsubscribe?.();
       unsubscribe = null;
+      unsubscribeDisconnected?.();
+      unsubscribeDisconnected = null;
       logger.info(
         {
           route: "agentChat.stream",
@@ -979,12 +993,15 @@ export class AgentChatService {
         clearTimeout(timeout);
         timeout = null;
       }
-      if (emptyFinalRetryTimeout) {
-        clearTimeout(emptyFinalRetryTimeout);
-        emptyFinalRetryTimeout = null;
+      clearEmptyFinalRetryTimeout();
+      if (heartbeat) {
+        clearInterval(heartbeat);
+        heartbeat = null;
       }
       unsubscribe?.();
       unsubscribe = null;
+      unsubscribeDisconnected?.();
+      unsubscribeDisconnected = null;
       logger.warn(
         {
           route: "agentChat.stream",
@@ -998,7 +1015,25 @@ export class AgentChatService {
         "agent_chat_stream_fail",
       );
       if (controllerRef) {
-        controllerRef.error(error);
+        try {
+          controllerRef.enqueue(
+            toSseChunk({
+              error: {
+                message: error.message,
+                type: "agent_chat_error",
+              },
+            }),
+          );
+          controllerRef.enqueue(
+            toSseChunk({
+              choices: [{ delta: {}, finish_reason: "error" }],
+            }),
+          );
+          controllerRef.enqueue(toDoneChunk());
+          controllerRef.close();
+        } catch {
+          // Stream may already be cancelled by the browser.
+        }
       } else {
         pendingError = error;
       }
@@ -1100,14 +1135,23 @@ export class AgentChatService {
         payloadRunId === null ||
         payloadRunId === runId ||
         payloadRunId === activeRunId;
+      if (
+        isActiveRun &&
+        waitingForSessionContinuation &&
+        payloadRunId === activeRunId
+      ) {
+        waitingForSessionContinuation = false;
+        clearEmptyFinalRetryTimeout();
+      }
       if (!isActiveRun) {
-        if (waitingForSessionContinuation && messageText) {
+        if (
+          waitingForSessionContinuation &&
+          payloadRunId &&
+          ["delta", "final", "error", "aborted"].includes(state)
+        ) {
           activeRunId = payloadRunId;
           waitingForSessionContinuation = false;
-          if (emptyFinalRetryTimeout) {
-            clearTimeout(emptyFinalRetryTimeout);
-            emptyFinalRetryTimeout = null;
-          }
+          clearEmptyFinalRetryTimeout();
           logger.info(
             {
               route: "agentChat.stream",
@@ -1121,6 +1165,7 @@ export class AgentChatService {
             },
             "agent_chat_adopt_session_run",
           );
+          clearEmptyFinalRetryTimeout();
         } else {
           return;
         }
@@ -1256,12 +1301,23 @@ export class AgentChatService {
                     ? "agent_chat_empty_attachment_retry_failed"
                     : "agent_chat_empty_final_retry_failed",
                 );
-                finish();
+                fail(
+                  error instanceof Error
+                    ? error
+                    : new Error(String(error)),
+                );
               });
+            emptyFinalRetryTimeout = setTimeout(() => {
+              fail(
+                new Error(
+                  "OpenClaw agent returned no response while retrying the empty result",
+                ),
+              );
+            }, AGENT_CHAT_RETRY_TIMEOUT_MS);
+            emptyFinalRetryTimeout.unref?.();
             return;
           }
           waitingForSessionContinuation = false;
-          writeText("没有收到有效回复，请重试。");
           logger.warn(
             {
               route: "agentChat.stream",
@@ -1275,7 +1331,11 @@ export class AgentChatService {
             },
             "agent_chat_empty_final_exhausted",
           );
-          finish();
+          fail(
+            new Error(
+              "OpenClaw agent returned an empty response after retries",
+            ),
+          );
           return;
         }
         if (
@@ -1342,8 +1402,20 @@ export class AgentChatService {
                 },
                 "agent_chat_auto_continue_failed",
               );
-              finish();
+              fail(
+                error instanceof Error
+                  ? error
+                  : new Error(String(error)),
+              );
             });
+          emptyFinalRetryTimeout = setTimeout(() => {
+            fail(
+              new Error(
+                "OpenClaw agent continuation produced no response in time",
+              ),
+            );
+          }, AGENT_CHAT_RETRY_TIMEOUT_MS);
+          emptyFinalRetryTimeout.unref?.();
           return;
         }
         finish();
@@ -1380,6 +1452,11 @@ export class AgentChatService {
     timeout.unref?.();
 
     unsubscribe = this.wsClient.onEvent(handleChatEvent);
+    unsubscribeDisconnected = this.wsClient.onDisconnected(() => {
+      if (!settled && activeRunId !== null && !waitingForSessionContinuation) {
+        fail(new Error("OpenClaw gateway disconnected during agent chat"));
+      }
+    });
 
     input.signal?.addEventListener(
       "abort",
@@ -1405,8 +1482,34 @@ export class AgentChatService {
       start(controller) {
         controllerRef = controller;
         controller.enqueue(toSseComment("openclaw-stream-open"));
+        heartbeat = setInterval(() => {
+          if (!settled) {
+            try {
+              controller.enqueue(toSseComment("openclaw-stream-heartbeat"));
+            } catch {
+              // Stream may already be cancelled by the browser.
+            }
+          }
+        }, AGENT_CHAT_HEARTBEAT_MS);
+        heartbeat.unref?.();
         if (pendingError) {
-          controller.error(pendingError);
+          controller.enqueue(
+            toSseChunk({
+              error: {
+                message: pendingError.message,
+                type: "agent_chat_error",
+              },
+            }),
+          );
+          controller.enqueue(
+            toSseChunk({
+              choices: [{ delta: {}, finish_reason: "error" }],
+            }),
+          );
+          controller.enqueue(toDoneChunk());
+          clearInterval(heartbeat);
+          heartbeat = null;
+          controller.close();
           return;
         }
         for (const chunk of queuedChunks.splice(0)) {

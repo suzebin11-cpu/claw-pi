@@ -372,6 +372,7 @@ export class OpenClawWsClient {
   private lastClose: OpenClawWsCloseSnapshot | null = null;
   private eventListeners = new Set<(event: OpenClawGatewayEvent) => void>();
   private onConnectedCallback: (() => void) | null = null;
+  private disconnectedListeners = new Set<() => void>();
   private onGatewayShutdownCallback:
     | ((payload: {
         restartExpectedMs: number | null;
@@ -408,6 +409,11 @@ export class OpenClawWsClient {
   /** Register a callback fired once each time the WS handshake completes. */
   onConnected(cb: () => void): void {
     this.onConnectedCallback = cb;
+  }
+
+  onDisconnected(cb: () => void): () => void {
+    this.disconnectedListeners.add(cb);
+    return () => this.disconnectedListeners.delete(cb);
   }
 
   onGatewayShutdown(
@@ -890,6 +896,7 @@ export class OpenClawWsClient {
   }
 
   private cleanup(): void {
+    const wasConnected = this._connected;
     this._connected = false;
     this.clearHandshakeTimer();
     if (this.tickTimer) {
@@ -907,6 +914,18 @@ export class OpenClawWsClient {
       p.reject(new Error("openclaw gateway disconnected"));
     }
     this.pending.clear();
+    if (wasConnected) {
+      for (const listener of this.disconnectedListeners) {
+        try {
+          listener();
+        } catch (err) {
+          logger.warn(
+            { error: err instanceof Error ? err.message : String(err) },
+            "openclaw_ws_on_disconnected_callback_error",
+          );
+        }
+      }
+    }
   }
 
   private clearHandshakeTimer(): void {

@@ -49,6 +49,8 @@ const HOP_BY_HOP = new Set([
 const PROXY_RETRY_ATTEMPTS = 10;
 const PROXY_RETRY_DELAY_MS = 500;
 const PROXY_TIMEOUT_MS = 120_000;
+const PROXY_STREAM_TIMEOUT_MS = 900_000;
+const AGENT_CHAT_STREAM_PATH = "/api/internal/agent-chat/stream";
 const DESKTOP_READY_PATH = "/api/internal/desktop/ready";
 
 async function sleep(ms) {
@@ -78,7 +80,10 @@ function proxyOnce(inReq, outRes, pathname, pipeBody) {
         method: inReq.method,
         headers: forwardedHeaders,
         agent: proxyAgent,
-        timeout: PROXY_TIMEOUT_MS,
+        timeout:
+          pathname === AGENT_CHAT_STREAM_PATH
+            ? PROXY_STREAM_TIMEOUT_MS
+            : PROXY_TIMEOUT_MS,
       },
       (upRes) => {
         const responseHeaders = {};

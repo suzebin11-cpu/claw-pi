@@ -15,6 +15,7 @@ class FakeOpenClawWsClient {
   connected = true;
   requests: RequestRecord[] = [];
   listeners = new Set<(event: OpenClawGatewayEvent) => void>();
+  disconnectedListeners = new Set<() => void>();
 
   isConnected(): boolean {
     return this.connected;
@@ -23,6 +24,11 @@ class FakeOpenClawWsClient {
   onEvent(listener: (event: OpenClawGatewayEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  onDisconnected(listener: () => void): () => void {
+    this.disconnectedListeners.add(listener);
+    return () => this.disconnectedListeners.delete(listener);
   }
 
   async request(
@@ -39,6 +45,13 @@ class FakeOpenClawWsClient {
   emit(event: OpenClawGatewayEvent): void {
     for (const listener of this.listeners) {
       listener(event);
+    }
+  }
+
+  emitDisconnected(): void {
+    this.connected = false;
+    for (const listener of this.disconnectedListeners) {
+      listener();
     }
   }
 }

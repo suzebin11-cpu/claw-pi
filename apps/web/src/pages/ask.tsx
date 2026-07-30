@@ -161,6 +161,8 @@ type LocalDesktopPermissionSettings = {
 
 type StreamedCompletionResult = {
   text: string;
+  error?: string;
+  finishReason?: string | null;
   usage?: {
     promptTokens?: number;
     completionTokens?: number;
@@ -191,6 +193,7 @@ const ASK_LOCAL_PERMISSIONS_STORAGE_KEY = "claw-pi.ask.localPermissions.v1";
 const INSUFFICIENT_BALANCE_MESSAGE = "余额不足，请及时充值";
 const AGENT_HISTORY_CONTEXT_CHARS = 5_000;
 const AGENT_HISTORY_CONTEXT_MESSAGES = 8;
+const MAX_AGENT_WORKBENCH_CHARS = 20_000;
 
 const DEFAULT_LOCAL_PERMISSIONS: LocalDesktopPermissionSettings = {
   mode: "full",
@@ -1182,6 +1185,43 @@ function buildAgentWorkbenchMessage(input: {
   ].join("\n\n");
 }
 
+function limitAgentWorkbenchMessage(input: {
+  message: string;
+  contextBlocks: string[];
+  currentBlock: string;
+}): string {
+  const message = input.message;
+  if (message.length <= MAX_AGENT_WORKBENCH_CHARS) return message;
+  const currentBlock = input.currentBlock;
+  if (currentBlock.length >= MAX_AGENT_WORKBENCH_CHARS) {
+    const truncationMarker = "\n...[current task truncated]...\n";
+    const available = Math.max(
+      1,
+      MAX_AGENT_WORKBENCH_CHARS - truncationMarker.length,
+    );
+    const headLength = Math.floor(MAX_AGENT_WORKBENCH_CHARS * 0.8);
+    const boundedHeadLength = Math.min(headLength, available);
+    const tailLength = available - boundedHeadLength;
+    return `${currentBlock.slice(0, boundedHeadLength)}${truncationMarker}${currentBlock.slice(-tailLength)}`;
+  }
+
+  let remaining = MAX_AGENT_WORKBENCH_CHARS - currentBlock.length;
+  const selectedContext: string[] = [];
+
+  for (const block of input.contextBlocks) {
+    if (!block.trim() || remaining <= 0) break;
+    const separatorLength = selectedContext.length > 0 ? 2 : 0;
+    const available = remaining - separatorLength;
+    if (available <= 0) break;
+    const bounded = block.slice(0, available);
+    if (!bounded.trim()) continue;
+    selectedContext.push(bounded);
+    remaining -= separatorLength + bounded.length;
+  }
+
+  return [...selectedContext, currentBlock].filter(Boolean).join("\n\n");
+}
+
 async function readStreamedCompletion(
   response: Response,
   onDelta: (delta: string) => void,
@@ -1194,6 +1234,8 @@ async function readStreamedCompletion(
   const decoder = new TextDecoder();
   let buffer = "";
   let assistantText = "";
+  let errorMessage: string | undefined;
+  let finishReason: string | null | undefined;
   let usage: StreamedCompletionResult["usage"];
 
   while (true) {
@@ -1216,13 +1258,23 @@ async function readStreamedCompletion(
           choices?: Array<{
             delta?: { content?: string };
             message?: { content?: string };
+            finish_reason?: string | null;
           }>;
           usage?: {
             prompt_tokens?: number;
             completion_tokens?: number;
             total_tokens?: number;
           };
+          error?: { message?: string } | string;
         };
+        if (parsed.error) {
+          errorMessage =
+            typeof parsed.error === "string"
+              ? parsed.error
+              : parsed.error.message || "Agent stream failed";
+        }
+        finishReason =
+          parsed.choices?.[0]?.finish_reason ?? finishReason ?? null;
         if (parsed.usage) {
           usage = {
             promptTokens: parsed.usage.prompt_tokens,
@@ -1249,13 +1301,26 @@ async function readStreamedCompletion(
     if (data && data !== "[DONE]") {
       try {
         const parsed = JSON.parse(data) as {
-          choices?: Array<{ delta?: { content?: string } }>;
+          choices?: Array<{
+            delta?: { content?: string };
+            message?: { content?: string };
+            finish_reason?: string | null;
+          }>;
           usage?: {
             prompt_tokens?: number;
             completion_tokens?: number;
             total_tokens?: number;
           };
+          error?: { message?: string } | string;
         };
+        if (parsed.error) {
+          errorMessage =
+            typeof parsed.error === "string"
+              ? parsed.error
+              : parsed.error.message || "Agent stream failed";
+        }
+        finishReason =
+          parsed.choices?.[0]?.finish_reason ?? finishReason ?? null;
         if (parsed.usage) {
           usage = {
             promptTokens: parsed.usage.prompt_tokens,
@@ -1263,16 +1328,26 @@ async function readStreamedCompletion(
             totalTokens: parsed.usage.total_tokens,
           };
         }
-        const delta = parsed.choices?.[0]?.delta?.content ?? "";
-        assistantText += delta;
-        onDelta(delta);
+        const delta =
+          parsed.choices?.[0]?.delta?.content ??
+          parsed.choices?.[0]?.message?.content ??
+          "";
+        if (delta) {
+          assistantText += delta;
+          onDelta(delta);
+        }
       } catch {
         // Ignore malformed trailing chunks.
       }
     }
   }
 
-  return { text: assistantText, usage };
+  return {
+    text: assistantText,
+    error: errorMessage,
+    finishReason,
+    usage,
+  };
 }
 
 async function fetchAgentChatStream(input: {
@@ -1652,7 +1727,9 @@ export function AskPage() {
   const knowledgeFileInputRef = useRef<HTMLInputElement | null>(null);
   const renameInputRef = useRef<HTMLInputElement | null>(null);
   const endRef = useRef<HTMLDivElement | null>(null);
-  const compactingSessionIdsRef = useRef<Set<string>>(new Set());
+  const compactingSessionPromisesRef = useRef<Map<string, Promise<void>>>(
+    new Map(),
+  );
   const [input, setInput] = useState("");
   const [attachments, setAttachments] = useState<ChatAttachment[]>([]);
   const [knowledgeItems, setKnowledgeItems] =
@@ -1941,10 +2018,15 @@ export function AskPage() {
       contextSummary?: string;
       summarizedThroughMessageId?: string;
     }) => {
-      if (
-        !input.modelId ||
-        compactingSessionIdsRef.current.has(input.sessionId)
-      ) {
+      if (!input.modelId) {
+        return;
+      }
+
+      const existingPromise = compactingSessionPromisesRef.current.get(
+        input.sessionId,
+      );
+      if (existingPromise) {
+        await existingPromise;
         return;
       }
 
@@ -1954,43 +2036,56 @@ export function AskPage() {
       });
       if (!plan) return;
 
-      compactingSessionIdsRef.current.add(input.sessionId);
-      try {
-        const summary = await compactSessionContext({
-          modelId: input.modelId,
-          existingSummary: input.contextSummary,
-          messagesToCompact: plan.messagesToCompact,
-        });
-        if (!summary) return;
+      const compactionPromise = (async () => {
+        try {
+          const summary = await compactSessionContext({
+            modelId: input.modelId,
+            existingSummary: input.contextSummary,
+            messagesToCompact: plan.messagesToCompact,
+          });
+          if (!summary) return;
 
-        updateSessions((previous) =>
-          previous.map((session) => {
-            if (session.id !== input.sessionId) return session;
-            const nextIndex = session.messages.findIndex(
-              (message) => message.id === plan.summarizedThroughMessageId,
-            );
-            const currentIndex = session.summarizedThroughMessageId
-              ? session.messages.findIndex(
-                  (message) =>
-                    message.id === session.summarizedThroughMessageId,
-                )
-              : -1;
-            if (nextIndex < currentIndex) return session;
-            return {
-              ...session,
-              contextSummary: summary,
-              summarizedThroughMessageId: plan.summarizedThroughMessageId,
-              summaryUpdatedAt: Date.now(),
-            };
-          }),
-        );
-      } catch (error) {
-        console.warn(
-          "Ask context compaction failed",
-          error instanceof Error ? error.message : error,
-        );
+          updateSessions((previous) =>
+            previous.map((session) => {
+              if (session.id !== input.sessionId) return session;
+              const nextIndex = session.messages.findIndex(
+                (message) => message.id === plan.summarizedThroughMessageId,
+              );
+              const currentIndex = session.summarizedThroughMessageId
+                ? session.messages.findIndex(
+                    (message) =>
+                      message.id === session.summarizedThroughMessageId,
+                  )
+                : -1;
+              if (nextIndex < currentIndex) return session;
+              return {
+                ...session,
+                contextSummary: summary,
+                summarizedThroughMessageId: plan.summarizedThroughMessageId,
+                summaryUpdatedAt: Date.now(),
+              };
+            }),
+          );
+        } catch (error) {
+          console.warn(
+            "Ask context compaction failed",
+            error instanceof Error ? error.message : error,
+          );
+        }
+      })();
+      compactingSessionPromisesRef.current.set(
+        input.sessionId,
+        compactionPromise,
+      );
+      try {
+        await compactionPromise;
       } finally {
-        compactingSessionIdsRef.current.delete(input.sessionId);
+        if (
+          compactingSessionPromisesRef.current.get(input.sessionId) ===
+          compactionPromise
+        ) {
+          compactingSessionPromisesRef.current.delete(input.sessionId);
+        }
       }
     },
     [updateSessions],
@@ -2303,6 +2398,12 @@ export function AskPage() {
       return;
     }
 
+    await compactingSessionPromisesRef.current.get(targetSessionId);
+    const contextSession =
+      getAskSessions(t("ask.newChat")).find(
+        (session) => session.id === targetSessionId,
+      ) ?? activeSession;
+    const contextMessages = contextSession?.messages ?? messages;
     const text = buildDisplayText(input);
     if (!text.trim() && attachments.length === 0) return;
 
@@ -2310,7 +2411,7 @@ export function AskPage() {
       text,
       attachments,
       permissionMode: localPermissions.mode,
-      recentMessages: messages,
+      recentMessages: contextMessages,
     });
 
     if (!currentModelId) {
@@ -2337,15 +2438,15 @@ export function AskPage() {
     };
 
     const summaryMessage = buildSummaryContextMessage(
-      activeSession?.contextSummary,
+      contextSession?.contextSummary,
     );
     const knowledgeMessage = buildKnowledgeContextMessage({
       query: text,
       items: knowledgeItems,
     });
     const history = getMessagesAfterSummary(
-      messages,
-      activeSession?.summarizedThroughMessageId,
+      contextMessages,
+      contextSession?.summarizedThroughMessageId,
     )
       .map(serializeHistoryMessage)
       .filter((message): message is ChatCompletionMessage => message !== null)
@@ -2356,7 +2457,7 @@ export function AskPage() {
       ...history,
       buildCurrentUserPayload({ text, attachments }),
     ];
-    const recentHistoryContext = buildRecentHistoryContext(messages);
+    const recentHistoryContext = buildRecentHistoryContext(contextMessages);
     const agentWorkbenchMessage = buildAgentWorkbenchMessage({
       text,
       attachments,
@@ -2364,6 +2465,17 @@ export function AskPage() {
       knowledgeMessage,
       recentHistoryContext,
     });
+    const agentContextBlocks = [
+      summaryMessage
+        ? `鍘嗗彶鎽樿锛歕n${extractChatContentText(summaryMessage.content)}`
+        : "",
+      knowledgeMessage
+        ? `鐭ヨ瘑搴撹祫鏂欙細\n${extractChatContentText(knowledgeMessage.content)}`
+        : "",
+      recentHistoryContext
+        ? `鏈€杩戝璇濓細\n${recentHistoryContext}`
+        : "",
+    ].filter(Boolean);
     const inputTokenEstimate = estimateTokensFromMessages(payloadMessages);
 
     updateSessionMessages(targetSessionId, (previous, session) => ({
@@ -2391,7 +2503,13 @@ export function AskPage() {
       const response = await fetchAgentChatStream({
         sessionId: targetSessionId,
         modelId: currentModelId,
-        message: agentWorkbenchMessage,
+        message: limitAgentWorkbenchMessage({
+          message: agentWorkbenchMessage,
+          contextBlocks: agentContextBlocks,
+          currentBlock: `Current user message:\n${extractChatContentText(
+            buildCurrentUserPayload({ text, attachments }).content,
+          ) || text}`,
+        }),
         attachments,
         permissionMode: localPermissions.mode,
         executionMode:
@@ -2412,6 +2530,9 @@ export function AskPage() {
         }));
       });
 
+      if (completion.error) {
+        throw new Error(completion.error);
+      }
       const finalAssistantText = completion.text || t("ask.emptyResponse");
       const outputTokenEstimate = estimateTokensFromText(finalAssistantText);
       const inputTokens = completion.usage?.promptTokens ?? inputTokenEstimate;
@@ -2446,7 +2567,7 @@ export function AskPage() {
         sessionId: targetSessionId,
         modelId: currentModelId,
         messages: [
-          ...messages,
+          ...contextMessages,
           userMessage,
           {
             ...assistantMessage,
@@ -2454,8 +2575,8 @@ export function AskPage() {
             streaming: false,
           },
         ],
-        contextSummary: activeSession?.contextSummary,
-        summarizedThroughMessageId: activeSession?.summarizedThroughMessageId,
+        contextSummary: contextSession?.contextSummary,
+        summarizedThroughMessageId: contextSession?.summarizedThroughMessageId,
       });
       completedForNotification = true;
     } catch (error) {

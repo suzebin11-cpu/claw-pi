@@ -608,3 +608,80 @@ The ready endpoint keeps HTTP 200 for polling compatibility but reports
 `ready=false` until runtime health, runtime state, Gateway WS handshake, and
 model state are all ready. The desktop launchd probe parses the JSON field and
 continues polling.
+
+== Architecture reliability addendum (2026-07-30)
+
+=== 4. Solution strategy
+
+The workbench treats a long-running agent request as a streaming operation,
+not as a short HTTP request. The Controller emits periodic SSE heartbeat
+comments, preserves structured stream errors, and retries an empty final
+completion once when the upstream session is still usable. The desktop web
+sidecar allows up to 900 seconds for the agent stream so a slow tool workflow
+is not converted into a client-side timeout.
+
+The web workbench applies a deterministic context budget before sending an
+agent request. The current user task has highest priority and remains complete
+unless that task alone exceeds the budget. Remaining capacity is allocated to
+the session summary, enabled knowledge, and recent conversation in that order.
+Session compaction is serialized per session and the next request reloads the
+shared session cache after compaction completes.
+
+=== 6. Runtime flow
+
+The agent request path is:
+
+. Web workbench waits for any compaction already running for the target session.
+. Web workbench reloads the latest session snapshot and builds bounded context.
+. Controller opens or reuses the OpenClaw Gateway WebSocket session.
+. Controller forwards SSE heartbeats and structured errors while the agent runs.
+. OpenClaw WebSocket disconnects are propagated to the waiting request.
+. Web workbench renders stream deltas and turns a non-empty error or error
+  finish reason into an explicit failed assistant message.
+
+Both the normal SSE loop and the trailing buffered chunk accept delta content,
+message content, usage, finish reason, and structured error payloads.
+
+=== 7. Deployment and packaging
+
+The packaged desktop web sidecar uses a 900 second timeout for the agent
+stream proxy. This value is intentionally longer than the normal UI request
+timeout because OpenClaw may spend several minutes on file, browser, or
+workspace operations while still producing heartbeat traffic.
+
+=== 9. Architecture decisions
+
+==== ADR-011: Preserve the current task under context pressure
+
+*Status:* accepted
+
+The workbench does not use a final tail slice of the assembled prompt. A tail
+slice can remove the beginning of a long command and can also remove the
+instruction that identifies the current user message. The implementation
+allocates the budget by priority and only truncates the current task when the
+task itself is larger than the maximum workbench message size.
+
+==== ADR-012: Serialize session compaction
+
+*Status:* accepted
+
+Compaction is tracked as a promise per session rather than as a boolean set.
+Concurrent sends wait for the same promise, then reload the shared session
+snapshot. This prevents stale React closures from rebuilding a request with
+pre-compaction history.
+
+=== 10. Quality requirements
+
+Long agent tasks must remain observable while they are active, must expose
+upstream failures to the user, and must not lose the current task because of
+historical context growth. Reliability verification covers controller stream
+tests, Web TypeScript checking, Controller TypeScript checking, sidecar
+syntax checking, and whitespace validation.
+
+=== 11. Technical risks
+
+The main residual risks are provider-specific SSE dialects, upstream account
+concurrency limits, and model context limits that are smaller than the local
+20,000 character workbench budget. A future improvement should add request
+telemetry for context size, compaction wait time, first token latency, and
+stream termination reason so production failures can be ranked from evidence.
