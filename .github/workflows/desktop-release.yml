@@ -11,6 +11,11 @@ on:
         description: "Release tag (for example: v0.2.0)"
         required: true
         type: string
+      windows_only:
+        description: "Skip macOS and publish Windows only"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: write
@@ -22,6 +27,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.event_name != 'workflow_dispatch' || inputs.windows_only != true
     strategy:
       max-parallel: 1
       matrix:
