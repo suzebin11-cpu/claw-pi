@@ -18,7 +18,7 @@
     "openclaw-runtime:refresh-lock": "npm --prefix ./openclaw-runtime run refresh-lock",
     "openclaw-runtime:reinstall": "npm --prefix ./openclaw-runtime run clean && npm --prefix ./openclaw-runtime run install:pruned",
     "postinstall": "node scripts/postinstall.mjs",
-    "prepare": "cp scripts/pre-commit .git/hooks/pre-commit 2>/dev/null; chmod +x .git/hooks/pre-commit 2>/dev/null; true",
+    "prepare": "node scripts/install-git-hooks.mjs",
     "start": "./scripts/dev-launchd.sh start",
     "start:bg": "./scripts/dev-launchd-bg.sh start",
     "stop": "./scripts/dev-launchd.sh stop",

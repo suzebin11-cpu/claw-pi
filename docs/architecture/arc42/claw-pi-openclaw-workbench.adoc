@@ -318,6 +318,8 @@ pnpm --filter @nexu/desktop dist:win:portable
 
 正式发布以 `apps/desktop/package.json` 的版本号为闸门。更高版本进入 `main` 后，`.github/workflows/desktop-auto-tag.yml` 校验 SemVer 和单调递增关系并创建 `v{version}` 标签；标签触发 `.github/workflows/desktop-release.yml`，在 macOS 和 Windows runner 上完成签名构建。流水线先校验完整产物，再上传安装包、ZIP、`.blockmap` 和 SHA-256，最后上传 `latest.yml` 或 `latest-mac.yml`。只有公网更新源返回目标版本且所有必需对象均可访问后，GitHub Release 才从草稿转为正式发布。发布失败时客户端继续读取上一版清单；回滚也必须最后恢复上一版更新清单。
 
+根目录 `prepare` 脚本使用 Node.js 安装 Git hooks，并在 Git 元数据不可用时容忍跳过，确保 Windows runner 和无 `.git` 的归档构建不会因 Unix 专用 `cp/chmod` 命令失败而阻断桌面发布。
+
 == 8. 横切概念
 
 === 8.1 权限模式
