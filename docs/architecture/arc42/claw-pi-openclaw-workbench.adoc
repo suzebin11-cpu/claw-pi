@@ -302,6 +302,12 @@ Windows 本地开发验收可使用 portable 目录，正式发布使用 NSIS �
 
 已安装的 NSIS 客户端默认启用自动更新并在后台下载新版本；下载完成后可以由用户立即重启安装，也会在应用正常退出时自动安装。portable 构建不进入自动更新链路。运维可通过 `NEXU_DESKTOP_AUTO_UPDATE_ENABLED=false` 显式关闭已安装客户端的自动更新。
 
+R2 发布使用 S3 兼容 API。小文件使用普通 `PutObject`，超过 64 MiB 的 Windows
+安装包自动使用 multipart upload，避免 Wrangler 单文件上传限制。GitHub Actions
+需要 `CLOUDFLARE_ACCOUNT_ID`、`CLOUDFLARE_R2_ACCESS_KEY_ID` 和
+`CLOUDFLARE_R2_SECRET_ACCESS_KEY` 三个 secrets；这些凭据只存在于 Actions 环境，
+不进入桌面客户端或仓库文件。
+
 Windows 开发模式下，`prepare-openclaw-sidecar.mjs` 使用目录 junction 复用 runtime 依赖，并排除 `.package-lock.json` 等需要文件符号链接权限的 npm 元数据。传给 Controller 和 OpenClaw 的状态、技能目录必须由 `userDataPath` 生成绝对路径，不能把未展开的 `~` 再交给 `path.resolve`。runtime 完整性检查覆盖 OpenClaw 入口及关键传递依赖（例如 `chalk`）；缺失时必须重新安装 runtime，不能复用残缺目录。
 
 Electron webview 的 preload 由主进程在 `will-attach-webview` 阶段注入本地文件路径。渲染层不能基于开发服务器的 `http:` 地址拼接 preload URL，否则 Electron 会拒绝加载该桥接脚本。

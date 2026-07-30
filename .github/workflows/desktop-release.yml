@@ -421,7 +421,8 @@ jobs:
       - name: Upload to Cloudflare R2
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
           CHANNEL: ${{ steps.artifacts.outputs.channel }}
           ARCH: ${{ matrix.arch }}
           VERSIONED_DMG: ${{ steps.artifacts.outputs.versioned_dmg }}
@@ -437,22 +438,22 @@ jobs:
             echo "[r2] uploading to prefix: ${prefix}/"
 
             echo "Uploading ${VERSIONED_DMG} → ${prefix}/${VERSIONED_DMG}"
-            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${VERSIONED_DMG}" --file "apps/desktop/release-artifacts/${VERSIONED_DMG}" --remote
+            node scripts/upload-r2-object.mjs --key "${prefix}/${VERSIONED_DMG}" --file "apps/desktop/release-artifacts/${VERSIONED_DMG}"
 
             echo "Uploading ${VERSIONED_ZIP} → ${prefix}/${VERSIONED_ZIP}"
-            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${VERSIONED_ZIP}" --file "apps/desktop/release-artifacts/${VERSIONED_ZIP}" --remote
+            node scripts/upload-r2-object.mjs --key "${prefix}/${VERSIONED_ZIP}" --file "apps/desktop/release-artifacts/${VERSIONED_ZIP}"
 
             echo "Uploading ${LATEST_DMG} → ${prefix}/${LATEST_DMG}"
-            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${LATEST_DMG}" --file "apps/desktop/release-artifacts/${LATEST_DMG}" --remote
+            node scripts/upload-r2-object.mjs --key "${prefix}/${LATEST_DMG}" --file "apps/desktop/release-artifacts/${LATEST_DMG}"
 
             echo "Uploading ${LATEST_ZIP} → ${prefix}/${LATEST_ZIP}"
-            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${LATEST_ZIP}" --file "apps/desktop/release-artifacts/${LATEST_ZIP}" --remote
+            node scripts/upload-r2-object.mjs --key "${prefix}/${LATEST_ZIP}" --file "apps/desktop/release-artifacts/${LATEST_ZIP}"
 
             echo "Uploading ${{ steps.artifacts.outputs.checksum_file }} → ${prefix}/${{ steps.artifacts.outputs.checksum_file }}"
-            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/${{ steps.artifacts.outputs.checksum_file }}" --file "apps/desktop/release-artifacts/${{ steps.artifacts.outputs.checksum_file }}" --remote
+            node scripts/upload-r2-object.mjs --key "${prefix}/${{ steps.artifacts.outputs.checksum_file }}" --file "apps/desktop/release-artifacts/${{ steps.artifacts.outputs.checksum_file }}"
 
             echo "Uploading latest-mac.yml last → ${prefix}/latest-mac.yml"
-            npx wrangler r2 object put "nexu-desktop-releases/${prefix}/latest-mac.yml" --file "apps/desktop/release/latest-mac.yml" --remote
+            node scripts/upload-r2-object.mjs --key "${prefix}/latest-mac.yml" --file "apps/desktop/release/latest-mac.yml"
           }
 
           upload_prefix "${CHANNEL}/${ARCH}"
@@ -718,7 +719,8 @@ jobs:
         shell: pwsh
         env:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
           CHANNEL: ${{ steps.meta.outputs.channel }}
           INSTALLER_NAME: ${{ steps.artifacts.outputs.installer_name }}
           BLOCKMAP_NAME: ${{ steps.artifacts.outputs.blockmap_name }}
@@ -735,9 +737,9 @@ jobs:
 
           foreach ($artifact in $artifacts) {
             Write-Host "[r2] Uploading $artifact to $prefix/$artifact"
-            npx wrangler r2 object put "nexu-desktop-releases/$prefix/$artifact" `
-              --file "$artifactDir/$artifact" `
-              --remote
+            node scripts/upload-r2-object.mjs `
+              --key "$prefix/$artifact" `
+              --file "$artifactDir/$artifact"
             if ($LASTEXITCODE -ne 0) {
               throw "R2 upload failed for $artifact"
             }
