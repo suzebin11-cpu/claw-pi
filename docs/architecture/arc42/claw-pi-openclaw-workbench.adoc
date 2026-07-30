@@ -685,3 +685,11 @@ concurrency limits, and model context limits that are smaller than the local
 20,000 character workbench budget. A future improvement should add request
 telemetry for context size, compaction wait time, first token latency, and
 stream termination reason so production failures can be ranked from evidence.
+
+=== Desktop release fallback
+
+If the macOS signing credentials are unavailable, the macOS release matrix is
+allowed to fail without blocking the Windows release job. The Windows job still
+publishes and validates `latest.yml`, the NSIS installer, and its `.blockmap`.
+The macOS update feed remains on the previous verified signed release until
+Apple signing credentials are restored.

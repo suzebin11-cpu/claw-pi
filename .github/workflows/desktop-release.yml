@@ -493,6 +493,7 @@ jobs:
 
   release-windows:
     needs: release
+    if: always() && needs.release.result != 'cancelled'
     runs-on: windows-latest
 
     steps:
@@ -674,6 +675,27 @@ jobs:
           name: desktop-release-${{ steps.meta.outputs.tag_name }}-win-x64
           path: apps/desktop/release-artifacts-win/*
           if-no-files-found: error
+
+      - name: Ensure draft GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.meta.outputs.tag_name }}
+          VERSION: ${{ steps.meta.outputs.desktop_version }}
+          COMMIT_SHA: ${{ steps.meta.outputs.commit_sha }}
+        run: |
+          gh release view $env:TAG_NAME --repo $env:GITHUB_REPOSITORY | Out-Null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $env:TAG_NAME `
+              --repo $env:GITHUB_REPOSITORY `
+              --target $env:COMMIT_SHA `
+              --title "v$env:VERSION" `
+              --draft `
+              --notes "Desktop release for $env:VERSION."
+            if ($LASTEXITCODE -ne 0) {
+              throw "Unable to create draft GitHub release $env:TAG_NAME"
+            }
+          }
 
       - name: Upload assets to GitHub release
         shell: pwsh
