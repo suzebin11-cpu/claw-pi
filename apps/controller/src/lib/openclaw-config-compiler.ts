@@ -319,7 +319,11 @@ function compileModelsConfig(
     ? config.desktop.cloud
     : null;
   const desktopCloudModels = normalizeDesktopCloudModels(desktopCloud?.models);
-  if (desktopCloud && desktopCloudModels.length > 0) {
+  if (
+    desktopCloud &&
+    desktopCloud.apiKey.trim().length > 0 &&
+    desktopCloudModels.length > 0
+  ) {
     const linkBaseUrl =
       normalizeProviderBaseUrl(desktopCloud.linkUrl) ?? desktopCloud.linkUrl;
 

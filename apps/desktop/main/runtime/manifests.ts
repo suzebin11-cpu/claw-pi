@@ -725,6 +725,12 @@ export function createRuntimeUnitManifests(
         PORT: String(controllerPort),
         HOST: "127.0.0.1",
         WEB_URL: webUrl,
+        ...(runtimeConfig.urls.cloudBase
+          ? { NEXU_CLOUD_URL: runtimeConfig.urls.cloudBase }
+          : {}),
+        ...(runtimeConfig.urls.linkBase
+          ? { NEXU_LINK_URL: runtimeConfig.urls.linkBase }
+          : {}),
         NEXU_HOME: runtimeConfig.paths.nexuHome,
         OPENCLAW_STATE_DIR: openclawStateDir,
         OPENCLAW_CONFIG_PATH: path.resolve(openclawConfigDir, "openclaw.json"),

@@ -243,6 +243,21 @@ describe("NexuConfigStore", () => {
     );
   });
 
+  it("uses configured cloud endpoints for the default profile", async () => {
+    const store = new NexuConfigStore(env);
+
+    const status = await store.getDesktopCloudStatus();
+
+    expect(status.activeProfileName).toBe("Default");
+    expect(status.cloudUrl).toBe("https://nexu.io");
+    expect(status.linkUrl).toBe("https://link.nexu.io");
+    expect(status.profiles[0]).toMatchObject({
+      name: "Default",
+      cloudUrl: "https://nexu.io",
+      linkUrl: "https://link.nexu.io",
+    });
+  });
+
   it("refreshes connected desktop cloud models from curated models plus allowed authenticated supplements", async () => {
     const store = new NexuConfigStore(env);
     const requestedUrls: string[] = [];
@@ -268,7 +283,7 @@ describe("NexuConfigStore", () => {
           );
         }
 
-        if (url === "http://47.108.215.151:9080/v1/models") {
+        if (url === "https://nexu.io/v1/models") {
           return new Response(
             JSON.stringify({
               data: [{ id: "gpt-5.4", name: "GPT-5.4" }],
@@ -292,7 +307,7 @@ describe("NexuConfigStore", () => {
     const status = await store.refreshDesktopCloudModels();
 
     expect(requestedUrls).toContain("https://yunwu.ai/v1/models");
-    expect(requestedUrls).toContain("http://47.108.215.151:9080/v1/models");
+    expect(requestedUrls).toContain("https://nexu.io/v1/models");
     expect(authHeaders).toContain("Bearer link-key");
     expect(authHeaders).toContain(null);
     expect(status.models.map((model) => model.id)).toEqual([
@@ -310,7 +325,7 @@ describe("NexuConfigStore", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = input.toString();
 
-        if (url === "http://47.108.215.151:9080/v1/models") {
+        if (url === "https://nexu.io/v1/models") {
           return new Response(
             JSON.stringify({
               data: [{ id: "gpt-5.4-mini", name: "GPT-5.4 Mini" }],
@@ -347,6 +362,140 @@ describe("NexuConfigStore", () => {
       "gpt-5.5",
     ]);
     expect(config.runtime.defaultModelId).toBe("link/gpt-5.5");
+  });
+
+  it("starts curated and authenticated model requests concurrently", async () => {
+    const store = new NexuConfigStore(env);
+    let resolveCurated: ((response: Response) => void) | undefined;
+    let resolveAuthenticated: ((response: Response) => void) | undefined;
+    const requestedUrls: string[] = [];
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((input: RequestInfo | URL) => {
+        const url = input.toString();
+        requestedUrls.push(url);
+
+        return new Promise<Response>((resolve) => {
+          if (url === "https://nexu.io/v1/models") {
+            resolveCurated = resolve;
+            return;
+          }
+          if (url === "https://link.nexu.io/v1/models") {
+            resolveAuthenticated = resolve;
+            return;
+          }
+          resolve(new Response("not found", { status: 404 }));
+        });
+      }),
+    );
+
+    await store.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://link.nexu.io",
+      apiKey: "link-key",
+      models: [],
+    });
+
+    const refreshPromise = store.refreshDesktopCloudModels();
+
+    await vi.waitFor(() => {
+      expect(requestedUrls).toEqual(
+        expect.arrayContaining([
+          "https://nexu.io/v1/models",
+          "https://link.nexu.io/v1/models",
+        ]),
+      );
+    });
+    expect(resolveCurated).toBeTypeOf("function");
+    expect(resolveAuthenticated).toBeTypeOf("function");
+
+    resolveCurated?.(
+      new Response(
+        JSON.stringify({
+          data: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+        }),
+        { status: 200 },
+      ),
+    );
+    resolveAuthenticated?.(
+      new Response(
+        JSON.stringify({
+          data: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const status = await refreshPromise;
+    expect(status.models.map((model) => model.id)).toEqual([
+      "gpt-5.4",
+      "gpt-5.5",
+    ]);
+  });
+
+  it("invalidates an expired cloud token while retaining the public catalog", async () => {
+    const store = new NexuConfigStore(env);
+    const expiredApiKey = "expired-link-key";
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url === "https://nexu.io/v1/models") {
+          return new Response(
+            JSON.stringify({
+              data: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+            }),
+            { status: 200 },
+          );
+        }
+        if (url === "https://link.nexu.io/v1/models") {
+          return new Response("This token has expired", { status: 401 });
+        }
+        return new Response("not found", { status: 404 });
+      }),
+    );
+
+    await store.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://link.nexu.io",
+      apiKey: expiredApiKey,
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4" },
+        { id: "gpt-5.5", name: "GPT-5.5" },
+      ],
+    });
+
+    const status = await store.refreshDesktopCloudModels();
+    const config = await store.getConfig();
+    const cloud = (config.desktop as {
+      cloud?: {
+        apiKey?: string | null;
+        invalidatedApiKeyHash?: string | null;
+      };
+    }).cloud;
+
+    expect(status.connected).toBe(false);
+    expect(status.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
+    expect(cloud?.apiKey).toBeNull();
+    expect(cloud?.invalidatedApiKeyHash).toMatch(/^[a-f0-9]{64}$/);
+
+    await expect(
+      store.importDesktopCloudStateIfNeeded({
+        connected: true,
+        polling: false,
+        linkUrl: "https://link.nexu.io",
+        apiKey: expiredApiKey,
+        models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+      }),
+    ).resolves.toBe(false);
+    await expect(store.getDesktopCloudStatus()).resolves.toMatchObject({
+      connected: false,
+      models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+    });
   });
 
   it("persists qqbot channels with app secrets in the secret store", async () => {

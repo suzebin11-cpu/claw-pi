@@ -113,10 +113,11 @@ describe("NexuConfigStore.shouldSkipCloudHydrationForBootstrap", () => {
         userName: null,
         userEmail: null,
         connectedAt: null,
-        linkUrl: "https://yunwu.ai",
+        linkUrl: "https://api.clawpi.app:9443",
         apiKey: "test-key",
         models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
-        cacheKey: "default::http://47.108.215.151:9080::https://yunwu.ai",
+        cacheKey:
+          "default::https://api.clawpi.app:9443::https://api.clawpi.app:9443",
         modelsUpdatedAt: Date.now(),
       },
     });
@@ -140,7 +141,8 @@ describe("NexuConfigStore.shouldSkipCloudHydrationForBootstrap", () => {
         linkUrl: "https://other.example",
         apiKey: "test-key",
         models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
-        cacheKey: "default::http://47.108.215.151:9080::https://other.example",
+        cacheKey:
+          "default::https://api.clawpi.app:9443::https://other.example",
         modelsUpdatedAt: Date.now(),
       },
     });
@@ -162,10 +164,11 @@ describe("NexuConfigStore.shouldSkipCloudHydrationForBootstrap", () => {
         userName: null,
         userEmail: null,
         connectedAt: null,
-        linkUrl: "https://yunwu.ai",
+        linkUrl: "https://api.clawpi.app:9443",
         apiKey: "test-key",
         models: [{ id: "gpt-5.4", name: "gpt-5.4" }],
-        cacheKey: "default::http://47.108.215.151:9080::https://yunwu.ai",
+        cacheKey:
+          "default::https://api.clawpi.app:9443::https://api.clawpi.app:9443",
         modelsUpdatedAt: Date.now() - oneDayAndOneMs,
       },
     });

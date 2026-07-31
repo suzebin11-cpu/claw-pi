@@ -67,6 +67,8 @@ function createRuntimeConfig(): DesktopRuntimeConfig {
       controllerBase: "http://127.0.0.1:50800",
       web: "http://127.0.0.1:50810",
       openclawBase: "http://127.0.0.1:18789",
+      cloudBase: "https://api.clawpi.app:9443",
+      linkBase: "https://api.clawpi.app:9443",
       updateFeed: null,
     },
     tokens: {
@@ -82,6 +84,7 @@ function createRuntimeConfig(): DesktopRuntimeConfig {
       password: "desktop-local-password",
     },
     sentryDsn: null,
+    amplitudeApiKey: null,
   };
 }
 

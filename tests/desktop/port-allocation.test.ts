@@ -2,6 +2,7 @@ import { createServer } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { allocateDesktopRuntimePorts } from "#desktop/main/runtime/port-allocation";
 import type { PortAllocationError } from "#desktop/main/runtime/port-allocation";
+import { readProxyPolicy } from "#desktop/shared/proxy-config";
 import type { DesktopRuntimeConfig } from "#desktop/shared/runtime-config";
 
 const servers: Array<import("node:net").Server> = [];
@@ -25,7 +26,9 @@ function createRuntimeConfig(input?: {
     },
     updates: {
       autoUpdateEnabled: true,
+      channel: "stable",
     },
+    proxy: readProxyPolicy({}),
     ports: {
       controller: controllerPort,
       web: webPort,
@@ -34,8 +37,8 @@ function createRuntimeConfig(input?: {
       controllerBase: `http://127.0.0.1:${controllerPort}`,
       web: `http://127.0.0.1:${webPort}`,
       openclawBase: `http://127.0.0.1:${openclawPort}`,
-      nexuCloud: "https://api.clawpi.app:9443",
-      nexuLink: null,
+      cloudBase: "https://api.clawpi.app:9443",
+      linkBase: "https://api.clawpi.app:9443",
       updateFeed: null,
     },
     tokens: {
@@ -51,6 +54,7 @@ function createRuntimeConfig(input?: {
       password: "desktop-local-password",
     },
     sentryDsn: null,
+    amplitudeApiKey: null,
   };
 }
 

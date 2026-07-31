@@ -258,6 +258,52 @@ describe("ModelProviderService", () => {
     expect(after).toBe(before);
   });
 
+  it("reports disconnected when a model refresh invalidates an expired token", async () => {
+    const env = createEnv(tempDir);
+    const store = new NexuConfigStore(env);
+    const service = createService(store, env);
+    const originalFetch = globalThis.fetch;
+
+    await store.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://api.clawpi.app:9443",
+      apiKey: "expired-link-key",
+      models: [
+        { id: "gpt-5.4", name: "GPT-5.4" },
+        { id: "gpt-5.5", name: "GPT-5.5" },
+      ],
+    });
+
+    globalThis.fetch = (async (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ) => {
+      const authorization = new Headers(init?.headers).get("authorization");
+      if (authorization) {
+        return new Response("This token has expired", { status: 401 });
+      }
+      return new Response(
+        JSON.stringify({
+          data: [{ id: "gpt-5.4", name: "GPT-5.4" }],
+        }),
+        { status: 200 },
+      );
+    }) as typeof globalThis.fetch;
+
+    try {
+      const result = await service.refreshNexuOfficialModels();
+
+      expect(result).toMatchObject({
+        connected: false,
+        refreshed: true,
+        modelCount: 1,
+      });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("migrates the legacy slow Link default to the preferred faster model once", async () => {
     const env = createEnv(tempDir);
     writeFileSync(

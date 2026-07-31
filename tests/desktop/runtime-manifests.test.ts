@@ -76,6 +76,8 @@ function createRuntimeConfig(): DesktopRuntimeConfig {
       controllerBase: "http://127.0.0.1:50800",
       web: "http://127.0.0.1:50810",
       openclawBase: "http://127.0.0.1:18789",
+      cloudBase: "https://api.clawpi.app:9443",
+      linkBase: "https://api.clawpi.app:9443",
       updateFeed: null,
     },
     tokens: {
@@ -91,6 +93,7 @@ function createRuntimeConfig(): DesktopRuntimeConfig {
       password: "desktop-local-password",
     },
     sentryDsn: null,
+    amplitudeApiKey: null,
   };
 }
 
@@ -395,6 +398,8 @@ describe("desktop runtime manifests", () => {
         HTTPS_PROXY: "http://secure-proxy.example.com:8443",
         ALL_PROXY: "socks5://proxy.example.com:1080",
         NO_PROXY: "example.com,localhost,127.0.0.1,::1",
+        NEXU_CLOUD_URL: "https://api.clawpi.app:9443",
+        NEXU_LINK_URL: "https://api.clawpi.app:9443",
       });
     });
   });

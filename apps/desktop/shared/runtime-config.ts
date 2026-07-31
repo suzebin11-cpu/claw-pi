@@ -17,6 +17,8 @@ export const DEFAULT_NEXU_HOME = "~/.claw-pi";
  */
 type BuildConfig = {
   NEXU_HOME?: string;
+  NEXU_CLOUD_URL?: string;
+  NEXU_LINK_URL?: string;
   CLAWPI_UPDATE_FEED_URL?: string;
   NEXU_DESKTOP_AUTO_UPDATE_ENABLED?: string;
   NEXU_DESKTOP_APP_VERSION?: string;
@@ -52,6 +54,8 @@ function loadBuildConfig(resourcesPath?: string): BuildConfig {
 
     const record = parsed as Record<string, unknown>;
     return {
+      NEXU_CLOUD_URL: readBuildConfigString(record, "NEXU_CLOUD_URL"),
+      NEXU_LINK_URL: readBuildConfigString(record, "NEXU_LINK_URL"),
       CLAWPI_UPDATE_FEED_URL: readBuildConfigString(
         record,
         "CLAWPI_UPDATE_FEED_URL",
@@ -192,6 +196,8 @@ export type DesktopRuntimeConfig = {
     controllerBase: string;
     web: string;
     openclawBase: string;
+    cloudBase: string | null;
+    linkBase: string | null;
     updateFeed: string | null;
   };
   tokens: {
@@ -259,6 +265,8 @@ export function getDesktopRuntimeConfig(
       `http://127.0.0.1:${ports.controller}`,
     web: env.NEXU_WEB_URL ?? `http://127.0.0.1:${ports.web}`,
     openclawBase: env.NEXU_OPENCLAW_BASE_URL ?? DEFAULT_OPENCLAW_BASE_URL,
+    cloudBase: env.NEXU_CLOUD_URL ?? buildConfig.NEXU_CLOUD_URL ?? null,
+    linkBase: env.NEXU_LINK_URL ?? buildConfig.NEXU_LINK_URL ?? null,
     updateFeed:
       env.CLAWPI_UPDATE_FEED_URL ?? buildConfig.CLAWPI_UPDATE_FEED_URL ?? null,
   };

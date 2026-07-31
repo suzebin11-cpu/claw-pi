@@ -369,6 +369,30 @@ describe("compileOpenClawConfig", () => {
     expect(result.agents.list[0]?.model).toBeUndefined();
   });
 
+  it("does not compile a Link provider for a whitespace-only cloud token", () => {
+    const result = compileOpenClawConfig(
+      createConfig({
+        providers: [],
+        desktop: {
+          cloud: {
+            linkUrl: "https://link.example.com",
+            apiKey: "   ",
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT-5.4",
+                provider: "openai",
+              },
+            ],
+          },
+        },
+      }),
+      createEnv(),
+    );
+
+    expect(result.models?.providers.link).toBeUndefined();
+  });
+
   it("omits stale per-agent Link model overrides that are not in the runtime allowlist", () => {
     const result = compileOpenClawConfig(
       createConfig({

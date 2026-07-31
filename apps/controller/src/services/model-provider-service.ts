@@ -541,7 +541,7 @@ export class ModelProviderService {
     }
 
     return {
-      connected: true,
+      connected: next.connected,
       refreshed: true,
       changed,
       modelCount: next.models.length,

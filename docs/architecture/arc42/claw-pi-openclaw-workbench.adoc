@@ -721,3 +721,64 @@ allowed to fail without blocking the Windows release job. The Windows job still
 publishes and validates `latest.yml`, the NSIS installer, and its `.blockmap`.
 The macOS update feed remains on the previous verified signed release until
 Apple signing credentials are restored.
+
+== Windows cloud bootstrap reliability addendum (2026-07-31)
+
+=== 4. Solution strategy
+
+Windows packages carry the production `NEXU_CLOUD_URL` and `NEXU_LINK_URL`
+values in `build-config.json`. The Electron runtime reads those values and
+passes them to the Controller process. The Controller derives its default cloud
+profile from that packaged environment, so a fresh installation does not fall
+back to development or legacy service endpoints.
+
+=== 6. Runtime flow
+
+During startup and model refresh, the Controller requests the public curated
+catalog and the authenticated supplemental catalog concurrently. An
+authenticated HTTP 401 invalidates the local cloud session, removes the expired
+API key from the compiled OpenClaw provider, and retains the public curated
+models. The invalidation path does not restart OpenClaw merely because public
+inventory remains available.
+
+=== 7. Deployment and packaging
+
+The Windows packaging step writes both cloud endpoints into
+`resources/build-config.json`. Runtime manifests expose them to the Controller
+as `NEXU_CLOUD_URL` and `NEXU_LINK_URL`. Release validation must verify these
+fields in addition to the existing update-feed metadata.
+
+=== 9. Architecture decisions
+
+==== ADR-013: Quarantine expired desktop credentials
+
+*Status:* accepted
+
+When an authenticated model request returns HTTP 401, the Controller stores
+only a SHA-256 fingerprint of the invalidated API key. A stale desktop snapshot
+containing the same key is rejected during later bootstrap imports. A newly
+activated or explicitly imported valid key clears the fingerprint.
+
+==== ADR-014: Preserve the GPT-5.6 display alias
+
+*Status:* accepted
+
+`link/gpt-5.6` remains a deliberate display alias backed by
+`link/gpt-5.5`. Selecting GPT-5.6 in the UI must continue to send GPT-5.5 to the
+backend. This release does not change that model mapping.
+
+=== 10. Quality requirements
+
+Public and authenticated model catalogs must be fetched in parallel. With both
+requests configured for a 10 second timeout, startup waiting is bounded by one
+request window rather than two serial request windows. An expired credential
+must leave the application initialized, visibly disconnected, and still able
+to present the public curated model catalog.
+
+=== 11. Technical risks
+
+A hot-updated desktop can retain an expired API key in its desktop snapshot and
+reintroduce it after the Controller has invalidated the cloud session. The
+stored invalidation fingerprint prevents that exact credential from being
+reimported without persisting the secret itself. Credential rotation remains
+the recovery path for a genuinely expired token.
