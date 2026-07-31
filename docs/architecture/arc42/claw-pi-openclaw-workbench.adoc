@@ -614,6 +614,15 @@ to R2 while keeping the existing client feed URL stable.
 This delivery decision currently applies to Windows only. macOS update
 delivery remains outside the scope of this change.
 
+=== Windows legacy update feed compatibility (2026-07-31)
+
+Early Windows clients requested the shared `${channel}/x64` feed before the
+platform-specific `${channel}/win/x64` feed was introduced. The Windows
+release job now publishes the installer, blockmap, checksum, and `latest.yml`
+to both prefixes and validates both public endpoints before publishing the
+release. In this compatibility phase, `${channel}/x64` is treated as a
+Windows legacy feed; macOS x64 compatibility is intentionally not guaranteed.
+
 == ADR-010: HTTP listening is not business readiness
 
 *Status:* accepted

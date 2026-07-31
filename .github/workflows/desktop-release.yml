@@ -732,7 +732,6 @@ jobs:
           BLOCKMAP_NAME: ${{ steps.artifacts.outputs.blockmap_name }}
           CHECKSUM_NAME: ${{ steps.artifacts.outputs.checksum_name }}
         run: |
-          $prefix = "$env:CHANNEL/win/x64"
           $artifactDir = "apps/desktop/release-artifacts-win"
           $artifacts = @(
             $env:INSTALLER_NAME,
@@ -741,13 +740,21 @@ jobs:
             "latest.yml"
           )
 
-          foreach ($artifact in $artifacts) {
-            Write-Host "[r2] Uploading $artifact to $prefix/$artifact"
-            node scripts/upload-r2-object.mjs `
-              --key "$prefix/$artifact" `
-              --file "$artifactDir/$artifact"
-            if ($LASTEXITCODE -ne 0) {
-              throw "R2 upload failed for $artifact"
+          $prefixes = @(
+            "$env:CHANNEL/win/x64",
+            "$env:CHANNEL/x64"
+          )
+
+          foreach ($prefix in $prefixes) {
+            Write-Host "[r2] Uploading Windows update feed to $prefix/"
+            foreach ($artifact in $artifacts) {
+              Write-Host "[r2] Uploading $artifact to $prefix/$artifact"
+              node scripts/upload-r2-object.mjs `
+                --key "$prefix/$artifact" `
+                --file "$artifactDir/$artifact"
+              if ($LASTEXITCODE -ne 0) {
+                throw "R2 upload failed for $prefix/$artifact"
+              }
             }
           }
 
@@ -760,13 +767,24 @@ jobs:
           BLOCKMAP_NAME: ${{ steps.artifacts.outputs.blockmap_name }}
           CHECKSUM_NAME: ${{ steps.artifacts.outputs.checksum_name }}
         run: |
-          node scripts/validate-desktop-update.mjs `
-            --feed-url "https://api.clawpi.app:9443/updates/$env:CHANNEL/win/x64" `
-            --manifest-name latest.yml `
-            --version $env:VERSION `
-            --required $env:INSTALLER_NAME `
-            --required $env:BLOCKMAP_NAME `
-            --required $env:CHECKSUM_NAME
+          $feedUrls = @(
+            "https://api.clawpi.app:9443/updates/$env:CHANNEL/win/x64",
+            "https://api.clawpi.app:9443/updates/$env:CHANNEL/x64"
+          )
+
+          foreach ($feedUrl in $feedUrls) {
+            Write-Host "[update-validate] Checking $feedUrl"
+            node scripts/validate-desktop-update.mjs `
+              --feed-url $feedUrl `
+              --manifest-name latest.yml `
+              --version $env:VERSION `
+              --required $env:INSTALLER_NAME `
+              --required $env:BLOCKMAP_NAME `
+              --required $env:CHECKSUM_NAME
+            if ($LASTEXITCODE -ne 0) {
+              throw "Windows update feed validation failed: $feedUrl"
+            }
+          }
 
   finalize-release:
     needs: release-windows
