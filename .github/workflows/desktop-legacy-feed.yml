@@ -1,0 +1,102 @@
+name: Desktop Legacy Windows Feed
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: "Existing desktop release tag (for example: v0.3.20)"
+        required: true
+        type: string
+      channel:
+        description: "Update channel"
+        required: false
+        default: stable
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-legacy-feed-${{ inputs.tag_name }}-${{ inputs.channel }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout upload script
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            scripts/upload-r2-object.mjs
+          sparse-checkout-cone-mode: false
+
+      - name: Download existing Windows release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ inputs.tag_name }}
+        run: |
+          $artifactDir = "release-artifacts-win"
+          New-Item -ItemType Directory -Force $artifactDir | Out-Null
+
+          gh release download $env:TAG_NAME `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern "claw-pi-setup-*-x64.exe" `
+            --pattern "claw-pi-setup-*-x64.exe.blockmap" `
+            --pattern "desktop-win-x64-sha256.txt" `
+            --pattern "latest.yml" `
+            --dir $artifactDir `
+            --clobber
+
+          $required = @(
+            "latest.yml",
+            "desktop-win-x64-sha256.txt"
+          )
+          $installer = Get-ChildItem -LiteralPath $artifactDir -Filter "claw-pi-setup-*-x64.exe" -File
+          $blockmap = Get-ChildItem -LiteralPath $artifactDir -Filter "claw-pi-setup-*-x64.exe.blockmap" -File
+          if ($installer.Count -ne 1 -or $blockmap.Count -ne 1) {
+            throw "Expected exactly one Windows installer and blockmap in $artifactDir"
+          }
+
+          foreach ($name in $required) {
+            if (-not (Test-Path -LiteralPath (Join-Path $artifactDir $name))) {
+              throw "Missing downloaded release asset: $name"
+            }
+          }
+
+      - name: Upload legacy Windows feed to Cloudflare R2
+        shell: pwsh
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_R2_ACCESS_KEY_ID: ${{ secrets.CLOUDFLARE_R2_ACCESS_KEY_ID }}
+          CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${{ secrets.CLOUDFLARE_R2_SECRET_ACCESS_KEY }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          $artifactDir = "release-artifacts-win"
+          $prefix = "$env:CHANNEL/x64"
+          $artifacts = Get-ChildItem -LiteralPath $artifactDir -File
+
+          foreach ($artifact in $artifacts) {
+            Write-Host "[r2] Uploading $($artifact.Name) to $prefix/$($artifact.Name)"
+            node scripts/upload-r2-object.mjs `
+              --key "$prefix/$($artifact.Name)" `
+              --file $artifact.FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "R2 upload failed for $prefix/$($artifact.Name)"
+            }
+          }
+
+      - name: Verify legacy Windows feed
+        shell: pwsh
+        env:
+          VERSION: ${{ inputs.tag_name }}
+          CHANNEL: ${{ inputs.channel }}
+        run: |
+          $version = $env:VERSION -replace '^v', ''
+          node scripts/validate-desktop-update.mjs `
+            --feed-url "https://api.clawpi.app:9443/updates/$env:CHANNEL/x64" `
+            --manifest-name latest.yml `
+            --version $version `
+            --required "desktop-win-x64-sha256.txt"
