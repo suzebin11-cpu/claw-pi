@@ -1,6 +1,6 @@
 import type { ControllerContainer } from "./container.js";
 
-const POST_BOOT_CLOUD_REFRESH_DELAY_MS = 5 * 60_000;
+const POST_BOOT_CLOUD_REFRESH_DELAY_MS = 15_000;
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -12,19 +12,13 @@ function delay(ms: number): Promise<void> {
 export async function bootstrapController(
   container: ControllerContainer,
 ): Promise<() => void> {
-  const skipCloudHydration =
-    await container.configStore.shouldSkipCloudHydrationForBootstrap();
-
   // Run independent prep tasks in parallel to shave off startup time.
-  // All three are independent: process cleanup, plugin files, cloud model fetch.
+  // Cloud model hydration is deliberately not part of the readiness path.
+  // A blocked proxy or slow cloud endpoint must not prevent the local
+  // controller/OpenClaw pair from becoming usable.
   await Promise.all([
     container.openclawProcess.prepare(),
     container.openclawSyncService.ensureRuntimeModelPlugin(),
-    skipCloudHydration
-      ? Promise.resolve()
-      : container.configStore
-          .prepareDesktopCloudModelsForBootstrap()
-          .catch(() => {}),
   ]);
 
   // Validate default model against available models before first sync
@@ -81,13 +75,10 @@ export async function bootstrapController(
   });
 
   void settlingDone.then(() => {
-    if (!skipCloudHydration) {
-      return;
-    }
     void (async () => {
-      // The cached cloud model list is still fresh here. Refresh it later so
-      // OpenClaw's expensive model-catalog reload does not block the first
-      // workbench request immediately after startup.
+      // Refresh after local startup. This keeps cached models available for
+      // the first request while making cloud availability eventually
+      // consistent.
       await delay(POST_BOOT_CLOUD_REFRESH_DELAY_MS);
       await container.configStore
         .prepareDesktopCloudModelsForBootstrap()

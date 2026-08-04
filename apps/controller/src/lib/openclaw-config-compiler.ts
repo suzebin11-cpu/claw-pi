@@ -12,6 +12,7 @@ import {
 import {
   type DesktopCloudModel,
   normalizeDesktopCloudModels,
+  withBuiltInDesktopCloudChatModels,
 } from "./desktop-cloud-models.js";
 import { normalizeProviderBaseUrl } from "./provider-base-url.js";
 
@@ -318,7 +319,10 @@ function compileModelsConfig(
   const desktopCloud = isDesktopCloudConfig(config.desktop.cloud)
     ? config.desktop.cloud
     : null;
-  const desktopCloudModels = normalizeDesktopCloudModels(desktopCloud?.models);
+  const desktopCloudModels =
+    desktopCloud?.apiKey.trim() && desktopCloud.models.length === 0
+      ? withBuiltInDesktopCloudChatModels(desktopCloud.models)
+      : normalizeDesktopCloudModels(desktopCloud?.models);
   if (
     desktopCloud &&
     desktopCloud.apiKey.trim().length > 0 &&
@@ -579,7 +583,9 @@ function compileAgentList(
         : null;
       const botModelIsAvailable =
         botResolvedModelId !== null &&
-        (availableRuntimeModels.some((model) => model.id === botResolvedModelId) ||
+        (availableRuntimeModels.some(
+          (model) => model.id === botResolvedModelId,
+        ) ||
           (availableRuntimeModels.length === 0 &&
             !botResolvedModelId.startsWith("link/")));
 
@@ -599,8 +605,7 @@ function compileAgentList(
       // before replying with `Unknown model: link/...`; omitting it lets the
       // agent inherit the already-validated gateway default instead.
       const isExplicitOverride =
-        botModelIsAvailable &&
-        botResolvedModelId !== defaultResolvedModelId;
+        botModelIsAvailable && botResolvedModelId !== defaultResolvedModelId;
 
       return {
         id: bot.id,
@@ -649,14 +654,12 @@ function compilePlugins(
   // channel). Keying on "configured" instead means the entry is stable
   // across the channel's normal up/down lifecycle.
   const configuredPluginIds = [
-    ...new Set(
-      [
-        ...config.channels
-          .map((channel) => resolveManagedChannelPluginId(channel.channelType))
-          .filter((pluginId): pluginId is string => pluginId !== null),
-        ...ALWAYS_PRELOADED_PLUGIN_IDS,
-      ],
-    ),
+    ...new Set([
+      ...config.channels
+        .map((channel) => resolveManagedChannelPluginId(channel.channelType))
+        .filter((pluginId): pluginId is string => pluginId !== null),
+      ...ALWAYS_PRELOADED_PLUGIN_IDS,
+    ]),
   ];
 
   // Keep plugin-entry presence stable so channel config changes can use

@@ -1,7 +1,14 @@
+import dns from "node:dns";
 import http from "node:http";
+import net from "node:net";
 
 export type ProxyFetchOptions = RequestInit & {
-  timeoutMs?: number;
+  /**
+   * Deadline for the whole request. Defaults to
+   * {@link DEFAULT_REQUEST_TIMEOUT_MS}; pass `null` to opt out entirely for
+   * genuinely long-lived responses such as streamed completions.
+   */
+  timeoutMs?: number | null;
 };
 
 type ProxyFetchEnv = {
@@ -19,6 +26,74 @@ type HttpModuleWithProxySupport = typeof http & {
 
 const REQUIRED_LOOPBACK_BYPASS = ["localhost", "127.0.0.1", "::1"];
 const NODE_USE_ENV_PROXY = "NODE_USE_ENV_PROXY";
+
+/**
+ * Per-attempt window for the happy-eyeballs family race.
+ *
+ * Node's default is 250ms: if the first address family does not complete its
+ * TCP handshake within that window, the other family is raced. On Windows the
+ * common failure is an AAAA record with no working IPv6 route, where 250ms is
+ * also too tight for a legitimately slow first hop over a corporate proxy or
+ * VPN — the retry storm shows up as UND_ERR_CONNECT_TIMEOUT. 500ms keeps
+ * failover fast while tolerating a slow-but-working link.
+ */
+const AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 500;
+
+/**
+ * Fallback deadline for callers that do not pass one.
+ *
+ * Without this, a request whose socket never progresses hangs forever and the
+ * caller (health loop, model listing, page bootstrap) hangs with it — the
+ * "page initialization takes a very long time" symptom. 30s is well above any
+ * healthy non-streaming call while still guaranteeing the promise settles.
+ */
+const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+
+let networkDefaultsApplied = false;
+
+/**
+ * Apply process-wide connection defaults that make egress resilient on Windows.
+ *
+ * Two failure modes motivate this:
+ *  1. IPv6 blackholes. A host with an AAAA record but no usable IPv6 route
+ *     stalls until the connect timeout fires. Enabling autoSelectFamily races
+ *     both families so IPv4 wins immediately instead of after a long hang.
+ *  2. DNS ordering. `verbatim` result order can put an unreachable IPv6 address
+ *     first; `ipv4first` biases toward the family that actually works on the
+ *     affected machines.
+ *
+ * Both are safe on networks that do have working IPv6: the race simply resolves
+ * to whichever family connects first.
+ */
+export function ensureNetworkDefaults(): void {
+  if (networkDefaultsApplied) {
+    return;
+  }
+  networkDefaultsApplied = true;
+
+  try {
+    net.setDefaultAutoSelectFamily?.(true);
+    net.setDefaultAutoSelectFamilyAttemptTimeout?.(
+      AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
+    );
+  } catch {
+    // Older runtimes lack these setters; the defaults remain in effect.
+  }
+
+  try {
+    dns.setDefaultResultOrder?.("ipv4first");
+  } catch {
+    // Non-fatal: DNS ordering stays at the runtime default.
+  }
+}
+const TRANSIENT_NETWORK_ERROR_CODES = new Set([
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET",
+  "ECONNRESET",
+  "ECONNREFUSED",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+]);
 
 let configuredProxyKey: string | null = null;
 let restoreProxyConfig: (() => void) | null = null;
@@ -306,24 +381,92 @@ function createProxySafeError(
   return safeError;
 }
 
+function isRetryableProxyError(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code =
+    typeof (error as Error & { code?: unknown }).code === "string"
+      ? (error as Error & { code: string }).code
+      : "";
+  const message = error.message.toUpperCase();
+  return (
+    TRANSIENT_NETWORK_ERROR_CODES.has(code) ||
+    message.includes("UND_ERR_CONNECT_TIMEOUT") ||
+    message.includes("FETCH FAILED") ||
+    message.includes("CONNECT TIMEOUT")
+  );
+}
+
+/**
+ * A request body can only be sent twice if it is a fully-buffered value.
+ * ReadableStream bodies are consumed by the first attempt, so replaying them
+ * would send an empty or truncated payload.
+ */
+function isReplayableBody(body: unknown): boolean {
+  if (body === null || body === undefined) {
+    return true;
+  }
+  return !(
+    typeof ReadableStream !== "undefined" && body instanceof ReadableStream
+  );
+}
+
+function isIdempotentMethod(method: string | undefined): boolean {
+  return (
+    method === undefined ||
+    method.toUpperCase() === "GET" ||
+    method.toUpperCase() === "HEAD" ||
+    method.toUpperCase() === "OPTIONS"
+  );
+}
+
 export async function proxyFetch(
   input: string | URL,
   options: ProxyFetchOptions = {},
 ): Promise<Response> {
-  const { timeoutMs, signal: rawSignal, ...init } = options;
+  const { timeoutMs: rawTimeoutMs, signal: rawSignal, ...init } = options;
   const signal = rawSignal ?? undefined;
+  // `null` opts out; `undefined` (unspecified) falls back to the default so no
+  // request can hang forever.
+  const timeoutMs =
+    rawTimeoutMs === null
+      ? undefined
+      : (rawTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   const proxyEnv = readProxyFetchEnv();
   const requestUrl = typeof input === "string" ? new URL(input) : input;
 
+  ensureNetworkDefaults();
   ensureGlobalProxySupport(proxyEnv);
 
   const abortState = createAbortSignal(signal, timeoutMs);
 
   try {
-    return await fetch(requestUrl, {
-      ...init,
-      signal: abortState.signal,
-    });
+    const requestInit = { ...init, signal: abortState.signal };
+    try {
+      return await fetch(requestUrl, requestInit);
+    } catch (error) {
+      // Retry only safe, idempotent requests. A short backoff covers transient
+      // Windows proxy/DNS/connect races without duplicating model mutations or
+      // auth operations.
+      if (!isIdempotentMethod(init.method) || !isRetryableProxyError(error)) {
+        throw error;
+      }
+      // Never retry once the deadline expired or the caller gave up: the second
+      // attempt would abort instantly and only obscure the real reason.
+      if (abortState.timedOut() || abortState.abortedByCaller()) {
+        throw error;
+      }
+      // A consumed stream body cannot be replayed.
+      if (!isReplayableBody(init.body)) {
+        throw error;
+      }
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 250);
+        timer.unref?.();
+      });
+      return await fetch(requestUrl, requestInit);
+    }
   } catch (error) {
     if (abortState.timedOut() && timeoutMs !== undefined) {
       throw createTimeoutError(requestUrl, timeoutMs);

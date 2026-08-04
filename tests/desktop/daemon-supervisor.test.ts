@@ -352,6 +352,52 @@ describe("RuntimeOrchestrator", () => {
   });
 
   // -----------------------------------------------------------------------
+  // 8b. patchUnitEnv injects late-resolved env (system proxy) into spawns
+  // -----------------------------------------------------------------------
+  it("patchUnitEnv injects proxy env into units spawned later", async () => {
+    const { RuntimeOrchestrator } = await import(
+      "../../apps/desktop/main/runtime/daemon-supervisor"
+    );
+
+    const orchestrator = new RuntimeOrchestrator([
+      makeManagedManifest("controller", { env: { PORT: "50800" } }),
+    ] as never[]);
+
+    orchestrator.patchUnitEnv({
+      HTTP_PROXY: "http://corp.proxy:8080",
+      HTTPS_PROXY: "http://corp.proxy:8080",
+      NODE_USE_ENV_PROXY: "1",
+    });
+
+    await orchestrator.startAutoStartManagedUnits();
+
+    const spawnEnv = mockSpawn.mock.calls[0][2].env;
+    expect(spawnEnv.HTTPS_PROXY).toBe("http://corp.proxy:8080");
+    expect(spawnEnv.NODE_USE_ENV_PROXY).toBe("1");
+    // Pre-existing manifest values must survive the patch.
+    expect(spawnEnv.PORT).toBe("50800");
+  });
+
+  it("patchUnitEnv never overrides a value the manifest pins", async () => {
+    const { RuntimeOrchestrator } = await import(
+      "../../apps/desktop/main/runtime/daemon-supervisor"
+    );
+
+    const orchestrator = new RuntimeOrchestrator([
+      makeManagedManifest("controller", {
+        env: { HTTPS_PROXY: "http://manifest.proxy:9000" },
+      }),
+    ] as never[]);
+
+    orchestrator.patchUnitEnv({ HTTPS_PROXY: "http://resolved.proxy:8080" });
+    await orchestrator.startAutoStartManagedUnits();
+
+    expect(mockSpawn.mock.calls[0][2].env.HTTPS_PROXY).toBe(
+      "http://manifest.proxy:9000",
+    );
+  });
+
+  // -----------------------------------------------------------------------
   // 9. stoppedByUser flag set on explicit stop
   // -----------------------------------------------------------------------
   it("sets stoppedByUser on explicit stop to suppress auto-restart", async () => {

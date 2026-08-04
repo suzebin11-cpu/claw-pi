@@ -85,7 +85,7 @@ describe("OpenClawWsClient", () => {
     client.connect();
 
     expect(FakeWebSocket.instances).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.advanceTimersByTimeAsync(60_001);
     expect(FakeWebSocket.instances[0]?.closed?.reason).toBe(
       "connect challenge timeout",
     );
@@ -108,7 +108,7 @@ describe("OpenClawWsClient", () => {
     });
 
     expect(socket?.sent).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.advanceTimersByTimeAsync(60_001);
     expect(socket?.closed?.reason).toBe("connect timeout");
 
     await vi.advanceTimersByTimeAsync(500);
@@ -140,7 +140,7 @@ describe("OpenClawWsClient", () => {
     });
 
     expect(client.isConnected()).toBe(true);
-    await vi.advanceTimersByTimeAsync(15_001);
+    await vi.advanceTimersByTimeAsync(60_001);
     expect(socket?.closed).toBeNull();
     expect(FakeWebSocket.instances).toHaveLength(1);
 

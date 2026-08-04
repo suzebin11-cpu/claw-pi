@@ -338,9 +338,11 @@ export type OpenClawGatewayEvent = EventFrame;
 
 const PROTOCOL_VERSION = 3;
 const MAX_BACKOFF_MS = 4_000;
-const REQUEST_TIMEOUT_MS = 15_000;
-const CONNECT_CHALLENGE_TIMEOUT_MS = 15_000;
-const CONNECT_TIMEOUT_MS = 15_000;
+// Windows packaged builds can spend several seconds starting the sidecar or
+// establishing a proxy-backed loopback connection on the first launch.
+const REQUEST_TIMEOUT_MS = 60_000;
+const CONNECT_CHALLENGE_TIMEOUT_MS = 60_000;
+const CONNECT_TIMEOUT_MS = 60_000;
 
 interface Pending {
   resolve: (value: unknown) => void;

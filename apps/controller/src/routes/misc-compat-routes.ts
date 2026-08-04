@@ -25,39 +25,41 @@ const feishuOauthQuerySchema = z.object({
   botId: z.string().min(1),
 });
 const feishuOauthResponseSchema = z.object({ url: z.string() });
-const openAiChatCompletionBodySchema = z.object({
-  model: z.string().optional(),
-  messages: z.array(
-    z.object({
-      role: z.enum(["system", "user", "assistant", "tool"]),
-      content: z.union([z.string(), z.array(z.unknown())]),
-      name: z.string().optional(),
-      tool_call_id: z.string().optional(),
-      tool_calls: z.array(z.unknown()).optional(),
-    }),
-  ),
-  stream: z.boolean().optional(),
-  user: z.string().optional(),
-  tools: z.array(z.unknown()).optional(),
-  tool_choice: z.unknown().optional(),
-  parallel_tool_calls: z.boolean().optional(),
-  stream_options: z.unknown().optional(),
-  response_format: z.unknown().optional(),
-  temperature: z.number().optional(),
-  top_p: z.number().optional(),
-  max_tokens: z.number().optional(),
-  max_completion_tokens: z.number().optional(),
-  presence_penalty: z.number().optional(),
-  frequency_penalty: z.number().optional(),
-  stop: z.union([z.string(), z.array(z.string())]).optional(),
-  seed: z.number().optional(),
-  metadata: z
-    .object({
-      clawpiDynamicSkills: z.boolean().optional(),
-    })
-    .passthrough()
-    .optional(),
-}).passthrough();
+const openAiChatCompletionBodySchema = z
+  .object({
+    model: z.string().optional(),
+    messages: z.array(
+      z.object({
+        role: z.enum(["system", "user", "assistant", "tool"]),
+        content: z.union([z.string(), z.array(z.unknown())]),
+        name: z.string().optional(),
+        tool_call_id: z.string().optional(),
+        tool_calls: z.array(z.unknown()).optional(),
+      }),
+    ),
+    stream: z.boolean().optional(),
+    user: z.string().optional(),
+    tools: z.array(z.unknown()).optional(),
+    tool_choice: z.unknown().optional(),
+    parallel_tool_calls: z.boolean().optional(),
+    stream_options: z.unknown().optional(),
+    response_format: z.unknown().optional(),
+    temperature: z.number().optional(),
+    top_p: z.number().optional(),
+    max_tokens: z.number().optional(),
+    max_completion_tokens: z.number().optional(),
+    presence_penalty: z.number().optional(),
+    frequency_penalty: z.number().optional(),
+    stop: z.union([z.string(), z.array(z.string())]).optional(),
+    seed: z.number().optional(),
+    metadata: z
+      .object({
+        clawpiDynamicSkills: z.boolean().optional(),
+      })
+      .passthrough()
+      .optional(),
+  })
+  .passthrough();
 
 type OpenAiCompatMessage = z.infer<
   typeof openAiChatCompletionBodySchema
@@ -506,13 +508,18 @@ export function registerMiscCompatRoutes(
             stream: body.stream ?? true,
             user: body.user,
           }),
+          // Streamed completions stay open for as long as the model emits
+          // tokens, so the default request deadline must not apply here.
+          timeoutMs: null,
         },
       );
 
       if (!response.ok || !response.body) {
         const errorText = await response.text();
         return new Response(
-          normalizeCompatErrorMessage(errorText || "Upstream completion failed"),
+          normalizeCompatErrorMessage(
+            errorText || "Upstream completion failed",
+          ),
           {
             status: response.status,
           },

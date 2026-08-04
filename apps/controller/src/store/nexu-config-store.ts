@@ -28,6 +28,7 @@ import {
   DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID,
   normalizeDesktopCloudImageModelId,
   normalizeDesktopCloudModels,
+  withBuiltInDesktopCloudChatModels,
 } from "../lib/desktop-cloud-models.js";
 import { logger } from "../lib/logger.js";
 import { proxyFetch } from "../lib/proxy-fetch.js";
@@ -104,7 +105,7 @@ export const DESKTOP_CLOUD_SUPPLEMENTAL_MODEL_IDS = new Set([
 function pickSupplementalDesktopCloudModels(
   models: readonly CloudModel[] | null | undefined,
 ): CloudModel[] {
-  return normalizeDesktopCloudModels(
+  return withBuiltInDesktopCloudChatModels(
     (models ?? []).filter((model) =>
       DESKTOP_CLOUD_SUPPLEMENTAL_MODEL_IDS.has(model.id),
     ),
@@ -484,11 +485,12 @@ export class NexuConfigStore {
       const sessions = readDesktopCloudSessions(config);
       const currentCloud = readDesktopCloud(config);
       const rawNextModels = input.models ?? currentCloud.models ?? [];
-      const shouldIncludeBuiltInModels =
-        rawNextModels.length > 0 || input.apiKey != null;
-      const nextModels = shouldIncludeBuiltInModels
-        ? normalizeDesktopCloudModels(rawNextModels)
-        : rawNextModels;
+      const nextModels =
+        input.apiKey && rawNextModels.length === 0
+          ? withBuiltInDesktopCloudChatModels(rawNextModels)
+          : rawNextModels.length > 0
+            ? normalizeDesktopCloudModels(rawNextModels)
+            : rawNextModels;
       const hasModels = nextModels.length > 0;
       const nextCacheKey = hasModels
         ? (input.cacheKey ?? currentCloud.cacheKey ?? null)
@@ -1718,9 +1720,11 @@ export class NexuConfigStore {
     const config = await this.getConfig();
     const cloud = readDesktopCloud(config);
     const models =
-      (cloud.models?.length ?? 0) > 0 || cloud.apiKey
-        ? normalizeDesktopCloudModels(cloud.models)
-        : (cloud.models ?? []);
+      cloud.apiKey && (cloud.models?.length ?? 0) === 0
+        ? withBuiltInDesktopCloudChatModels(cloud.models)
+        : (cloud.models?.length ?? 0) > 0
+          ? normalizeDesktopCloudModels(cloud.models)
+          : (cloud.models ?? []);
     const cloudSessions = readDesktopCloudSessions(config);
     const { profiles, activeProfile } =
       await this.readConfiguredDesktopCloudProfile(config);

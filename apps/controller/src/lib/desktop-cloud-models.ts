@@ -8,6 +8,24 @@ export type DesktopCloudImageModel = DesktopCloudModel & {
   runtimeModelId: string;
 };
 
+/**
+ * Models that are part of the Claw-Pi cloud contract even when the remote
+ * `/v1/models` discovery request is temporarily unavailable.
+ *
+ * Keep this list deliberately small: entries are only merged for an active
+ * desktop cloud session with an API key, so disconnected users never see a
+ * model they cannot call. GPT-5.6 is a display-only alias of this backing model
+ * in the web app and therefore does not belong in the runtime catalog itself.
+ */
+export const BUILT_IN_DESKTOP_CLOUD_CHAT_MODELS: readonly DesktopCloudModel[] =
+  [
+    {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+    },
+  ];
+
 export const DESKTOP_CLOUD_IMAGE_PROVIDER_ID = "clawpi-image";
 export const DEFAULT_DESKTOP_CLOUD_IMAGE_MODEL_ID = `${DESKTOP_CLOUD_IMAGE_PROVIDER_ID}/gpt-image-2`;
 
@@ -102,4 +120,17 @@ export function normalizeDesktopCloudModels(
     byId.set(model.id, model);
   }
   return [...byId.values()];
+}
+
+export function withBuiltInDesktopCloudChatModels(
+  models: readonly DesktopCloudModel[] | undefined,
+): DesktopCloudModel[] {
+  const normalized = normalizeDesktopCloudModels(models);
+  const discoveredIds = new Set(normalized.map((model) => model.id));
+  return normalizeDesktopCloudModels([
+    ...normalized,
+    ...BUILT_IN_DESKTOP_CLOUD_CHAT_MODELS.filter(
+      (model) => !discoveredIds.has(model.id),
+    ),
+  ]);
 }

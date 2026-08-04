@@ -369,6 +369,39 @@ describe("compileOpenClawConfig", () => {
     expect(result.agents.list[0]?.model).toBeUndefined();
   });
 
+  it("keeps GPT-5.5 in the runtime allowlist when authenticated discovery is empty", () => {
+    const result = compileOpenClawConfig(
+      createConfig({
+        runtime: {
+          gateway: {
+            port: 18789,
+            bind: "loopback",
+            authMode: "token",
+          },
+          defaultModelId: "link/gpt-5.5",
+        },
+        providers: [],
+        desktop: {
+          selectedModelId: "link/gpt-5.5",
+          cloud: {
+            linkUrl: "https://link.example.com",
+            apiKey: "link-key",
+            models: [],
+          },
+        },
+      }),
+      createEnv(),
+    );
+
+    expect(result.models?.providers.link?.models).toContainEqual(
+      expect.objectContaining({ id: "gpt-5.5", name: "GPT-5.5" }),
+    );
+    expect(result.agents.defaults?.models).toHaveProperty("link/gpt-5.5");
+    expect(result.agents.defaults?.model).toEqual({
+      primary: "link/gpt-5.5",
+    });
+  });
+
   it("does not compile a Link provider for a whitespace-only cloud token", () => {
     const result = compileOpenClawConfig(
       createConfig({

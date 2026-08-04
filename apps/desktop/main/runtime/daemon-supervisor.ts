@@ -205,6 +205,27 @@ export class RuntimeOrchestrator {
     return this.getRuntimeState();
   }
 
+  /**
+   * Merge extra env vars into every not-yet-started unit manifest.
+   *
+   * Manifests are built at module load, before Electron can resolve the OS
+   * proxy. This lets the proxy values be injected during cold start, while
+   * still landing in the env of each spawned sidecar. Values already present in
+   * a manifest win, so a unit that deliberately pins a var keeps its value.
+   */
+  patchUnitEnv(extraEnv: Record<string, string>): void {
+    if (Object.keys(extraEnv).length === 0) {
+      return;
+    }
+
+    for (const record of this.units.values()) {
+      record.manifest.env = {
+        ...extraEnv,
+        ...record.manifest.env,
+      };
+    }
+  }
+
   async stopAll(): Promise<RuntimeState> {
     const stopPromises = Array.from(this.units.values())
       .filter(

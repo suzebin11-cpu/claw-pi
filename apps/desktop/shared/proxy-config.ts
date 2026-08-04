@@ -1,5 +1,17 @@
 export type ProxySource = "env" | "system" | "direct";
 
+/**
+ * A proxy discovered from the OS (WinHTTP/PAC on Windows, network settings on
+ * macOS) rather than from environment variables. Electron's networking stack
+ * resolves this automatically in `mode: "system"`, but Node child processes do
+ * not — they only honour HTTP_PROXY/HTTPS_PROXY. Carrying the resolved value
+ * here lets us hand the same proxy to the controller/openclaw sidecars.
+ */
+export type ResolvedSystemProxy = {
+  /** Proxy origin in `http://host:port` form. */
+  url: string;
+};
+
 export type ProxyEnvConfig = {
   httpProxy: string | null;
   httpsProxy: string | null;
@@ -93,6 +105,89 @@ export function redactProxyUrl(url: string | null): string | null {
   }
 }
 
+/**
+ * Parse an Electron `session.resolveProxy()` result into a proxy URL.
+ *
+ * The PAC-style return value is a semicolon-separated preference list, e.g.
+ * `"PROXY proxy.corp:8080; DIRECT"` or `"DIRECT"`. We take the first usable
+ * proxy entry. `DIRECT` (no proxy needed) yields null so callers keep a direct
+ * connection instead of inventing a proxy.
+ */
+export function parseResolvedProxy(
+  resolved: string | null | undefined,
+): ResolvedSystemProxy | null {
+  if (typeof resolved !== "string") {
+    return null;
+  }
+
+  for (const rawEntry of resolved.split(";")) {
+    const entry = rawEntry.trim();
+    if (entry.length === 0) {
+      continue;
+    }
+
+    const match = /^(PROXY|HTTPS|SOCKS|SOCKS4|SOCKS5)\s+(\S+)$/i.exec(entry);
+    if (!match) {
+      // "DIRECT" and anything unrecognized: keep scanning the preference list.
+      continue;
+    }
+
+    const scheme = match[1].toUpperCase();
+    const authority = match[2];
+    if (authority.length === 0) {
+      continue;
+    }
+
+    // Node's fetch proxy support only understands http(s) proxies. Skip SOCKS
+    // rather than emitting an env var that would break every child request.
+    if (scheme === "SOCKS" || scheme === "SOCKS4" || scheme === "SOCKS5") {
+      continue;
+    }
+
+    const prefix = scheme === "HTTPS" ? "https://" : "http://";
+    const url = /^[a-z][a-z0-9+.-]*:\/\//i.test(authority)
+      ? authority
+      : `${prefix}${authority}`;
+
+    try {
+      // Normalize and reject malformed authorities early.
+      return { url: new URL(url).origin };
+    } catch {
+      // Malformed authority: fall through to the next preference-list entry.
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Fold a system-resolved proxy into an existing policy so child processes get
+ * concrete HTTP_PROXY/HTTPS_PROXY values. Explicit env configuration always
+ * wins: if the user set the vars themselves, we do not second-guess them.
+ */
+export function withResolvedSystemProxy(
+  policy: ProxyPolicy,
+  resolved: ResolvedSystemProxy | null,
+): ProxyPolicy {
+  if (policy.source !== "system" || !resolved) {
+    return policy;
+  }
+
+  return {
+    ...policy,
+    env: {
+      ...policy.env,
+      httpProxy: resolved.url,
+      httpsProxy: resolved.url,
+    },
+    diagnostics: {
+      ...policy.diagnostics,
+      httpProxyRedacted: redactProxyUrl(resolved.url),
+      httpsProxyRedacted: redactProxyUrl(resolved.url),
+    },
+  };
+}
+
 export function readProxyPolicy(
   env: Record<string, string | undefined>,
   options?: {
@@ -122,6 +217,15 @@ export function readProxyPolicy(
   };
 }
 
+/**
+ * Build the proxy-related env vars handed to the controller/openclaw sidecars.
+ *
+ * Node does not read the OS proxy settings, so a `source: "system"` policy only
+ * reaches child processes if it was first resolved through
+ * {@link withResolvedSystemProxy}. Without that, sidecars connect DIRECT on
+ * proxy-only networks and every model request fails with
+ * UND_ERR_CONNECT_TIMEOUT.
+ */
 export function buildChildProcessProxyEnv(
   policy: ProxyPolicy,
 ): Record<string, string> {

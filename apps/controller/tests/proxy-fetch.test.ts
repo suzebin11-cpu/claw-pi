@@ -1,5 +1,7 @@
+import net from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ensureNetworkDefaults,
   mergeNoProxyEntries,
   proxyFetch,
   readProxyFetchEnv,
@@ -132,5 +134,118 @@ describe("proxyFetch", () => {
 
     expect(process.env.NODE_USE_ENV_PROXY).toBe("1");
     expect(process.env.NO_PROXY).toBe("localhost,127.0.0.1,::1");
+  });
+
+  it("applies IPv4-first and happy-eyeballs connection defaults", () => {
+    ensureNetworkDefaults();
+
+    expect(net.getDefaultAutoSelectFamily()).toBe(true);
+    expect(net.getDefaultAutoSelectFamilyAttemptTimeout()).toBe(500);
+  });
+
+  it("retries an idempotent GET once on a transient connect timeout", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(new Error("fetch failed"), {
+          code: "UND_ERR_CONNECT_TIMEOUT",
+        }),
+      )
+      .mockResolvedValueOnce(new Response("ok"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await proxyFetch("https://example.com");
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry non-idempotent requests", async () => {
+    const fetchMock = vi.fn().mockRejectedValue(
+      Object.assign(new Error("fetch failed"), {
+        code: "UND_ERR_CONNECT_TIMEOUT",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      proxyFetch("https://example.com", { method: "POST", body: "{}" }),
+    ).rejects.toThrow();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retry after the deadline already expired", async () => {
+    // Without the deadline check the retry fires into an aborted signal and
+    // masks the real timeout reason.
+    const fetchMock = vi.fn(
+      (_input: string | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () =>
+              reject(
+                Object.assign(new Error("fetch failed"), {
+                  code: "UND_ERR_CONNECT_TIMEOUT",
+                }),
+              ),
+            { once: true },
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      proxyFetch("https://example.com", { timeoutMs: 10 }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies a default deadline so no request can hang forever", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_input: string | URL, init?: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => {
+                const error = new Error("aborted");
+                error.name = "AbortError";
+                reject(error);
+              },
+              { once: true },
+            );
+          }),
+      ),
+    );
+
+    vi.useFakeTimers();
+    try {
+      const pending = proxyFetch("https://example.com").catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(30_001);
+
+      expect(await pending).toMatchObject({ name: "TimeoutError" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honours timeoutMs: null for streamed responses", async () => {
+    const fetchMock = vi.fn(
+      async (_input: string | URL, init?: RequestInit) => {
+        // Opting out must leave the request without any abort deadline.
+        expect(init?.signal).toBeUndefined();
+        return new Response("stream");
+      },
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const response = await proxyFetch("https://example.com", {
+      timeoutMs: null,
+    });
+
+    expect(response.status).toBe(200);
   });
 });

@@ -258,6 +258,32 @@ describe("NexuConfigStore", () => {
     });
   });
 
+  it("persists the built-in GPT-5.5 fallback for an authenticated empty catalog", async () => {
+    const store = new NexuConfigStore(env);
+
+    await store.applyActivationCloudState({
+      connected: true,
+      polling: false,
+      linkUrl: "https://link.nexu.io",
+      apiKey: "link-key",
+      models: [],
+    });
+
+    const status = await store.getDesktopCloudStatus();
+    const config = await store.getConfig();
+
+    expect(status.models).toContainEqual({
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+    });
+    expect(config.desktop.cloud?.models).toContainEqual({
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+    });
+  });
+
   it("refreshes connected desktop cloud models from curated models plus allowed authenticated supplements", async () => {
     const store = new NexuConfigStore(env);
     const requestedUrls: string[] = [];
@@ -471,12 +497,14 @@ describe("NexuConfigStore", () => {
 
     const status = await store.refreshDesktopCloudModels();
     const config = await store.getConfig();
-    const cloud = (config.desktop as {
-      cloud?: {
-        apiKey?: string | null;
-        invalidatedApiKeyHash?: string | null;
-      };
-    }).cloud;
+    const cloud = (
+      config.desktop as {
+        cloud?: {
+          apiKey?: string | null;
+          invalidatedApiKeyHash?: string | null;
+        };
+      }
+    ).cloud;
 
     expect(status.connected).toBe(false);
     expect(status.models.map((model) => model.id)).toEqual(["gpt-5.4"]);

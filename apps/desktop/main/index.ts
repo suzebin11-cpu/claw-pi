@@ -17,7 +17,11 @@ import {
 } from "electron";
 import { getOpenclawSkillsDir } from "../shared/desktop-paths";
 import type { DesktopChromeMode, DesktopSurface } from "../shared/host";
-import { buildChildProcessProxyEnv } from "../shared/proxy-config";
+import {
+  buildChildProcessProxyEnv,
+  redactProxyUrl,
+  withResolvedSystemProxy,
+} from "../shared/proxy-config";
 import { getDesktopRuntimeConfig } from "../shared/runtime-config";
 import { getDesktopSentryBuildMetadata } from "../shared/sentry-build-metadata";
 import { getDesktopAppRoot, getWorkspaceRoot } from "../shared/workspace-paths";
@@ -703,7 +707,38 @@ async function waitForControllerReadiness(): Promise<void> {
   );
 }
 
+/**
+ * Resolve the OS proxy and push it into the sidecar env before they spawn.
+ *
+ * Electron's own networking honours the system proxy via `mode: "system"`, but
+ * Node child processes read only HTTP_PROXY/HTTPS_PROXY. On a proxy-only
+ * Windows network the controller/openclaw sidecars would otherwise attempt
+ * direct egress and every model call would fail with UND_ERR_CONNECT_TIMEOUT
+ * after a long stall. Best-effort: on a direct network this is a no-op.
+ */
+async function applyResolvedSystemProxyToRuntimeUnits(): Promise<void> {
+  if (!proxyManager || runtimeConfig.proxy.source !== "system") {
+    return;
+  }
+
+  const resolved = await proxyManager.resolveSystemProxy();
+  if (!resolved) {
+    logColdStart("system proxy resolution: direct (no proxy injected)");
+    return;
+  }
+
+  runtimeConfig.proxy = withResolvedSystemProxy(runtimeConfig.proxy, resolved);
+  orchestrator.patchUnitEnv(buildChildProcessProxyEnv(runtimeConfig.proxy));
+  logColdStart(
+    `system proxy resolved for sidecars: ${redactProxyUrl(resolved.url)}`,
+  );
+  await refreshProxyDiagnostics();
+}
+
 async function runDesktopColdStart(): Promise<void> {
+  // Must run before any sidecar spawns so they inherit the proxy env.
+  await applyResolvedSystemProxyToRuntimeUnits();
+
   if (useExternalController) {
     diagnosticsReporter?.markColdStartRunning("using external controller");
     logColdStart(

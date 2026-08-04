@@ -90,4 +90,52 @@ describe("ProxyManager", () => {
 
     expect(setProxy).toHaveBeenCalledWith({ mode: "direct" });
   });
+
+  describe("resolveSystemProxy", () => {
+    function createManager(resolveProxy: (url: string) => Promise<string>) {
+      return new ProxyManager({
+        setProxy: vi.fn(async () => undefined),
+        closeAllConnections: vi.fn(async () => undefined),
+        resolveProxy: vi.fn(resolveProxy),
+      });
+    }
+
+    it("returns the proxy Chromium resolved for external traffic", async () => {
+      const resolveProxy = vi.fn(async () => "PROXY corp.proxy:8080");
+      const manager = createManager(resolveProxy);
+
+      expect(await manager.resolveSystemProxy()).toEqual({
+        url: "http://corp.proxy:8080",
+      });
+      expect(resolveProxy).toHaveBeenCalledWith("https://yunwu.ai/v1/models");
+    });
+
+    it("returns null on a direct network", async () => {
+      const manager = createManager(async () => "DIRECT");
+
+      expect(await manager.resolveSystemProxy()).toBeNull();
+    });
+
+    it("returns null when resolution rejects", async () => {
+      const manager = createManager(async () => {
+        throw new Error("resolver unavailable");
+      });
+
+      expect(await manager.resolveSystemProxy()).toBeNull();
+    });
+
+    it("gives up rather than letting a hung PAC lookup block startup", async () => {
+      vi.useFakeTimers();
+      try {
+        const manager = createManager(() => new Promise<string>(() => {}));
+        const pending = manager.resolveSystemProxy();
+
+        await vi.advanceTimersByTimeAsync(3_100);
+
+        expect(await pending).toBeNull();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

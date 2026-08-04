@@ -782,3 +782,79 @@ reintroduce it after the Controller has invalidated the cloud session. The
 stored invalidation fingerprint prevents that exact credential from being
 reimported without persisting the secret itself. Credential rotation remains
 the recovery path for a genuinely expired token.
+
+== Windows proxy and model-catalog resilience addendum (2026-08-04)
+
+=== 4. Solution strategy
+
+Electron keeps Chromium in system-proxy mode and resolves the actual Link model
+catalog target before any Controller or OpenClaw sidecar starts. The resolved
+HTTP proxy is converted into `HTTP_PROXY`, `HTTPS_PROXY`, `NO_PROXY`, and
+`NODE_USE_ENV_PROXY=1` for every managed child process. Loopback addresses are
+always appended to `NO_PROXY` so local Controller and OpenClaw traffic never
+leaves the machine.
+
+An authenticated desktop cloud session also carries a minimal built-in chat
+catalog containing `gpt-5.5`. Remote `/v1/models` data remains authoritative
+when present. The built-in entry is used only when discovery omits that model or
+temporarily fails; disconnected sessions do not receive the authenticated
+fallback. The UI-only `link/gpt-5.6` alias continues to resolve to this backing
+model.
+
+=== 6. Runtime flow
+
+. Electron applies the configured system or explicit proxy to its session.
+. For system mode, Electron resolves `https://yunwu.ai/v1/models` through the
+  Windows proxy resolver with a bounded timeout.
+. The concrete proxy and loopback bypass list are injected into the Controller
+  and OpenClaw manifests before either process starts.
+. Controller enables Node environment-proxy support and uses bounded network
+  requests for catalog and health operations.
+. If authenticated model discovery is unavailable, Controller compiles the
+  built-in `link/gpt-5.5` provider entry and runtime allowlist entry. The next
+  successful discovery refresh replaces fallback metadata without duplicating
+  the model.
+
+=== 7. Deployment and packaging
+
+The fix is distributed as desktop version `0.3.21`. GitHub Actions builds the
+NSIS installer and uploads the installer, blockmap, checksum, and `latest.yml`
+to the Cloudflare R2 stable Windows feed. The manifest is uploaded last and is
+publicly verified before the GitHub release is finalized, so existing `0.3.20`
+installations only observe a complete update.
+
+=== 9. Architecture decisions
+
+==== ADR-015: Resolve the OS proxy before sidecar startup
+
+*Status:* accepted
+
+The desktop application does not write `HKCU\Environment` and does not assume a
+fixed local proxy port. Chromium's Windows/PAC resolver is the source of truth;
+the resulting process-local environment is inherited only by Claw-Pi runtime
+children.
+
+==== ADR-016: Keep the backing chat model available during catalog outages
+
+*Status:* accepted
+
+`gpt-5.5` is part of the authenticated Claw-Pi cloud contract and is the backing
+runtime identity for the GPT-5.6 display alias. A minimal local fallback avoids
+removing both cards merely because model discovery timed out. Authentication is
+still required, and an explicit HTTP 401 removes the API key and the fallback.
+
+=== 10. Quality requirements
+
+Proxy resolution must not add more than three seconds to cold start. Proxy
+credentials must be redacted from logs and diagnostics. Unit tests cover PAC
+result parsing, sidecar environment propagation, Node proxy activation,
+loopback bypass, the authenticated empty-catalog fallback, and OpenClaw runtime
+allowlist compilation.
+
+=== 11. Technical risks
+
+PAC rules can vary by destination, while child-process environment variables
+can represent only one HTTP(S) proxy. Resolving the actual Link model endpoint
+minimizes that mismatch. SOCKS-only system proxies are not converted because
+the bundled Node fetch path supports HTTP(S) environment proxies; those users
+must use a compatible HTTP proxy listener or a future explicit SOCKS agent.

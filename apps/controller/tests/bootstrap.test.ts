@@ -83,4 +83,18 @@ describe("bootstrapController", () => {
 
     expect(container.openclawSyncService.syncAll).toHaveBeenCalledTimes(1);
   });
+
+  it("does not block bootstrap on cloud model hydration", async () => {
+    const { container } = createContainer();
+    const hydration = vi.fn(
+      () => new Promise<void>(() => {}),
+    );
+    container.configStore.prepareDesktopCloudModelsForBootstrap = hydration;
+
+    await bootstrapController(container);
+
+    expect(container.openclawProcess.start).toHaveBeenCalledTimes(1);
+    expect(container.wsClient.connect).toHaveBeenCalledTimes(1);
+    expect(hydration).not.toHaveBeenCalled();
+  });
 });
