@@ -39,6 +39,7 @@ import {
 import "@/lib/api";
 import { toast } from "sonner";
 import {
+  getApiInternalActivationStatus,
   getApiInternalDesktopReady,
   getApiV1Me,
   getApiV1Sessions,
@@ -362,7 +363,43 @@ export function WorkspaceLayout() {
     return <Navigate to="/" replace />;
   }
 
-  return <WorkspaceLayoutInner />;
+  return (
+    <DesktopActivationGuard>
+      <WorkspaceLayoutInner />
+    </DesktopActivationGuard>
+  );
+}
+
+function DesktopActivationGuard({ children }: { children: React.ReactNode }) {
+  const isDesktopClient =
+    typeof navigator !== "undefined" &&
+    navigator.userAgent.includes("Electron");
+  const [activationRevoked, setActivationRevoked] = useState(false);
+  const { data: activationStatus } = useQuery({
+    queryKey: ["desktop-activation-status"],
+    queryFn: async () => {
+      const { data } = await getApiInternalActivationStatus();
+      return data;
+    },
+    enabled: isDesktopClient,
+    refetchInterval: 5_000,
+    retry: false,
+  });
+
+  useEffect(() => {
+    if (activationStatus?.activated !== false) {
+      return;
+    }
+
+    localStorage.removeItem(SETUP_COMPLETE_KEY);
+    setActivationRevoked(true);
+  }, [activationStatus?.activated]);
+
+  if (activationRevoked) {
+    return <Navigate to="/" replace />;
+  }
+
+  return children;
 }
 
 function WorkspaceLayoutInner() {

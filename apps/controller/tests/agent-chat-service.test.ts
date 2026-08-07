@@ -19,6 +19,7 @@ class FakeOpenClawWsClient {
   lastClose: { code: number; reason: string; at: number } | null = null;
   waitResponse: Record<string, unknown> = { status: "timeout" };
   historyResponse: Record<string, unknown> = { messages: [] };
+  agentErrors: Error[] = [];
 
   isConnected(): boolean {
     return this.connected;
@@ -40,6 +41,8 @@ class FakeOpenClawWsClient {
   ): Promise<Record<string, unknown>> {
     this.requests.push({ method, params });
     if (method === "agent") {
+      const error = this.agentErrors.shift();
+      if (error) throw error;
       return { runId: params.idempotencyKey, status: "started" };
     }
     if (method === "agent.wait") return this.waitResponse;
@@ -67,6 +70,14 @@ class FakeOpenClawWsClient {
 
   emitConnected(): void {
     this.connected = true;
+  }
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 3000;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error("condition not reached");
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }
 
@@ -203,6 +214,73 @@ describe("AgentChatService", () => {
     expect(
       fakeWs.requests.some((request) => request.method === "chat.history"),
     ).toBe(true);
+  });
+
+  it("retries the same idempotent run after a Gateway draining rejection", async () => {
+    let shutdownNotifications = 0;
+    let admissionWaits = 0;
+    const drainingService = new AgentChatService(
+      fakeWs as never,
+      {
+        openclawStateDir: path.join(rootDir, ".openclaw"),
+      } as ControllerEnv,
+      {
+        beginAgentChat: async (requestId: string) => ({
+          requestId,
+          markSubmitted: async () => {},
+          release: async () => {},
+        }),
+        noteGatewayShutdown: async () => {
+          shutdownNotifications += 1;
+        },
+        waitForChatAdmission: async () => {
+          admissionWaits += 1;
+        },
+      } as never,
+    );
+    fakeWs.agentErrors.push(
+      new Error("Gateway is draining for restart; new tasks are not accepted"),
+    );
+
+    const response = await drainingService.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "session-draining",
+      message: "retry this safely",
+      permissionMode: "full",
+      requestId: "stable-draining-id",
+    });
+    await waitFor(
+      () =>
+        fakeWs.requests.filter((request) => request.method === "agent")
+          .length === 2,
+    );
+
+    const agentRequests = fakeWs.requests.filter(
+      (request) => request.method === "agent",
+    );
+    expect(
+      agentRequests.map((request) => request.params.idempotencyKey),
+    ).toEqual(["stable-draining-id", "stable-draining-id"]);
+    expect(shutdownNotifications).toBe(1);
+    expect(admissionWaits).toBe(1);
+
+    fakeWs.emit({
+      type: "event",
+      event: "chat",
+      payload: {
+        sessionKey: "agent:bot-1:workbench:session-draining",
+        runId: "stable-draining-id",
+        state: "final",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "recovered after draining" }],
+        },
+      },
+    });
+
+    await expect(response.text()).resolves.toContain(
+      "recovered after draining",
+    );
   });
 
   it("waits through an empty OpenClaw final and adopts the real session run", async () => {

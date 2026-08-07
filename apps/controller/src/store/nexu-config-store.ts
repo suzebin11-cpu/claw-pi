@@ -410,6 +410,7 @@ export class NexuConfigStore {
   private readonly cloudProfilesStore: LowDbStore<CloudProfilesFile>;
   private readonly env: ControllerEnv;
   private readonly defaultCloudProfile: CloudProfileEntry;
+  private readonly invalidatedApiKeyHashes = new Set<string>();
   private pollingState: CloudPollingState | null = null;
 
   /** Callback fired when cloud state changes (connect/disconnect). */
@@ -675,6 +676,9 @@ export class NexuConfigStore {
           const supplementalModels = supplementalResult.models;
 
           if (supplementalResult.unauthorized) {
+            this.invalidatedApiKeyHashes.add(
+              fingerprintDesktopCloudApiKey(data.apiKey),
+            );
             const models =
               curatedModels && curatedModels.length > 0
                 ? curatedModels
@@ -691,7 +695,7 @@ export class NexuConfigStore {
               models,
               cacheKey: models.length > 0 ? cacheKey : null,
               modelsUpdatedAt: models.length > 0 ? Date.now() : null,
-              invalidatedApiKeyHash: fingerprintDesktopCloudApiKey(data.apiKey),
+              invalidatedApiKeyHash: null,
             });
             await this.onCloudStateChanged?.({
               hadCloudInventory: (previousCloud.models?.length ?? 0) > 0,
@@ -1955,6 +1959,9 @@ export class NexuConfigStore {
     const supplementalModels = supplementalResult.models;
 
     if (supplementalResult.unauthorized && cloud.apiKey) {
+      this.invalidatedApiKeyHashes.add(
+        fingerprintDesktopCloudApiKey(cloud.apiKey),
+      );
       const models =
         curatedModels && curatedModels.length > 0
           ? curatedModels
@@ -1970,7 +1977,7 @@ export class NexuConfigStore {
         models,
         cacheKey: models.length > 0 ? cacheKey : null,
         modelsUpdatedAt: models.length > 0 ? Date.now() : null,
-        invalidatedApiKeyHash: fingerprintDesktopCloudApiKey(cloud.apiKey),
+        invalidatedApiKeyHash: null,
       });
       await this.alignDefaultModelToCuratedList(models);
       await this.onCloudStateChanged?.({
@@ -2434,6 +2441,9 @@ export class NexuConfigStore {
         switchedCloud.apiKey,
       );
       if (refreshedResult.unauthorized) {
+        this.invalidatedApiKeyHashes.add(
+          fingerprintDesktopCloudApiKey(switchedCloud.apiKey),
+        );
         nextModels = pickCuratedDesktopCloudModels(nextModels);
         await this.setDesktopCloudState({
           connected: false,
@@ -2446,9 +2456,7 @@ export class NexuConfigStore {
           models: nextModels,
           cacheKey: nextModels.length > 0 ? cacheKey : null,
           modelsUpdatedAt: nextModels.length > 0 ? Date.now() : null,
-          invalidatedApiKeyHash: fingerprintDesktopCloudApiKey(
-            switchedCloud.apiKey,
-          ),
+          invalidatedApiKeyHash: null,
         });
         await this.onCloudStateChanged?.({
           hadCloudInventory: (previousCloud.models?.length ?? 0) > 0,
@@ -2661,6 +2669,11 @@ export class NexuConfigStore {
     apiKey?: string | null;
     models?: Array<{ id: string; name: string; provider?: string }>;
   }): Promise<void> {
+    if (input.apiKey) {
+      this.invalidatedApiKeyHashes.delete(
+        fingerprintDesktopCloudApiKey(input.apiKey),
+      );
+    }
     await this.setDesktopCloudState({
       ...input,
       ...(input.apiKey ? { invalidatedApiKeyHash: null } : {}),
@@ -2677,8 +2690,9 @@ export class NexuConfigStore {
 
     if (
       input.apiKey &&
-      current.invalidatedApiKeyHash ===
-        fingerprintDesktopCloudApiKey(input.apiKey)
+      this.invalidatedApiKeyHashes.has(
+        fingerprintDesktopCloudApiKey(input.apiKey),
+      )
     ) {
       return false;
     }

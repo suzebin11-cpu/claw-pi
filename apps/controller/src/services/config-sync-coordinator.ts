@@ -102,6 +102,8 @@ export class ConfigSyncCoordinator {
   private restartDeferredReason: string | null = null;
   private serial: Promise<unknown> = Promise.resolve();
   private restartTask: Promise<void> | null = null;
+  private gatewayRecoveryTask: Promise<void> | null = null;
+  private gatewayRestartObserved = false;
   private retrySuppressed = false;
   private readonly pendingPath: string;
   private readonly restartObserveTimeoutMs: number;
@@ -175,6 +177,63 @@ export class ConfigSyncCoordinator {
       "config_sync_startup_recovery",
     );
     return true;
+  }
+
+  async noteGatewayShutdown(input: {
+    restartExpectedMs: number | null;
+    reason: string | null;
+  }): Promise<void> {
+    await this.withLock(() => {
+      this.gatewayRestartObserved = true;
+      this.acceptingNewChats = false;
+      if (!this.restartTask) {
+        this.state = "DRAINING";
+      }
+      if (!this.pendingConfig) {
+        this.restartDeferredReason = "gateway_restart_observed";
+      }
+    });
+    logger.info(
+      {
+        restartExpectedMs: input.restartExpectedMs,
+        reason: input.reason,
+        coordinatorState: this.state,
+        activeAgentStreams: this.activeAgentStreams,
+      },
+      "config_sync_gateway_restart_observed",
+    );
+  }
+
+  async noteGatewayDisconnected(): Promise<void> {
+    await this.withLock(() => {
+      if (this.gatewayRestartObserved && !this.restartTask) {
+        this.state = "RECONNECTING";
+      }
+    });
+  }
+
+  noteGatewayConnected(): void {
+    if (!this.gatewayRestartObserved && !this.retrySuppressed) {
+      return;
+    }
+    this.startGatewayRecoveryTask();
+  }
+
+  async waitForChatAdmission(
+    options: { timeoutMs?: number; signal?: AbortSignal } = {},
+  ): Promise<void> {
+    const deadline =
+      Date.now() + (options.timeoutMs ?? this.gatewayReadyTimeoutMs);
+    while (Date.now() < deadline) {
+      if (options.signal?.aborted) {
+        throw new DOMException("Aborted", "AbortError");
+      }
+      if (this.acceptingNewChats && this.wsClient.isConnected()) {
+        return;
+      }
+      await delay(this.pollIntervalMs);
+    }
+    throw new GatewayUpdatingError();
   }
 
   async beginAgentChat(requestId: string): Promise<AgentChatLease> {
@@ -329,6 +388,125 @@ export class ConfigSyncCoordinator {
         },
       );
     });
+  }
+
+  private startGatewayRecoveryTask(): void {
+    if (this.gatewayRecoveryTask) return;
+    this.gatewayRecoveryTask = this.recoverGatewayAfterReconnect()
+      .catch(async (error) => {
+        await this.withLock(() => {
+          if (this.gatewayRestartObserved) {
+            this.state = "RECONNECTING";
+            this.acceptingNewChats = false;
+            this.restartDeferredReason = "gateway_recovery_failed";
+          }
+        });
+        logger.error(
+          {
+            err: error,
+            coordinatorState: this.state,
+            pendingRevision: this.pendingConfig?.configRevision ?? null,
+          },
+          "config_sync_gateway_recovery_failed",
+        );
+      })
+      .finally(() => {
+        this.gatewayRecoveryTask = null;
+      });
+  }
+
+  private async recoverGatewayAfterReconnect(): Promise<void> {
+    const deadline = Date.now() + this.gatewayReadyTimeoutMs;
+    while (Date.now() < deadline) {
+      if (this.restartTask || !this.wsClient.isConnected()) {
+        await delay(this.pollIntervalMs);
+        continue;
+      }
+
+      const health = await this.runtimeHealth
+        .probe()
+        .catch(() => ({ ok: false }));
+      if (!health.ok) {
+        await delay(this.pollIntervalMs);
+        continue;
+      }
+
+      const current = await this.configWriter.read();
+      const currentRevision = current ? openClawConfigRevision(current) : null;
+      const recovery = await this.withLock(async () => {
+        if (this.restartTask) {
+          return { settled: false, shouldRestart: false, reconciled: false };
+        }
+
+        let reconciled = false;
+        if (
+          this.pendingConfig &&
+          currentRevision === this.pendingConfig.configRevision
+        ) {
+          await rm(this.pendingPath, { force: true });
+          this.pendingConfig = null;
+          this.retrySuppressed = false;
+          reconciled = true;
+        }
+
+        this.gatewayRestartObserved = false;
+        this.acceptingNewChats = true;
+        if (this.pendingConfig) {
+          this.state = "RESTART_PENDING";
+          if (this.retrySuppressed) {
+            this.restartDeferredReason = "restart_failed_pending_retained";
+          } else {
+            this.restartDeferredReason =
+              this.activeAgentStreams > 0 || this.pendingAgentRequests > 0
+                ? "active_agent_chat"
+                : null;
+          }
+          return {
+            settled: true,
+            shouldRestart: this.tryEnterDrainingLocked(),
+            reconciled,
+          };
+        }
+
+        this.state = "READY";
+        this.restartDeferredReason = null;
+        return { settled: true, shouldRestart: false, reconciled };
+      });
+
+      if (!recovery.settled) {
+        await delay(this.pollIntervalMs);
+        continue;
+      }
+      if (recovery.shouldRestart) {
+        this.startRestartTask();
+      }
+      logger.info(
+        {
+          coordinatorState: this.state,
+          pendingRevision: this.pendingConfig?.configRevision ?? null,
+          recoveryResult: recovery.reconciled
+            ? "pending_revision_reconciled"
+            : "gateway_ready",
+        },
+        "config_sync_gateway_recovered",
+      );
+      return;
+    }
+
+    await this.withLock(() => {
+      if (this.gatewayRestartObserved) {
+        this.state = "RECONNECTING";
+        this.acceptingNewChats = false;
+        this.restartDeferredReason = "gateway_recovery_timeout";
+      }
+    });
+    logger.error(
+      {
+        coordinatorState: this.state,
+        pendingRevision: this.pendingConfig?.configRevision ?? null,
+      },
+      "config_sync_gateway_recovery_timeout",
+    );
   }
 
   private async performRestart(): Promise<void> {

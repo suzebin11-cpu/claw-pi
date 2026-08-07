@@ -92,10 +92,17 @@ export async function bootstrapController(
     })();
   });
 
-  container.wsClient.onGatewayShutdown(({ restartExpectedMs }) => {
+  container.wsClient.onGatewayShutdown(({ restartExpectedMs, reason }) => {
     if (restartExpectedMs !== null) {
       container.openclawProcess.noteControlledRestartExpected("ws-shutdown");
     }
+    void container.configSyncCoordinator?.noteGatewayShutdown({
+      restartExpectedMs,
+      reason,
+    });
+  });
+  const disposeCoordinatorDisconnect = container.wsClient.onDisconnected(() => {
+    void container.configSyncCoordinator?.noteGatewayDisconnected();
   });
 
   // When WS handshake completes, push current config (skipped if unchanged)
@@ -103,6 +110,7 @@ export async function bootstrapController(
   // as "unhealthy" instead of "starting".
   container.wsClient.onConnected(() => {
     container.runtimeState.bootPhase = "ready";
+    container.configSyncCoordinator?.noteGatewayConnected();
     // Force a re-push when writes landed after the process started but before
     // the WS handshake completed, or during a later gateway reconnect.
     const hasDisconnectedWrites = container.gatewayService.invalidateIfDirty();
@@ -117,6 +125,7 @@ export async function bootstrapController(
   const stopBackgroundLoops = container.startBackgroundLoops();
   return () => {
     disposeStableWatch();
+    disposeCoordinatorDisconnect();
     stopBackgroundLoops();
   };
 }

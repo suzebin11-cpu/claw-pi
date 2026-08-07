@@ -4,6 +4,13 @@ import type { ControllerContainer } from "../src/app/container.js";
 
 function createContainer(opts?: { hasDisconnectedWrites?: boolean }) {
   let onConnected: (() => void) | null = null;
+  let onDisconnected: (() => void) | null = null;
+  let onGatewayShutdown:
+    | ((payload: {
+        restartExpectedMs: number | null;
+        reason: string | null;
+      }) => void)
+    | null = null;
   let onStable: (() => void) | null = null;
 
   const container = {
@@ -41,10 +48,29 @@ function createContainer(opts?: { hasDisconnectedWrites?: boolean }) {
     channelFallbackService: {
       start: vi.fn(),
     },
+    configSyncCoordinator: {
+      recoverPendingBeforeGatewayStart: vi.fn(async () => false),
+      noteGatewayShutdown: vi.fn(async () => {}),
+      noteGatewayDisconnected: vi.fn(async () => {}),
+      noteGatewayConnected: vi.fn(),
+    },
     wsClient: {
       connect: vi.fn(),
       isConnected: vi.fn(() => true),
-      onGatewayShutdown: vi.fn(),
+      onGatewayShutdown: vi.fn(
+        (
+          cb: (payload: {
+            restartExpectedMs: number | null;
+            reason: string | null;
+          }) => void,
+        ) => {
+          onGatewayShutdown = cb;
+        },
+      ),
+      onDisconnected: vi.fn((cb: () => void) => {
+        onDisconnected = cb;
+        return vi.fn();
+      }),
       onConnected: vi.fn((cb: () => void) => {
         onConnected = cb;
       }),
@@ -58,6 +84,11 @@ function createContainer(opts?: { hasDisconnectedWrites?: boolean }) {
   return {
     container,
     emitConnected: () => onConnected?.(),
+    emitDisconnected: () => onDisconnected?.(),
+    emitGatewayShutdown: (payload: {
+      restartExpectedMs: number | null;
+      reason: string | null;
+    }) => onGatewayShutdown?.(payload),
     emitStable: () => onStable?.(),
   };
 }
@@ -86,9 +117,7 @@ describe("bootstrapController", () => {
 
   it("does not block bootstrap on cloud model hydration", async () => {
     const { container } = createContainer();
-    const hydration = vi.fn(
-      () => new Promise<void>(() => {}),
-    );
+    const hydration = vi.fn(() => new Promise<void>(() => {}));
     container.configStore.prepareDesktopCloudModelsForBootstrap = hydration;
 
     await bootstrapController(container);
@@ -96,5 +125,34 @@ describe("bootstrapController", () => {
     expect(container.openclawProcess.start).toHaveBeenCalledTimes(1);
     expect(container.wsClient.connect).toHaveBeenCalledTimes(1);
     expect(hydration).not.toHaveBeenCalled();
+  });
+
+  it("forwards Gateway restart lifecycle events to chat admission coordination", async () => {
+    const { container, emitConnected, emitDisconnected, emitGatewayShutdown } =
+      createContainer();
+
+    await bootstrapController(container);
+    emitGatewayShutdown({
+      restartExpectedMs: 1500,
+      reason: "config reload",
+    });
+    emitDisconnected();
+    emitConnected();
+
+    expect(
+      container.openclawProcess.noteControlledRestartExpected,
+    ).toHaveBeenCalledWith("ws-shutdown");
+    expect(
+      container.configSyncCoordinator.noteGatewayShutdown,
+    ).toHaveBeenCalledWith({
+      restartExpectedMs: 1500,
+      reason: "config reload",
+    });
+    expect(
+      container.configSyncCoordinator.noteGatewayDisconnected,
+    ).toHaveBeenCalledTimes(1);
+    expect(
+      container.configSyncCoordinator.noteGatewayConnected,
+    ).toHaveBeenCalledTimes(1);
   });
 });

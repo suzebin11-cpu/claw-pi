@@ -1,15 +1,11 @@
 import { readFile, readdir } from "node:fs/promises";
 import { extname, join, relative } from "node:path";
+import { init, parse } from "es-module-lexer";
 
 const repoRoot = process.cwd();
 const targets = ["apps/controller/dist"];
 const allowedExtensions = new Set([".js", ".mjs", ".cjs", ".json", ".node"]);
 const jsFileExtensions = new Set([".js", ".mjs", ".cjs"]);
-
-const importPatterns = [
-  /\b(?:import|export)\s+(?:[^"'`]*?\s+from\s+)?["']([^"']+)["']/g,
-  /\bimport\s*\(\s*["']([^"']+)["']\s*\)/g,
-];
 
 async function walkFiles(dirPath) {
   const entries = await readdir(dirPath, { withFileTypes: true });
@@ -46,28 +42,28 @@ function hasAllowedExtension(specifier) {
   return allowedExtensions.has(extension);
 }
 
-function collectMissingExtensions(fileContent) {
+async function collectMissingExtensions(fileContent) {
   const missing = [];
 
-  for (const pattern of importPatterns) {
-    for (const match of fileContent.matchAll(pattern)) {
-      const specifier = match[1];
-      if (!specifier || !isRelativeSpecifier(specifier)) {
-        continue;
-      }
-
-      if (hasAllowedExtension(specifier)) {
-        continue;
-      }
-
-      missing.push(specifier);
+  const [imports] = parse(fileContent);
+  for (const entry of imports) {
+    const specifier = fileContent.slice(entry.s, entry.e);
+    if (!specifier || !isRelativeSpecifier(specifier)) {
+      continue;
     }
+
+    if (hasAllowedExtension(specifier)) {
+      continue;
+    }
+
+    missing.push(specifier);
   }
 
   return missing;
 }
 
 async function main() {
+  await init;
   const violations = [];
 
   for (const target of targets) {
@@ -82,7 +78,7 @@ async function main() {
 
     for (const filePath of files) {
       const source = await readFile(filePath, "utf8");
-      const missingSpecifiers = collectMissingExtensions(source);
+      const missingSpecifiers = await collectMissingExtensions(source);
 
       if (missingSpecifiers.length === 0) {
         continue;

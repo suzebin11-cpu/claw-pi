@@ -1053,3 +1053,138 @@ OpenClaw version; unknown paths intentionally fail safe to restart-required.
 from `chat.history`, so recovery depends on session history retention and uses
 a timestamp/run-scoped bounded search. A future OpenClaw run-result endpoint
 would remove that residual ambiguity.
+
+== Desktop credential recovery hotfix addendum (2026-08-07)
+
+=== 4. Solution strategy
+
+Controller treats HTTP 401 from every activation-JWT-backed cloud request as
+an authoritative local session-expiry signal. It clears the local activation
+state and returns a stable `Not authenticated` error. Other HTTP failures and
+transport failures remain recoverable request errors and do not log the user
+out.
+
+An API key rejected by authenticated model discovery is quarantined only in
+memory for the lifetime of the current Controller process. The persisted cloud
+state no longer records an invalidation fingerprint. Restarting or upgrading
+the desktop therefore permits the same key to be imported and validated again.
+
+=== 5. Building blocks and ownership
+
+`DesktopLocalService` owns the shared HTTP 401 handling for activation-JWT
+cloud calls. `NexuConfigStore` owns process-local API key quarantine.
+`DesktopActivationGuard` polls local activation status and returns an expired
+desktop session to the activation screen.
+
+=== 6. Runtime flow
+
+. A JWT-backed cloud call returns HTTP 401.
+. Controller clears local activation and returns `Not authenticated`.
+. The desktop workspace observes `activated=false` within the polling window.
+. The web client removes `nexu_setup_complete` and redirects to `/`.
+. Controller or local API unavailability does not independently trigger logout.
+
+For authenticated model discovery, an HTTP 401 removes the rejected API key
+from active cloud state and suppresses re-import during the current Controller
+process. A Controller restart clears that suppression. A later successful
+activation explicitly clears any matching in-memory quarantine entry.
+
+=== 9. Architecture decisions
+
+==== ADR-022: Activation JWT 401 ends the local desktop session
+
+*Status:* accepted
+
+Continuing to render the workspace after the cloud has rejected the activation
+JWT creates a dead state in which chat and balance requests cannot recover.
+Controller therefore centralizes HTTP 401 handling, while the desktop web
+client observes local activation state and exits the workspace. HTTP 5xx and
+network failures are not authentication decisions.
+
+==== ADR-023: API key rejection is process-local quarantine
+
+*Status:* accepted
+
+A single HTTP 401 is insufficient evidence that an API key must be permanently
+blocked across desktop upgrades or Controller restarts. Rejected key
+fingerprints are retained only in memory to stop an immediate stale bootstrap
+loop. Legacy persisted fingerprints are ignored and cleared on the next
+successful import.
+
+=== 10. Quality requirements
+
+JWT expiry must leave the workspace within one five-second activation polling
+window. Non-401 upstream failures must preserve activation. API key quarantine
+must prevent repeated import in one Controller process but must not survive a
+restart. Tests cover balance and transaction JWT expiry, non-401 behavior,
+same-process API key suppression, restart recovery, and legacy fingerprint
+migration.
+
+=== 11. Technical risks
+
+The workspace guard is polling-based, so logout is not instantaneous. A future
+Controller-to-web event could remove the five-second delay. Process-local API
+key quarantine intentionally permits a retry after every restart; repeated
+rejection then depends on normal activation and model-refresh error handling
+rather than durable client-side denial.
+
+== Gateway draining recovery hotfix addendum (2026-08-07)
+
+=== 4. Solution strategy
+
+Controller applies one chat-admission state machine to both configuration-led
+restarts and Gateway restarts initiated outside the config-sync flow. A Gateway
+shutdown event closes admission immediately. A later WebSocket connection is
+necessary but not sufficient to reopen it; Controller also requires a
+successful runtime health probe.
+
+=== 5. Building blocks and ownership
+
+`ConfigSyncCoordinator` owns restart observation, disconnect/reconnect state,
+runtime-health convergence, pending-revision reconciliation, and the new-chat
+admission gate. `AgentChatService` waits for bounded admission recovery and
+handles only an explicit pre-admission draining rejection as retryable.
+`bootstrapController` forwards the Gateway shutdown, disconnect, and reconnect
+lifecycle into the coordinator.
+
+=== 6. Runtime flow
+
+. Gateway announces shutdown or rejects an `agent` request because it is
+  draining and explicitly states that new work was not accepted.
+. Controller closes new-chat admission and tracks the connection as
+  `DRAINING` or `RECONNECTING`.
+. WebSocket reconnects, then Controller probes runtime health.
+. If the retained pending revision already matches the configuration on disk,
+  Controller clears the pending record instead of scheduling another restart.
+. Controller reopens admission only after recovery converges.
+. For the explicit draining rejection, `AgentChatService` resubmits with the
+  same idempotency/run ID after admission reopens.
+
+=== 9. Architecture decisions
+
+==== ADR-024: Explicit pre-admission draining rejection permits same-ID retry
+
+*Status:* accepted
+
+ADR-020 remains authoritative for uncertain disconnects: recovery queries
+status and history and never blindly resubmits. The draining rejection is a
+narrow exception because Gateway explicitly confirms that the task was not
+accepted. Reusing the same idempotency/run ID preserves duplicate protection
+across the recovery boundary.
+
+=== 10. Quality requirements
+
+External Gateway restarts must close admission before another chat reaches the
+draining process. Admission recovery is bounded and requires both transport
+and runtime health. A failed recovery task must not create an unhandled Promise
+rejection and must leave admission closed. Tests cover external shutdown,
+stale-pending reconciliation, lifecycle forwarding, same-ID draining retry,
+and recovery failure.
+
+=== 11. Technical risks
+
+The retry exception depends on the semantics of the explicit Gateway draining
+message. If a future OpenClaw version can emit that message after accepting a
+task, the exception must be removed or replaced by an authoritative run-status
+query. Health success also assumes the probed runtime is the same instance
+serving the reconnected WebSocket.

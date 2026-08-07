@@ -9,6 +9,7 @@ function createService() {
       cloudUrl: "https://cloud.example.com",
       linkUrl: "https://yunwu.example.com",
     })),
+    clearActivation: vi.fn(async () => undefined),
   };
 
   return {
@@ -53,7 +54,9 @@ describe("DesktopLocalService balance", () => {
       balance_cents: 5000,
       total_recharged: 10000,
     });
-    expect(requestedUrls).toContain("https://cloud.example.com/api/auth/balance");
+    expect(requestedUrls).toContain(
+      "https://cloud.example.com/api/auth/balance",
+    );
   });
 
   it("returns error when cloud balance API fails", async () => {
@@ -74,11 +77,44 @@ describe("DesktopLocalService balance", () => {
       }),
     );
 
-    const { service } = createService();
+    const { configStore, service } = createService();
     await expect(service.getBalance()).resolves.toEqual({
       ok: false,
       error: "Yunwu API error: You have used invalid tokens multiple times",
     });
+    expect(configStore.clearActivation).not.toHaveBeenCalled();
+  });
+
+  it("clears activation when the balance JWT has expired", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("JWT expired", { status: 401 })),
+    );
+
+    const { configStore, service } = createService();
+    await expect(service.getBalance()).resolves.toEqual({
+      ok: false,
+      error: "Not authenticated",
+    });
+    expect(configStore.clearActivation).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears activation when the transactions JWT has expired", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("JWT expired", { status: 401 })),
+    );
+
+    const { configStore, service } = createService();
+    await expect(service.getTransactions(2, 20)).resolves.toEqual({
+      success: false,
+      transactions: [],
+      total: 0,
+      page: 2,
+      page_size: 20,
+      error: "Not authenticated",
+    });
+    expect(configStore.clearActivation).toHaveBeenCalledTimes(1);
   });
 
   it("returns normalized upstream error when cloud API returns error", async () => {

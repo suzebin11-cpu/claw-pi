@@ -231,6 +231,40 @@ describe("ConfigSyncCoordinator", () => {
     await waitFor(() => coordinator.snapshot().state === "READY");
   });
 
+  it("closes admission during an externally initiated Gateway restart", async () => {
+    await writer.write(makeConfig());
+
+    await coordinator.noteGatewayShutdown({
+      restartExpectedMs: 1500,
+      reason: "config reload",
+    });
+
+    expect(coordinator.snapshot()).toMatchObject({
+      state: "DRAINING",
+      acceptingNewChats: false,
+      restartDeferredReason: "gateway_restart_observed",
+    });
+    await expect(
+      coordinator.beginAgentChat("during-restart"),
+    ).rejects.toThrow();
+
+    ws.emitRestart();
+    await coordinator.noteGatewayDisconnected();
+    ws.emitReady();
+    coordinator.noteGatewayConnected();
+
+    await waitFor(() => coordinator.snapshot().state === "READY");
+    expect(coordinator.snapshot()).toMatchObject({
+      acceptingNewChats: true,
+      restartDeferredReason: null,
+    });
+    await expect(
+      coordinator.beginAgentChat("after-restart"),
+    ).resolves.toMatchObject({
+      requestId: "after-restart",
+    });
+  });
+
   it("applies models.providers.link.models as hot reload without restart", async () => {
     await writer.write(makeConfig());
     const candidate = makeConfig({
@@ -312,5 +346,99 @@ describe("ConfigSyncCoordinator", () => {
     await expect(
       access(path.join(env.openclawStateDir, "claw-pi-config-pending.json")),
     ).resolves.toBeUndefined();
+  });
+
+  it("reconciles a retained pending revision after Gateway recovery", async () => {
+    const original = makeConfig();
+    const candidate = makeConfig({
+      plugins: {
+        load: { paths: [] },
+        entries: { xai: { enabled: true }, recovered: { enabled: true } },
+      },
+    });
+    let healthOk = false;
+    await writer.write(original);
+    const recovering = new ConfigSyncCoordinator(
+      env,
+      writer,
+      createGatewayService(writer) as never,
+      ws as never,
+      {
+        probe: async () => ({
+          ok: healthOk,
+          status: healthOk ? 200 : 503,
+        }),
+      } as never,
+      {
+        pollIntervalMs: 5,
+        restartObserveTimeoutMs: 30,
+        gatewayReadyTimeoutMs: 1000,
+      },
+    );
+
+    await recovering.submitConfig(candidate);
+    await waitFor(
+      () =>
+        recovering.snapshot().restartDeferredReason ===
+        "restart_failed_pending_retained",
+    );
+
+    await writer.write(candidate);
+    await recovering.noteGatewayShutdown({
+      restartExpectedMs: 1500,
+      reason: "external config reload",
+    });
+    ws.emitRestart();
+    await recovering.noteGatewayDisconnected();
+    ws.emitReady();
+    healthOk = true;
+    recovering.noteGatewayConnected();
+
+    await waitFor(() => recovering.snapshot().state === "READY");
+    expect(recovering.snapshot()).toMatchObject({
+      pendingRevision: null,
+      acceptingNewChats: true,
+      restartDeferredReason: null,
+    });
+    await expect(
+      access(path.join(env.openclawStateDir, "claw-pi-config-pending.json")),
+    ).rejects.toThrow();
+  });
+
+  it("keeps chat admission closed when Gateway recovery fails", async () => {
+    const failingRecovery = new ConfigSyncCoordinator(
+      env,
+      {
+        read: async () => {
+          throw new Error("config read failed");
+        },
+      } as never,
+      createGatewayService(writer) as never,
+      ws as never,
+      { probe: async () => ({ ok: true, status: 200 }) } as never,
+      {
+        pollIntervalMs: 5,
+        gatewayReadyTimeoutMs: 1000,
+      },
+    );
+
+    await failingRecovery.noteGatewayShutdown({
+      restartExpectedMs: null,
+      reason: "external restart",
+    });
+    failingRecovery.noteGatewayConnected();
+
+    await waitFor(
+      () =>
+        failingRecovery.snapshot().restartDeferredReason ===
+        "gateway_recovery_failed",
+    );
+    expect(failingRecovery.snapshot()).toMatchObject({
+      state: "RECONNECTING",
+      acceptingNewChats: false,
+    });
+    await expect(
+      failingRecovery.beginAgentChat("recovery-failed"),
+    ).rejects.toThrow();
   });
 });

@@ -19,6 +19,8 @@ export interface UpdateManagerOptions {
   source?: UpdateSource;
   channel?: UpdateChannelName;
   feedUrl?: string | null;
+  /** Test-only platform override; production uses the host platform. */
+  platform?: NodeJS.Platform;
   autoDownload?: boolean;
   checkIntervalMs?: number;
   initialDelayMs?: number;
@@ -109,6 +111,7 @@ export class UpdateManager {
   private readonly checkIntervalMs: number;
   private readonly initialDelayMs: number;
   private readonly launchdCtx: UpdateManagerOptions["launchd"];
+  private readonly platform: NodeJS.Platform;
   private currentFeedUrl: string;
   private checkInProgress: Promise<{ updateAvailable: boolean }> | null = null;
   private lastProgressLogAt = 0;
@@ -127,10 +130,15 @@ export class UpdateManager {
     this.source = options?.source ?? "r2";
     this.channel = options?.channel ?? "stable";
     this.feedUrl = options?.feedUrl ?? null;
+    this.platform = options?.platform ?? process.platform;
     this.checkIntervalMs = options?.checkIntervalMs ?? 15 * 60 * 1000;
     this.initialDelayMs = options?.initialDelayMs ?? 0;
     this.launchdCtx = options?.launchd;
-    this.currentFeedUrl = getDefaultR2FeedUrl(this.channel);
+    this.currentFeedUrl = getDefaultR2FeedUrl(
+      this.channel,
+      process.arch,
+      this.platform,
+    );
 
     autoUpdater.autoDownload = options?.autoDownload ?? true;
     autoUpdater.autoInstallOnAppQuit = true;
@@ -144,6 +152,7 @@ export class UpdateManager {
       source: this.source,
       channel: this.channel,
       feedUrl: this.feedUrl,
+      platform: this.platform,
     });
 
     autoUpdater.setFeedURL({

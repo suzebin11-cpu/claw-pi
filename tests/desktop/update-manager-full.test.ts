@@ -121,6 +121,7 @@ async function createManager(
   const mgr = new UpdateManager(win as never, orchestrator as never, {
     channel: "stable",
     feedUrl: null,
+    platform: "win32",
     ...options,
   });
   return { mgr, win, orchestrator };

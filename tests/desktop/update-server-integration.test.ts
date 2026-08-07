@@ -101,6 +101,7 @@ describe("Update server integration", () => {
       channel: "stable",
       feedUrl: null,
       arch: "arm64",
+      platform: "darwin",
     });
 
     // Should be a valid URL with channel and arch segments
@@ -240,6 +241,7 @@ describe("Update server integration", () => {
       channel: "stable",
       feedUrl: null,
       arch: "x64",
+      platform: "win32",
     });
 
     expect(url).toBe("https://api.clawpi.app:9443/updates/stable/win/x64");

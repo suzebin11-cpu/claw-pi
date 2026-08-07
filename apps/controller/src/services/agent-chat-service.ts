@@ -8,9 +8,10 @@ import type {
   OpenClawGatewayEvent,
   OpenClawWsClient,
 } from "../runtime/openclaw-ws-client.js";
-import type {
-  AgentChatLease,
-  ConfigSyncCoordinator,
+import {
+  type AgentChatLease,
+  type ConfigSyncCoordinator,
+  GatewayUpdatingError,
 } from "./config-sync-coordinator.js";
 
 export interface AgentChatAttachment {
@@ -102,6 +103,7 @@ const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
 const AGENT_CHAT_RECOVERY_MAX_ATTEMPTS = 3;
 const AGENT_CHAT_RECOVERY_WAIT_MS = 30_000;
+const AGENT_CHAT_ADMISSION_WAIT_MS = 90_000;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS = 6;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_FINAL_CHARS = 1600;
 const ATTACHMENT_EXTRACT_MAX_CHARS = 24_000;
@@ -411,6 +413,13 @@ function normalizeAgentErrorMessage(message: string): string {
   return isInsufficientBalanceError(message)
     ? INSUFFICIENT_BALANCE_MESSAGE
     : message;
+}
+
+function isGatewayDrainingError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /gateway.+drain(?:ing)?|drain(?:ing)?.+restart|new tasks are not accepted/iu.test(
+    message,
+  );
 }
 
 function buildAutoContinuePrompt(executionMode: AgentExecutionMode): string {
@@ -864,7 +873,19 @@ export class AgentChatService {
     const runId = input.requestId?.trim() || randomUUID();
     let chatLease: AgentChatLease | null = null;
     if (this.configCoordinator) {
-      chatLease = await this.configCoordinator.beginAgentChat(runId);
+      while (!chatLease) {
+        try {
+          chatLease = await this.configCoordinator.beginAgentChat(runId);
+        } catch (error) {
+          if (!(error instanceof GatewayUpdatingError)) {
+            throw error;
+          }
+          await this.configCoordinator.waitForChatAdmission({
+            timeoutMs: AGENT_CHAT_ADMISSION_WAIT_MS,
+            signal: input.signal,
+          });
+        }
+      }
     }
     const imageAttachments = normalizeImageAttachments(input.attachments);
     let savedFiles: SavedWorkbenchFile[];
@@ -1693,8 +1714,46 @@ export class AgentChatService {
         },
         "agent_chat_ws_request_start",
       );
-      await sendAgentRun(runId, message);
-      await chatLease?.markSubmitted();
+      for (
+        let attempt = 1;
+        attempt <= AGENT_CHAT_RECOVERY_MAX_ATTEMPTS;
+        attempt += 1
+      ) {
+        try {
+          await sendAgentRun(runId, message);
+          await chatLease?.markSubmitted();
+          break;
+        } catch (error) {
+          if (
+            !isGatewayDrainingError(error) ||
+            attempt === AGENT_CHAT_RECOVERY_MAX_ATTEMPTS
+          ) {
+            throw error;
+          }
+          logger.info(
+            {
+              route: "agentChat.stream",
+              sessionKey,
+              runId,
+              attempt,
+              recoveryResult: "draining_wait",
+            },
+            "agent_chat_gateway_draining_recovery",
+          );
+          if (this.configCoordinator) {
+            await this.configCoordinator.noteGatewayShutdown({
+              restartExpectedMs: null,
+              reason: "agent_rpc_draining",
+            });
+            await this.configCoordinator.waitForChatAdmission({
+              timeoutMs: AGENT_CHAT_ADMISSION_WAIT_MS,
+              signal: input.signal,
+            });
+          } else {
+            await sleep(1000, input.signal);
+          }
+        }
+      }
       logger.info(
         {
           route: "agentChat.stream",

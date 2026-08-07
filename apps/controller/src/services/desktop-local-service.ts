@@ -193,7 +193,7 @@ export class DesktopLocalService {
       const cloudUrl = cloudStatus.cloudUrl;
 
       const rawModelId = modelId.replace(/^link\//, "");
-      await proxyFetch(`${cloudUrl}/api/auth/switch-model`, {
+      const res = await proxyFetch(`${cloudUrl}/api/auth/switch-model`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -202,6 +202,7 @@ export class DesktopLocalService {
         body: JSON.stringify({ model_id: rawModelId }),
         timeoutMs: 10_000,
       });
+      await this.clearActivationIfUnauthorized(res);
     } catch {
       // best-effort: don't block model switch if cloud sync fails
     }
@@ -229,6 +230,17 @@ export class DesktopLocalService {
     // leaving the previous snapshot in place is both safe and less disruptive.
     await this.configStore.clearActivation();
     return { ok: true };
+  }
+
+  private async clearActivationIfUnauthorized(
+    response: Response,
+  ): Promise<boolean> {
+    if (response.status !== 401) {
+      return false;
+    }
+
+    await this.configStore.clearActivation();
+    return true;
   }
 
   async registerWithCode(input: {
@@ -327,6 +339,9 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return { ok: false, error: "Not authenticated" };
+      }
       const text = await res.text().catch(() => "Unknown error");
       try {
         const parsed = JSON.parse(text) as { error?: string };
@@ -384,6 +399,9 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return { ok: false, error: "Not authenticated" };
+      }
       const text = await res.text().catch(() => "Unknown error");
       return {
         ok: false,
@@ -512,6 +530,16 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return {
+          success: false,
+          transactions: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          error: "Not authenticated",
+        };
+      }
       const text = await res.text().catch(() => "Unknown error");
       return {
         success: false,
@@ -578,6 +606,9 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return { ok: false, error: "Not authenticated" };
+      }
       const text = await res.text().catch(() => "Unknown error");
       try {
         const parsed = JSON.parse(text) as { error?: string };
@@ -634,6 +665,9 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return { ok: false, error: "Not authenticated" };
+      }
       const text = await res.text().catch(() => "Unknown error");
       try {
         const parsed = JSON.parse(text) as { error?: string };
@@ -689,6 +723,9 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return { ok: false, error: "Not authenticated" };
+      }
       const text = await res.text().catch(() => "Unknown error");
       try {
         const parsed = JSON.parse(text) as { error?: string };
@@ -738,6 +775,9 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return { ok: false, error: "Not authenticated" };
+      }
       const text = await res.text().catch(() => "Unknown error");
       return { ok: false, error: text };
     }
@@ -794,6 +834,16 @@ export class DesktopLocalService {
     }
 
     if (!res.ok) {
+      if (await this.clearActivationIfUnauthorized(res)) {
+        return {
+          success: false,
+          logs: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          error: "Not authenticated",
+        };
+      }
       const text = await res.text().catch(() => "Unknown error");
       return {
         success: false,

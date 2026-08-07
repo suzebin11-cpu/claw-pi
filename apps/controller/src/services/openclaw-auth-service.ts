@@ -72,8 +72,15 @@ const OPENAI_CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const OPENAI_AUTH_URL = "https://auth.openai.com/oauth/authorize";
 const OPENAI_TOKEN_URL = "https://auth.openai.com/oauth/token";
 const OPENAI_CALLBACK_PORT = 1455;
-const OPENAI_REDIRECT_URI = `http://localhost:${OPENAI_CALLBACK_PORT}/auth/callback`;
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1000;
+
+export interface OpenClawAuthServiceOptions {
+  callbackPort?: number;
+}
+
+function createRedirectUri(port: number): string {
+  return `http://localhost:${port}/auth/callback`;
+}
 
 // ── HTML Responses ──────────────────────────────────────────────
 
@@ -97,15 +104,19 @@ h1{color:#dc2626;margin-bottom:0.5rem}p{color:#6b7280}</style></head>
 
 export class OpenClawAuthService {
   private readonly authProfilesStore: OpenClawAuthProfilesStore;
+  private readonly callbackPort: number;
   private flowState: FlowState = { status: "idle" };
   private callbackServer: http.Server | null = null;
+  private callbackRedirectUri: string | null = null;
   private timeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     env: ControllerEnv,
     authProfilesStore = new OpenClawAuthProfilesStore(env),
+    options: OpenClawAuthServiceOptions = {},
   ) {
     this.authProfilesStore = authProfilesStore;
+    this.callbackPort = options.callbackPort ?? OPENAI_CALLBACK_PORT;
   }
 
   // ── Public API ──────────────────────────────────────────────
@@ -125,13 +136,18 @@ export class OpenClawAuthService {
     const state = generateState();
 
     try {
-      const { server } = await this.startCallbackServer(state, codeVerifier);
+      const { server, port } = await this.startCallbackServer(
+        state,
+        codeVerifier,
+      );
       this.callbackServer = server;
+      const redirectUri = createRedirectUri(port);
+      this.callbackRedirectUri = redirectUri;
 
       const params = new URLSearchParams({
         response_type: "code",
         client_id: OPENAI_CODEX_CLIENT_ID,
-        redirect_uri: OPENAI_REDIRECT_URI,
+        redirect_uri: redirectUri,
         scope: "openid profile email offline_access",
         code_challenge: codeChallenge,
         code_challenge_method: "S256",
@@ -154,7 +170,7 @@ export class OpenClawAuthService {
       }, CALLBACK_TIMEOUT_MS);
 
       logger.info(
-        { providerId, callbackPort: OPENAI_CALLBACK_PORT },
+        { providerId, callbackPort: port },
         "OAuth flow started, waiting for callback",
       );
 
@@ -307,20 +323,25 @@ export class OpenClawAuthService {
   private startCallbackServer(
     expectedState: string,
     codeVerifier: string,
-  ): Promise<{ server: http.Server }> {
+  ): Promise<{ server: http.Server; port: number }> {
     return new Promise((resolve, reject) => {
       const server = http.createServer((req, res) => {
         void this.handleCallback(req, res, expectedState, codeVerifier, server);
       });
 
-      server.listen(OPENAI_CALLBACK_PORT, "127.0.0.1", () => {
-        resolve({ server });
+      server.listen(this.callbackPort, "127.0.0.1", () => {
+        const address = server.address();
+        if (!address || typeof address === "string") {
+          reject(new Error("Callback server started without a local address"));
+          return;
+        }
+        resolve({ server, port: address.port });
       });
 
       server.on("error", (err) => {
         reject(
           new Error(
-            `Failed to bind port ${OPENAI_CALLBACK_PORT}: ${err.message}. Is another Codex/OpenClaw process using it?`,
+            `Failed to bind port ${this.callbackPort}: ${err.message}. Is another Codex/OpenClaw process using it?`,
           ),
         );
       });
@@ -373,7 +394,11 @@ export class OpenClawAuthService {
       }
 
       // Exchange code for tokens
-      const tokenResponse = await this.exchangeCode(code, codeVerifier);
+      const tokenResponse = await this.exchangeCode(
+        code,
+        codeVerifier,
+        this.callbackRedirectUri ?? createRedirectUri(this.callbackPort),
+      );
       if ("error" in tokenResponse) {
         res.writeHead(200, { "Content-Type": "text/html" });
         res.end(errorHtml(tokenResponse.error));
@@ -434,6 +459,7 @@ export class OpenClawAuthService {
   private async exchangeCode(
     code: string,
     codeVerifier: string,
+    redirectUri: string,
   ): Promise<
     | { accessToken: string; refreshToken: string; expiresIn: number }
     | { error: string }
@@ -444,7 +470,7 @@ export class OpenClawAuthService {
         client_id: OPENAI_CODEX_CLIENT_ID,
         code,
         code_verifier: codeVerifier,
-        redirect_uri: OPENAI_REDIRECT_URI,
+        redirect_uri: redirectUri,
       });
 
       const response = await proxyFetch(OPENAI_TOKEN_URL, {
@@ -520,6 +546,7 @@ export class OpenClawAuthService {
       this.callbackServer.close();
       this.callbackServer = null;
     }
+    this.callbackRedirectUri = null;
   }
 
   private shutdownServer(server: http.Server): void {
@@ -531,5 +558,6 @@ export class OpenClawAuthService {
     if (this.callbackServer === server) {
       this.callbackServer = null;
     }
+    this.callbackRedirectUri = null;
   }
 }

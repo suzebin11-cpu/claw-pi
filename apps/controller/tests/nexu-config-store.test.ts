@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -569,7 +570,7 @@ describe("NexuConfigStore", () => {
     expect(status.connected).toBe(false);
     expect(status.models.map((model) => model.id)).toEqual(["gpt-5.4"]);
     expect(cloud?.apiKey).toBeNull();
-    expect(cloud?.invalidatedApiKeyHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(cloud?.invalidatedApiKeyHash).toBeNull();
 
     await expect(
       store.importDesktopCloudStateIfNeeded({
@@ -584,6 +585,57 @@ describe("NexuConfigStore", () => {
       connected: false,
       models: [{ id: "gpt-5.4", name: "GPT-5.4" }],
     });
+
+    const legacyConfig = await store.getConfig();
+    const legacyDesktop = legacyConfig.desktop as {
+      cloud?: Record<string, unknown>;
+    };
+    await writeFile(
+      env.nexuConfigPath,
+      JSON.stringify({
+        ...legacyConfig,
+        desktop: {
+          ...legacyConfig.desktop,
+          cloud: {
+            ...legacyDesktop.cloud,
+            invalidatedApiKeyHash: crypto
+              .createHash("sha256")
+              .update(expiredApiKey)
+              .digest("hex"),
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const restartedStore = new NexuConfigStore(env);
+    await expect(
+      restartedStore.importDesktopCloudStateIfNeeded({
+        connected: true,
+        polling: false,
+        linkUrl: "https://link.nexu.io",
+        apiKey: expiredApiKey,
+        models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+      }),
+    ).resolves.toBe(true);
+    await expect(restartedStore.getDesktopCloudStatus()).resolves.toMatchObject(
+      {
+        connected: true,
+        models: [{ id: "gpt-5.5", name: "GPT-5.5" }],
+      },
+    );
+
+    const restartedConfig = await restartedStore.getConfig();
+    const restartedCloud = (
+      restartedConfig.desktop as {
+        cloud?: {
+          apiKey?: string | null;
+          invalidatedApiKeyHash?: string | null;
+        };
+      }
+    ).cloud;
+    expect(restartedCloud?.apiKey).toBe(expiredApiKey);
+    expect(restartedCloud?.invalidatedApiKeyHash).toBeNull();
   });
 
   it("persists qqbot channels with app secrets in the secret store", async () => {

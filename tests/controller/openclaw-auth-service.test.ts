@@ -88,7 +88,9 @@ describe("OpenClawAuthService", () => {
 
   beforeEach(async () => {
     stateDir = await mkdtemp(path.join(tmpdir(), "oclaw-auth-test-"));
-    service = new OpenClawAuthService(createEnv(stateDir));
+    service = new OpenClawAuthService(createEnv(stateDir), undefined, {
+      callbackPort: 0,
+    });
   });
 
   afterEach(async () => {
@@ -124,6 +126,9 @@ describe("OpenClawAuthService", () => {
       expect(browserUrl).toContain("code_challenge_method=S256");
       expect(browserUrl).toContain("state=");
       expect(browserUrl).toContain("response_type=code");
+      expect(new URL(browserUrl).searchParams.get("redirect_uri")).toMatch(
+        /^http:\/\/localhost:\d+\/auth\/callback$/,
+      );
     });
 
     it("sets flow status to pending after start", async () => {
