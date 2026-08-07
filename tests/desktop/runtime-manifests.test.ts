@@ -258,7 +258,7 @@ describe("desktop runtime manifests", () => {
           "-C",
           stagingRoot,
         ]);
-        expect(fsState.paths.has(stagingRoot)).toBe(true);
+        expect(fsState.paths.has(stagingRoot)).toBe(false);
       });
 
       it("retries extraction after a transient tar failure and succeeds on the next attempt", () => {
