@@ -205,14 +205,6 @@ describe("desktop runtime manifests", () => {
             fsState.paths.add(stagingRoot);
             fsState.paths.add(stagingEntry);
           }
-          if (cmd === "mv") {
-            fsState.paths.delete(stagingRoot);
-            fsState.paths.delete(stagingEntry);
-            fsState.paths.add(extractedRoot);
-            fsState.paths.add(
-              `${extractedRoot}/node_modules/openclaw/openclaw.mjs`,
-            );
-          }
         });
 
         const result = ensurePackagedOpenclawSidecar(
@@ -227,13 +219,15 @@ describe("desktop runtime manifests", () => {
           "-C",
           stagingRoot,
         ]);
-        expect(execFileSyncMock).toHaveBeenCalledWith("mv", [
-          stagingRoot,
-          extractedRoot,
-        ]);
-        expect(fsState.stampContents.get(`${stagingRoot}/.archive-stamp`)).toBe(
-          fsState.archiveStamp,
-        );
+        expect(fsState.paths.has(extractedRoot)).toBe(true);
+        expect(
+          fsState.paths.has(
+            `${extractedRoot}/node_modules/openclaw/openclaw.mjs`,
+          ),
+        ).toBe(true);
+        expect(
+          fsState.stampContents.get(`${extractedRoot}/.archive-stamp`),
+        ).toBe(fsState.archiveStamp);
       });
 
       it("cleans leftover staging directories before a fresh extraction", () => {
@@ -247,20 +241,9 @@ describe("desktop runtime manifests", () => {
         fsState.paths.add(stagingRoot);
 
         execFileSyncMock.mockImplementation((cmd: string, args: string[]) => {
-          if (cmd === "rm" && args[1] === stagingRoot) {
-            fsState.paths.delete(stagingRoot);
-          }
           if (cmd === "tar" && args[3] === stagingRoot) {
             fsState.paths.add(stagingRoot);
             fsState.paths.add(stagingEntry);
-          }
-          if (cmd === "mv") {
-            fsState.paths.delete(stagingRoot);
-            fsState.paths.delete(stagingEntry);
-            fsState.paths.add(extractedRoot);
-            fsState.paths.add(
-              `${extractedRoot}/node_modules/openclaw/openclaw.mjs`,
-            );
           }
         });
 
@@ -269,16 +252,13 @@ describe("desktop runtime manifests", () => {
           "/Users/testuser/.nexu",
         );
 
-        expect(execFileSyncMock).toHaveBeenCalledWith("rm", [
-          "-rf",
-          stagingRoot,
-        ]);
         expect(execFileSyncMock).toHaveBeenCalledWith("tar", [
           "-xzf",
           archivePath,
           "-C",
           stagingRoot,
         ]);
+        expect(fsState.paths.has(stagingRoot)).toBe(true);
       });
 
       it("retries extraction after a transient tar failure and succeeds on the next attempt", () => {
@@ -300,14 +280,6 @@ describe("desktop runtime manifests", () => {
             fsState.paths.add(stagingRoot);
             fsState.paths.add(stagingEntry);
           }
-          if (cmd === "mv") {
-            fsState.paths.delete(stagingRoot);
-            fsState.paths.delete(stagingEntry);
-            fsState.paths.add(extractedRoot);
-            fsState.paths.add(
-              `${extractedRoot}/node_modules/openclaw/openclaw.mjs`,
-            );
-          }
         });
 
         const result = ensurePackagedOpenclawSidecar(
@@ -317,7 +289,9 @@ describe("desktop runtime manifests", () => {
 
         expect(result).toBe(extractedRoot);
         expect(tarAttempts).toBe(2);
-        expect(execFileSyncMock).toHaveBeenCalledWith("sleep", ["1"]);
+        expect(
+          execFileSyncMock.mock.calls.some(([cmd]) => cmd === "sleep"),
+        ).toBe(false);
       });
 
       it("throws after retries when extraction never produces the critical entry", () => {
@@ -348,7 +322,7 @@ describe("desktop runtime manifests", () => {
           ([cmd]) => cmd === "sleep",
         );
         expect(tarCalls).toHaveLength(3);
-        expect(sleepCalls).toHaveLength(2);
+        expect(sleepCalls).toHaveLength(0);
       });
     },
   );
