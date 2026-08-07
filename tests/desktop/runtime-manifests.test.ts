@@ -39,6 +39,25 @@ vi.mock("node:fs", () => ({
     fsState.paths.delete(target);
     fsState.stampContents.delete(target);
   }),
+  renameSync: vi.fn((source: string, target: string) => {
+    for (const existingPath of [...fsState.paths]) {
+      if (existingPath === source || existingPath.startsWith(`${source}/`)) {
+        fsState.paths.delete(existingPath);
+        fsState.paths.add(
+          `${target}${existingPath.slice(source.length)}`,
+        );
+      }
+    }
+    for (const [existingPath, contents] of [...fsState.stampContents]) {
+      if (existingPath === source || existingPath.startsWith(`${source}/`)) {
+        fsState.stampContents.delete(existingPath);
+        fsState.stampContents.set(
+          `${target}${existingPath.slice(source.length)}`,
+          contents,
+        );
+      }
+    }
+  }),
   writeFileSync: vi.fn((target: string, contents: string) => {
     fsState.paths.add(target);
     fsState.stampContents.set(target, contents);
