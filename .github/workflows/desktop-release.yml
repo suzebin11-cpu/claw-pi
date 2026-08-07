@@ -843,6 +843,7 @@ jobs:
 
   finalize-release:
     needs: release-windows
+    if: always() && needs.release-windows.result == 'success'
     runs-on: ubuntu-latest
 
     steps:
