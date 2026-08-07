@@ -3,7 +3,12 @@ import type { ControllerEnv } from "../../apps/controller/src/app/env.js";
 import { compileOpenClawConfig } from "../../apps/controller/src/lib/openclaw-config-compiler.js";
 
 const env = {
+  port: 3010,
+  webUrl: "http://localhost:5173",
   openclawGatewayPort: 18789,
+  openclawExtensionsDir: "/tmp/openclaw/extensions",
+  openclawSkillsDir: "/tmp/openclaw/skills",
+  userSkillsDir: "/tmp/user-skills",
   defaultModelId: "link/gpt-5.4",
   litellmBaseUrl: undefined,
   litellmApiKey: undefined,
@@ -36,9 +41,18 @@ describe("compileOpenClawConfig gateway defaults", () => {
 
     expect(compiled.gateway).toEqual({
       port: 18789,
+      mode: "local",
       bind: "loopback",
-      authMode: "none",
+      auth: {
+        mode: "none",
+      },
+      reload: {
+        mode: "hybrid",
+      },
+      controlUi: {
+        allowedOrigins: ["http://localhost:5173"],
+        dangerouslyAllowHostHeaderOriginFallback: true,
+      },
     });
   });
 });
-

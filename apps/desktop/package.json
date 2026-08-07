@@ -1,6 +1,6 @@
 {
   "name": "@nexu/desktop",
-  "version": "0.3.21",
+  "version": "0.3.22",
   "private": true,
   "license": "MIT",
   "type": "module",
@@ -112,7 +112,9 @@
       {
         "from": "build-config.json",
         "to": "build-config.json",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "afterSign": "./scripts/notarize.cjs",
@@ -120,7 +122,11 @@
     "mac": {
       "icon": "build/icon.icns",
       "category": "public.app-category.developer-tools",
-      "target": ["dmg", "zip", "pkg"],
+      "target": [
+        "dmg",
+        "zip",
+        "pkg"
+      ],
       "artifactName": "claw-pi-${version}-${arch}.${ext}",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -132,7 +138,14 @@
     },
     "win": {
       "icon": "build/icon.ico",
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "artifactName": "claw-pi-setup-${version}-${arch}.${ext}",
       "extraResources": [
         {
@@ -151,7 +164,14 @@
     },
     "linux": {
       "icon": "build/icon.png",
-      "target": [{ "target": "dir", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "artifactName": "claw-pi-${version}-${arch}.${ext}"
     },
     "pkg": {

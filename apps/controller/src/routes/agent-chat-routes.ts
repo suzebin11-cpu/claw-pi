@@ -19,6 +19,7 @@ const agentChatStreamBodySchema = z.object({
   permissionMode: z.enum(["basic", "confirm", "full"]).optional(),
   executionMode: z.enum(["read_only", "write"]).optional(),
   attachments: z.array(agentChatAttachmentSchema).optional(),
+  requestId: z.string().min(1).optional(),
 });
 
 const agentChatExtractAttachmentsBodySchema = z.object({
@@ -138,6 +139,7 @@ export function registerAgentChatRoutes(
           executionMode: body.executionMode,
           attachments: body.attachments,
           signal: c.req.raw.signal,
+          requestId: body.requestId,
         });
       } catch (error) {
         const message = normalizeAgentChatError(

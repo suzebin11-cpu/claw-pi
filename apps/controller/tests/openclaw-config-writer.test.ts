@@ -19,7 +19,10 @@ function makeConfig(overrides: Partial<OpenClawConfig> = {}): OpenClawConfig {
     agents: { list: [], defaults: {} },
     channels: {},
     bindings: [],
-    plugins: { load: { paths: [] }, entries: {} },
+    plugins: {
+      load: { paths: [] },
+      entries: { xai: { enabled: true } },
+    },
     skills: { load: { watch: true } },
     commands: { native: "auto" },
     ...overrides,
@@ -66,6 +69,28 @@ describe("OpenClawConfigWriter", () => {
     const secondStat = await stat(env.openclawConfigPath);
 
     expect(secondStat.mtimeMs).toBe(firstStat.mtimeMs);
+  });
+
+  it("skips semantically equal config with reordered/default plugin fields", async () => {
+    const writer = new OpenClawConfigWriter(env);
+    const explicit = makeConfig();
+    await writer.write(explicit);
+    const firstStat = await stat(env.openclawConfigPath);
+    const implicit = structuredClone(explicit) as OpenClawConfig;
+    (implicit.plugins?.entries as Record<string, unknown>).xai = undefined;
+    implicit.gateway = {
+      bind: "127.0.0.1",
+      mode: "local",
+      port: 18789,
+    };
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const result = await writer.write(implicit);
+
+    expect(result.changed).toBe(false);
+    expect((await stat(env.openclawConfigPath)).mtimeMs).toBe(
+      firstStat.mtimeMs,
+    );
   });
 
   it("writes when content changes", async () => {

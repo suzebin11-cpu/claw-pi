@@ -202,6 +202,7 @@ const zhCN = {
   "ask.placeholderStarting": "服务启动中，稍等一下",
   "ask.runtimeStarting": "龙虾工作台正在准备中，准备好后就可以开始问答。",
   "ask.runtimeNotReady": "龙虾工作台暂时不可用，请稍等片刻。",
+  "ask.configUpdateDeferred": "配置更新将在当前任务完成后生效。",
   "ask.you": "你",
   "ask.assistant": "Assistant",
   "ask.thinking": "思考中...",

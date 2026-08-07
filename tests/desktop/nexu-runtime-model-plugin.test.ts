@@ -53,15 +53,45 @@ describe("nexu-runtime-model plugin", () => {
     );
 
     await writeState("link/claude-sonnet-4");
+    let configPlanHandler:
+      | ((input: {
+          params: Record<string, unknown>;
+          respond: (ok: boolean, result: unknown) => void;
+        }) => void)
+      | undefined;
     let linkHandler:
       | (() => Promise<Record<string, string> | undefined>)
       | undefined;
     plugin.register({
+      registerGatewayMethod(name, handler, options) {
+        expect(name).toBe("nexu.config.plan");
+        expect(options).toEqual({ scope: "operator.admin" });
+        configPlanHandler = handler;
+      },
       on(event, handler) {
         if (event === "before_model_resolve") {
           linkHandler = handler;
         }
       },
+    });
+    let configPlanResult: unknown;
+    configPlanHandler?.({
+      params: {
+        changedPaths: ["models.providers.link", "plugins.entries.feishu"],
+        configRevision: "revision-1",
+      },
+      respond(ok, result) {
+        expect(ok).toBe(true);
+        configPlanResult = result;
+      },
+    });
+    expect(configPlanResult).toEqual({
+      changedPaths: ["models.providers.link", "plugins.entries.feishu"],
+      hotReloadPaths: ["models.providers.link"],
+      restartRequiredPaths: ["plugins.entries.feishu"],
+      noopPaths: [],
+      restartRequired: true,
+      configRevision: "revision-1",
     });
     expect(await linkHandler?.()).toEqual({
       providerOverride: "link",
@@ -73,6 +103,7 @@ describe("nexu-runtime-model plugin", () => {
       | (() => Promise<Record<string, string> | undefined>)
       | undefined;
     plugin.register({
+      registerGatewayMethod() {},
       on(event, handler) {
         if (event === "before_model_resolve") {
           byokHandler = handler;

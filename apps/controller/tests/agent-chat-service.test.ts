@@ -16,6 +16,9 @@ class FakeOpenClawWsClient {
   requests: RequestRecord[] = [];
   listeners = new Set<(event: OpenClawGatewayEvent) => void>();
   disconnectedListeners = new Set<() => void>();
+  lastClose: { code: number; reason: string; at: number } | null = null;
+  waitResponse: Record<string, unknown> = { status: "timeout" };
+  historyResponse: Record<string, unknown> = { messages: [] };
 
   isConnected(): boolean {
     return this.connected;
@@ -39,6 +42,8 @@ class FakeOpenClawWsClient {
     if (method === "agent") {
       return { runId: params.idempotencyKey, status: "started" };
     }
+    if (method === "agent.wait") return this.waitResponse;
+    if (method === "chat.history") return this.historyResponse;
     return { ok: true };
   }
 
@@ -48,11 +53,20 @@ class FakeOpenClawWsClient {
     }
   }
 
-  emitDisconnected(): void {
+  getLastClose(): { code: number; reason: string; at: number } | null {
+    return this.lastClose;
+  }
+
+  emitDisconnected(code = 1006, reason = ""): void {
     this.connected = false;
+    this.lastClose = { code, reason, at: Date.now() };
     for (const listener of this.disconnectedListeners) {
       listener();
     }
+  }
+
+  emitConnected(): void {
+    this.connected = true;
   }
 }
 
@@ -154,6 +168,41 @@ describe("AgentChatService", () => {
     expect(fakeWs.requests.some((request) => request.method === "agent")).toBe(
       true,
     );
+  });
+
+  it("recovers a completed run after code=1012 without resubmitting", async () => {
+    const response = await service.createOpenAiCompatibleStream({
+      agentId: "bot-1",
+      sessionId: "session-restart",
+      message: "finish this once",
+      permissionMode: "full",
+      requestId: "stable-request-id",
+    });
+    fakeWs.waitResponse = { status: "ok" };
+    fakeWs.historyResponse = {
+      messages: [
+        {
+          role: "assistant",
+          timestamp: Date.now(),
+          content: [{ type: "text", text: "recovered final" }],
+        },
+      ],
+    };
+
+    fakeWs.emitDisconnected(1012, "service restart");
+    fakeWs.emitConnected();
+
+    const body = await response.text();
+    expect(body).toContain("recovered final");
+    expect(
+      fakeWs.requests.filter((request) => request.method === "agent"),
+    ).toHaveLength(1);
+    expect(
+      fakeWs.requests.some((request) => request.method === "agent.wait"),
+    ).toBe(true);
+    expect(
+      fakeWs.requests.some((request) => request.method === "chat.history"),
+    ).toBe(true);
   });
 
   it("waits through an empty OpenClaw final and adopts the real session run", async () => {
@@ -311,8 +360,7 @@ describe("AgentChatService", () => {
     await service.createOpenAiCompatibleStream({
       agentId: "bot-1",
       sessionId: "session-row-edit",
-      message:
-        "帮我加一行 手机号13510396008，名称djj，地址是成都武侯",
+      message: "帮我加一行 手机号13510396008，名称djj，地址是成都武侯",
       modelId: "link/gpt-5.5",
       permissionMode: "full",
       executionMode: "read_only",
@@ -433,7 +481,9 @@ describe("AgentChatService", () => {
     );
     const runId = String(initialSend?.params.idempotencyKey);
     const longProgress =
-      "正在桌面路径递归查找简历文件并等待搜索结果，这里先同步当前进度。".repeat(6);
+      "正在桌面路径递归查找简历文件并等待搜索结果，这里先同步当前进度。".repeat(
+        6,
+      );
 
     fakeWs.emit({
       type: "event",

@@ -267,19 +267,23 @@ If the cloud balance request fails:
 
 [source,text]
 ----
-Developer merges desktop changes and a higher package version to main
-  -> desktop-auto-tag validates SemVer and creates v{version}
-  -> desktop-release builds signed macOS and Windows installers in GitHub Actions
+Developer runs pnpm release:desktop from the reviewed development branch
+  -> local health checks pass before the package version is changed
+  -> the command commits and force-pushes the branch to GitHub
+  -> the command creates an immutable v{version} tag on that remote source commit
+  -> desktop-release checks out the tag and runs source-health
+  -> desktop-release builds the Windows NSIS installer in GitHub Actions
   -> CI validates manifests, referenced files, hashes, blockmaps, and checksums
-  -> CI uploads immutable binaries first and latest*.yml last
-  -> CI reads the public update feed and verifies every required artifact
+  -> CI uploads immutable Windows artifacts to both feed prefixes
+  -> CI uploads latest.yml to both prefixes only after immutable uploads complete
+  -> CI reads both public Windows feeds and verifies every required artifact
   -> GitHub Release changes from draft to published
   -> installed client checks immediately and every 15 minutes
   -> electron-updater downloads the update in the background
   -> user restarts immediately, or the update installs on normal app exit
 ----
 
-桌面发布不要求 Ubuntu API 服务器检出或运行 Electron 源码，也不触发服务端进程重启。服务端更新域名只暴露 Cloudflare R2 中的静态更新产物；平台差异、签名和公证由对应的 GitHub Actions runner 负责。
+桌面发布不要求 Ubuntu API 服务器检出或运行 Electron 源码，也不触发服务端进程重启。GitHub 中的远程提交和不可变版本标签是生产构建的唯一源码真相。服务端更新域名只暴露 Cloudflare R2 中的静态更新产物；当前默认只构建 Windows，macOS 仅在显式手动全平台发布时进入 Apple 签名和公证流程。
 
 == 7. 部署视图
 
@@ -322,7 +326,9 @@ $env:NEXU_DESKTOP_ARCHIVE_OPENCLAW_SIDECAR='0'
 pnpm --filter @nexu/desktop dist:win:portable
 ----
 
-正式发布以 `apps/desktop/package.json` 的版本号为闸门。更高版本进入 `main` 后，`.github/workflows/desktop-auto-tag.yml` 校验 SemVer 和单调递增关系并创建 `v{version}` 标签；标签触发 `.github/workflows/desktop-release.yml`，在 macOS 和 Windows runner 上完成签名构建。流水线先校验完整产物，再上传安装包、ZIP、`.blockmap` 和 SHA-256，最后上传 `latest.yml` 或 `latest-mac.yml`。只有公网更新源返回目标版本且所有必需对象均可访问后，GitHub Release 才从草稿转为正式发布。发布失败时客户端继续读取上一版清单；回滚也必须最后恢复上一版更新清单。
+当前正式发布由根目录 `pnpm release:desktop` 驱动。命令在版本变更前执行类型检查、Windows 发布相关根目录测试、Controller 测试、构建和 ESM 引用检查，随后更新桌面版本、提交全部已审阅源码并强制推送当前开发分支，再创建不可变 `v{version}` 标签。Windows 发布测试门禁排除 `data-directory-runtime.test.ts`、`lifecycle-teardown.test.ts`、全部 `*launchd*.test.ts`、全部 `*plist*.test.ts` 和 `entitlements-plist.test.ts` 这些依赖 macOS launchd、Apple plist 或 POSIX 路径语义的专属测试；日常完整测试命令保持不变。标签触发 `.github/workflows/desktop-release.yml`；`source-health` 从标签重新检出并验证源码，Windows runner 构建 NSIS x64 安装包。流水线先把安装包、`.blockmap` 和 SHA-256 上传到 `{channel}/win/x64` 与兼容前缀 `{channel}/x64`，两个前缀都完成后才分别上传 `latest.yml`。只有两个公网更新源都返回目标版本且所有必需对象均可访问，GitHub Release 才从草稿转为正式发布。发布失败时客户端继续读取上一版清单；回滚也必须最后恢复上一版更新清单。
+
+本地 `main` 当前与 `origin/main` 存在未整理的历史分歧，因此发布命令显式拒绝本地 `main`，避免错误覆盖主分支。短期内，已审阅开发分支的远程提交加不可变标签承担生产源码真相；历史对齐完成后，可恢复 `.github/workflows/desktop-auto-tag.yml` 的常规 `main` 自动打标签路径。
 
 根目录 `prepare` 脚本使用 Node.js 安装 Git hooks，并在 Git 元数据不可用时容忍跳过，确保 Windows runner 和无 `.git` 的归档构建不会因 Unix 专用 `cp/chmod` 命令失败而阻断桌面发布。
 
@@ -716,11 +722,33 @@ stream termination reason so production failures can be ranked from evidence.
 
 === Desktop release fallback
 
-If the macOS signing credentials are unavailable, the macOS release matrix is
-allowed to fail without blocking the Windows release job. The Windows job still
-publishes and validates `latest.yml`, the NSIS installer, and its `.blockmap`.
-The macOS update feed remains on the previous verified signed release until
-Apple signing credentials are restored.
+Tag pushes and the default manual dispatch skip the macOS matrix entirely.
+The Windows job depends only on immutable source health and its own build,
+artifact, public-feed, and release checks. macOS runs only when an operator
+explicitly requests an all-platform manual release, so unavailable Apple
+signing credentials cannot block the default Windows OTA path. The macOS update
+feed remains on the previous verified signed release until a separate macOS
+release succeeds.
+
+=== ADR-021: Windows-first releases use tagged remote source truth
+
+Context: the local development branch contains the reviewed Windows fixes while
+the local and remote `main` histories are substantially divergent. Rewriting
+`main` during a production release would mix repository reconciliation with OTA
+delivery. macOS signing availability is also independent from Windows package
+health.
+
+Decision: `pnpm release:desktop` checks, commits, and force-pushes the current
+non-main branch, then creates an immutable version tag. GitHub Actions checks
+out that tag as the only build input. Tag pushes skip macOS by default. Windows
+immutable artifacts reach both R2 prefixes before either `latest.yml` pointer
+is updated, and both public feeds must validate before the GitHub Release is
+published.
+
+Consequences: a Windows release can complete without Apple credentials, the
+server never receives hand-copied Electron source, and a published manifest
+cannot reference artifacts missing from the compatibility prefix. The
+repository still needs a separate, reviewed `main` history reconciliation.
 
 == Windows cloud bootstrap reliability addendum (2026-07-31)
 
@@ -858,3 +886,170 @@ can represent only one HTTP(S) proxy. Resolving the actual Link model endpoint
 minimizes that mismatch. SOCKS-only system proxies are not converted because
 the bundled Node fetch path supports HTTP(S) environment proxies; those users
 must use a compatible HTTP proxy listener or a future explicit SOCKS agent.
+
+== Cloud endpoint ownership and release guard addendum (2026-08-04)
+
+=== 4. Solution strategy
+
+The packaged Cloud and Link values are installation seeds, not runtime policy.
+The Controller uses the packaged values only when it creates
+`cloud-profiles.json` for the first time. Once that file exists, its stored
+`Default` entry and the active profile named in `config.json` are authoritative
+across application updates.
+
+The current production seeds are `http://47.108.215.151:9080` for Cloud and
+`https://yunwu.ai` for Link. Windows and macOS packaging share these defaults;
+release workflows pass the same pair explicitly.
+
+=== 6. Runtime flow
+
+. On first launch, the Controller seeds `cloud-profiles.json` from the packaged
+  endpoints.
+. On later launches, the Controller normalizes and reads the stored profiles
+  without replacing the stored `Default` entry.
+. `desktop.activeCloudProfileName` selects the active stored profile. A missing
+  name falls back to the stored `Default`, then to the build seed only if no
+  stored default exists.
+. Credential login maps transport failures to separate DNS, TLS, and timeout
+  messages. HTTP 400, 401, and 403 responses are reported as credential
+  rejection rather than network unreachability.
+
+=== 7. Deployment and packaging
+
+After electron-builder creates the unpacked application, the packaging process
+reads `resources/build-config.json` from the produced app. Formal packages must
+contain the approved production endpoint pair and cannot bypass validation.
+The verifier resolves hostnames and probes both `/v1/models` endpoints with a
+bounded timeout. Cloud must return HTTP 200; Link may return HTTP 200 or the
+expected unauthenticated HTTP 401/403. DNS, TLS, timeout, and unexpected HTTP
+failures stop the package job before publication.
+
+=== 9. Architecture decisions
+
+==== ADR-017: User profile state outranks packaged endpoint seeds
+
+*Status:* accepted
+
+An application update must not mutate a valid user-selected endpoint. Build
+configuration owns only initial defaults; user profile storage owns all
+subsequent endpoint selection.
+
+==== ADR-018: Fail closed when formal endpoint validation fails
+
+*Status:* accepted
+
+A formal package with missing, stale, policy-violating, or unreachable Cloud or
+Link endpoints is rejected. Local packages may explicitly skip the live probe,
+but the skip flag is rejected when the build metadata identifies a formal
+release.
+
+=== 10. Quality requirements
+
+Profile regression tests must cover an existing stored `Default` whose values
+differ from the new package. Packaging tests must cover production defaults,
+formal-package policy rejection, accepted probe statuses, and classified DNS
+failures. Login tests must cover DNS, TLS, timeout, and credential rejection.
+
+=== 11. Technical risks
+
+The production Cloud seed is currently plain HTTP because it mirrors the active
+deployed service. This protects availability but does not provide transport
+confidentiality for credential login. Migrating Cloud to a verified HTTPS
+origin remains a security requirement; the formal endpoint allowlist and probe
+expectations must be updated atomically when that migration occurs.
+
+== Config sync and Gateway restart coordination addendum (2026-08-04)
+
+=== 4. Solution strategy
+
+Controller owns the boundary between cloud configuration synchronization and
+the user-visible Agent Chat lifecycle. Configurations are normalized into a
+stable semantic object, including the built-in `xai` plugin default, and are
+identified by a SHA-256 revision. Semantically unchanged candidates are not
+written. All OpenClaw configuration and pending-state writes use a temporary
+file followed by an atomic rename.
+
+Reload classification is requested from the OpenClaw-side
+`nexu.config.plan` Gateway method. The Controller does not maintain a reload
+path table; if the planning method is unavailable or returns an error, it
+conservatively treats every changed path as restart-required.
+
+=== 5. Building blocks and ownership
+
+`ConfigSyncCoordinator` owns Agent Chat admission, active stream and pending
+request leases, the restart state machine, the latest pending revision, safe
+apply/rollback, and readiness recovery. `OpenClawConfigWriter` owns normalized
+atomic persistence. `OpenClawGatewayService` owns planning RPC calls and
+Gateway configuration revision tracking. `AgentChatService` owns stable run
+identity and post-disconnect run recovery.
+
+=== 6. Runtime flow
+
+. An Agent Chat acquires a coordinator lease before submission and releases it
+  only after its final response is written, or after explicit failure,
+  cancellation, or timeout cleanup.
+. A hot-only candidate is atomically applied immediately. A restart-required
+  candidate is atomically saved as pending state; later syncs replace it with
+  the newest revision.
+. In one serialized critical section, the coordinator confirms that active
+  streams and pending submissions are both zero and closes chat admission.
+. The coordinator applies the candidate, observes the Gateway disconnect,
+  waits for port health plus Controller WebSocket reconnection and a successful
+  readiness probe, then reopens admission.
+. A `1012 service restart` disconnect is a recoverable lifecycle event.
+  Controller reconnects, queries `agent.wait` by stable run ID, and reads
+  `chat.history` or resumes observation. It never resubmits unless a future
+  protocol can prove the run was never created.
+. Restart observation/readiness failure rolls the live file back, retains the
+  pending candidate, reopens admission, and suppresses an automatic retry loop.
+
+There is deliberately no deferral deadline that can force a restart while a
+chat lease is active. The workbench polls coordinator state and shows that the
+configuration update will apply after the current task finishes.
+
+=== 7. Deployment and packaging
+
+The planning Gateway method is shipped from
+`static/runtime-plugins/nexu-runtime-model` and is bundled by the normal
+Controller build. No installed or packaged `dist` file is edited in place.
+At application startup, persisted pending state is normalized and applied
+before Gateway launch, then deleted only after the atomic write succeeds.
+
+=== 9. Architecture decisions
+
+==== ADR-019: Controller coordinates restart around the user-visible chat lifecycle
+
+*Status:* accepted
+
+OpenClaw's internal run drain is necessary but insufficient because the
+Controller may still be waiting to deliver the final stream result. Controller
+therefore owns the admission gate and chat leases and allows configuration
+files that require restart to change only after the user-visible lifecycle is
+idle.
+
+==== ADR-020: Disconnect recovery is query-first and never blind-resubmit
+
+*Status:* accepted
+
+Stable request/run IDs make a reconnect safe. A service restart causes bounded
+status/history recovery. Blindly sending `agent` again is prohibited because
+it can duplicate tool side effects.
+
+=== 10. Quality requirements
+
+Configuration sync must not fail an active Agent Chat because of a planned
+Gateway restart. Multiple pending syncs before drain must converge on the
+latest revision and produce one restart. Semantic no-op syncs must produce no
+write and no reload. Restart recovery is bounded, logs no credentials, and
+must leave the Controller able to accept chats after rollback. Automated tests
+cover deferral, coalescing, admission races, hot-only model changes, semantic
+normalization, `1012` recovery, startup recovery, and restart failure.
+
+=== 11. Technical risks
+
+The OpenClaw-side planner rules must be kept compatible with the bundled
+OpenClaw version; unknown paths intentionally fail safe to restart-required.
+`agent.wait` currently reports lifecycle status while final content is obtained
+from `chat.history`, so recovery depends on session history retention and uses
+a timestamp/run-scoped bounded search. A future OpenClaw run-result endpoint
+would remove that residual ambiguity.

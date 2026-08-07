@@ -4,6 +4,10 @@ import { lstat, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  resolveBuildEndpoints,
+  verifyPackagedBuildEndpoints,
+} from "./lib/build-endpoints.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const electronRoot = resolve(scriptDir, "..");
@@ -243,6 +247,9 @@ async function getElectronVersion() {
 
 async function ensureBuildConfig() {
   const configPath = resolve(electronRoot, "build-config.json");
+  const isCi =
+    process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true";
+  let existingConfig = {};
   const desktopPackage = JSON.parse(
     await readFile(desktopPackageJsonPath, "utf8"),
   );
@@ -255,53 +262,70 @@ async function ensureBuildConfig() {
     // .env is optional.
   }
 
+  if (isCi) {
+    try {
+      existingConfig = JSON.parse(await readFile(configPath, "utf8"));
+      console.log("[dist:win] preserving CI-generated build-config.json");
+    } catch {
+      // build-config.json is optional before generation in CI.
+    }
+  }
+
   const merged = { ...fileEnv, ...process.env };
   const gitBranch = getGitValue(["rev-parse", "--abbrev-ref", "HEAD"]);
   const gitCommit = getGitValue(["rev-parse", "HEAD"]);
+  const sentryDsn =
+    merged.NEXU_DESKTOP_SENTRY_DSN ?? existingConfig.NEXU_DESKTOP_SENTRY_DSN;
+  const sentryEnv = merged.NEXU_SENTRY_ENV ?? existingConfig.NEXU_SENTRY_ENV;
+  const updateFeedUrl =
+    merged.CLAWPI_UPDATE_FEED_URL ?? existingConfig.CLAWPI_UPDATE_FEED_URL;
+  const autoUpdateEnabled =
+    merged.NEXU_DESKTOP_AUTO_UPDATE_ENABLED ??
+    existingConfig.NEXU_DESKTOP_AUTO_UPDATE_ENABLED;
 
   const config = {
-    NEXU_CLOUD_URL:
-      merged.NEXU_CLOUD_URL ?? "https://api.clawpi.app:9443",
-    NEXU_LINK_URL:
-      merged.NEXU_LINK_URL ?? "https://api.clawpi.app:9443",
+    ...resolveBuildEndpoints(merged, existingConfig),
     NEXU_DESKTOP_UPDATE_CHANNEL:
-      merged.NEXU_DESKTOP_UPDATE_CHANNEL ?? "stable",
+      merged.NEXU_DESKTOP_UPDATE_CHANNEL ??
+      existingConfig.NEXU_DESKTOP_UPDATE_CHANNEL ??
+      "stable",
     NEXU_DESKTOP_BUILD_SOURCE:
-      merged.NEXU_DESKTOP_BUILD_SOURCE ?? "local-dist",
+      merged.NEXU_DESKTOP_BUILD_SOURCE ??
+      existingConfig.NEXU_DESKTOP_BUILD_SOURCE ??
+      "local-dist",
     ...(gitBranch
       ? {
           NEXU_DESKTOP_BUILD_BRANCH:
-            merged.NEXU_DESKTOP_BUILD_BRANCH ?? gitBranch,
+            merged.NEXU_DESKTOP_BUILD_BRANCH ??
+            existingConfig.NEXU_DESKTOP_BUILD_BRANCH ??
+            gitBranch,
         }
       : {}),
     ...(gitCommit
       ? {
           NEXU_DESKTOP_BUILD_COMMIT:
-            merged.NEXU_DESKTOP_BUILD_COMMIT ?? gitCommit,
+            merged.NEXU_DESKTOP_BUILD_COMMIT ??
+            existingConfig.NEXU_DESKTOP_BUILD_COMMIT ??
+            gitCommit,
         }
       : {}),
     NEXU_DESKTOP_BUILD_TIME:
-      merged.NEXU_DESKTOP_BUILD_TIME ?? new Date().toISOString(),
+      merged.NEXU_DESKTOP_BUILD_TIME ??
+      existingConfig.NEXU_DESKTOP_BUILD_TIME ??
+      new Date().toISOString(),
     ...(typeof desktopPackage.version === "string"
       ? {
           NEXU_DESKTOP_APP_VERSION:
-            merged.NEXU_DESKTOP_APP_VERSION ?? desktopPackage.version,
+            merged.NEXU_DESKTOP_APP_VERSION ??
+            existingConfig.NEXU_DESKTOP_APP_VERSION ??
+            desktopPackage.version,
         }
       : {}),
-    ...(merged.NEXU_DESKTOP_SENTRY_DSN
-      ? { NEXU_DESKTOP_SENTRY_DSN: merged.NEXU_DESKTOP_SENTRY_DSN }
-      : {}),
-    ...(merged.NEXU_SENTRY_ENV
-      ? { NEXU_SENTRY_ENV: merged.NEXU_SENTRY_ENV }
-      : {}),
-    ...(merged.CLAWPI_UPDATE_FEED_URL
-      ? { CLAWPI_UPDATE_FEED_URL: merged.CLAWPI_UPDATE_FEED_URL }
-      : {}),
-    ...(merged.NEXU_DESKTOP_AUTO_UPDATE_ENABLED
-      ? {
-          NEXU_DESKTOP_AUTO_UPDATE_ENABLED:
-            merged.NEXU_DESKTOP_AUTO_UPDATE_ENABLED,
-        }
+    ...(sentryDsn ? { NEXU_DESKTOP_SENTRY_DSN: sentryDsn } : {}),
+    ...(sentryEnv ? { NEXU_SENTRY_ENV: sentryEnv } : {}),
+    ...(updateFeedUrl ? { CLAWPI_UPDATE_FEED_URL: updateFeedUrl } : {}),
+    ...(autoUpdateEnabled
+      ? { NEXU_DESKTOP_AUTO_UPDATE_ENABLED: autoUpdateEnabled }
       : {}),
   };
 
@@ -494,6 +518,17 @@ async function main() {
         env,
       });
     },
+    timings,
+  );
+
+  await timedStep(
+    "verify packaged cloud endpoints",
+    async () =>
+      verifyPackagedBuildEndpoints({
+        releaseRoot,
+        platform: "win32",
+        env,
+      }),
     timings,
   );
 

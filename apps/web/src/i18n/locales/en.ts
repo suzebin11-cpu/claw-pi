@@ -207,6 +207,8 @@ const en = {
   "ask.runtimeStarting":
     "Lobster Workbench is preparing. You can start chatting once it is ready.",
   "ask.runtimeNotReady": "Lobster Workbench is unavailable. Please wait.",
+  "ask.configUpdateDeferred":
+    "The configuration update will take effect after the current task finishes.",
   "ask.you": "You",
   "ask.assistant": "Assistant",
   "ask.thinking": "Thinking...",

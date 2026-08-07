@@ -8,10 +8,7 @@ import {
   readAskActivity,
   subscribeAskActivity,
 } from "@/lib/ask-activity";
-import {
-  copyImageToClipboard,
-  downloadImage,
-} from "@/lib/image-actions";
+import { copyImageToClipboard, downloadImage } from "@/lib/image-actions";
 import {
   resolveBackendModelId,
   resolveDisplayModelId,
@@ -1351,6 +1348,7 @@ async function readStreamedCompletion(
 }
 
 async function fetchAgentChatStream(input: {
+  requestId: string;
   sessionId: string;
   modelId: string;
   message: string;
@@ -1366,6 +1364,7 @@ async function fetchAgentChatStream(input: {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
+      requestId: input.requestId,
       sessionId: input.sessionId,
       modelId: input.modelId || undefined,
       message: input.message,
@@ -1797,6 +1796,30 @@ export function AskPage() {
     useState<LocalDesktopPermissionSettings>(loadLocalPermissions);
   const [localPermissionsOpen, setLocalPermissionsOpen] = useState(false);
   const [sessionsCollapsed, setSessionsCollapsed] = useState(false);
+
+  const { data: configSyncStatus } = useQuery({
+    queryKey: ["desktop-config-sync-status"],
+    queryFn: async () => {
+      const response = await fetch(getApiUrl("/api/internal/desktop/ready"), {
+        credentials: "include",
+        cache: "no-store",
+      });
+      if (!response.ok) return null;
+      const payload = (await response.json()) as {
+        configSync?: {
+          state?: string;
+          activeAgentStreams?: number;
+          pendingRevision?: string | null;
+        };
+      };
+      return payload.configSync ?? null;
+    },
+    refetchInterval: 2_000,
+  });
+  const isConfigRestartDeferred =
+    configSyncStatus?.state === "RESTART_PENDING" &&
+    Boolean(configSyncStatus.pendingRevision) &&
+    (configSyncStatus.activeAgentStreams ?? 0) > 0;
 
   const { data: defaultModelData } = useQuery({
     queryKey: ["desktop-default-model"],
@@ -2472,9 +2495,7 @@ export function AskPage() {
       knowledgeMessage
         ? `鐭ヨ瘑搴撹祫鏂欙細\n${extractChatContentText(knowledgeMessage.content)}`
         : "",
-      recentHistoryContext
-        ? `鏈€杩戝璇濓細\n${recentHistoryContext}`
-        : "",
+      recentHistoryContext ? `鏈€杩戝璇濓細\n${recentHistoryContext}` : "",
     ].filter(Boolean);
     const inputTokenEstimate = estimateTokensFromMessages(payloadMessages);
 
@@ -2501,14 +2522,17 @@ export function AskPage() {
 
     try {
       const response = await fetchAgentChatStream({
+        requestId: userMessage.id,
         sessionId: targetSessionId,
         modelId: currentModelId,
         message: limitAgentWorkbenchMessage({
           message: agentWorkbenchMessage,
           contextBlocks: agentContextBlocks,
-          currentBlock: `Current user message:\n${extractChatContentText(
-            buildCurrentUserPayload({ text, attachments }).content,
-          ) || text}`,
+          currentBlock: `Current user message:\n${
+            extractChatContentText(
+              buildCurrentUserPayload({ text, attachments }).content,
+            ) || text
+          }`,
         }),
         attachments,
         permissionMode: localPermissions.mode,
@@ -2618,10 +2642,7 @@ export function AskPage() {
       });
     }
   }, [
-    activeSession?.id,
-    activeSession?.contextSummary,
-    activeSession?.summarizedThroughMessageId,
-    activeSession?.title,
+    activeSession,
     activeSessionId,
     attachments,
     compactSessionIfNeeded,
@@ -2664,6 +2685,11 @@ export function AskPage() {
       onDrop={(event) => void handleDrop(event)}
       onPaste={(event) => void handlePaste(event)}
     >
+      {isConfigRestartDeferred ? (
+        <output className="block border-b border-amber-500/20 bg-amber-500/10 px-4 py-2 text-center text-xs text-amber-200">
+          {t("ask.configUpdateDeferred")}
+        </output>
+      ) : null}
       {contextMenu && contextMenuSession ? (
         <div
           role="menu"

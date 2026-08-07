@@ -23,6 +23,7 @@ import { AnalyticsService } from "../services/analytics-service.js";
 import { ArtifactService } from "../services/artifact-service.js";
 import { ChannelFallbackService } from "../services/channel-fallback-service.js";
 import { ChannelService } from "../services/channel-service.js";
+import { ConfigSyncCoordinator } from "../services/config-sync-coordinator.js";
 import { DesktopLocalService } from "../services/desktop-local-service.js";
 import { ImageGenerationService } from "../services/image-generation-service.js";
 import { IntegrationService } from "../services/integration-service.js";
@@ -70,6 +71,7 @@ export interface ControllerContainer {
   openclawAuthService: OpenClawAuthService;
   wsClient: OpenClawWsClient;
   gatewayService: OpenClawGatewayService;
+  configSyncCoordinator: ConfigSyncCoordinator;
   runtimeState: ControllerRuntimeState;
   startBackgroundLoops: () => () => void;
 }
@@ -106,6 +108,13 @@ export async function createContainer(): Promise<ControllerContainer> {
   const gatewayService = new OpenClawGatewayService(wsClient, runtimeState, {
     processManager: openclawProcess,
   });
+  const configSyncCoordinator = new ConfigSyncCoordinator(
+    env,
+    configWriter,
+    gatewayService,
+    wsClient,
+    runtimeHealth,
+  );
   const channelFallbackService = new ChannelFallbackService(
     openclawProcess,
     gatewayService,
@@ -137,6 +146,7 @@ export async function createContainer(): Promise<ControllerContainer> {
     gatewayService,
     skillhubService.skillDb,
     skillhubService.workspaceSkillScanner,
+    configSyncCoordinator,
   );
   syncService = openclawSyncService;
   const openclawAuthService = new OpenClawAuthService(env, authProfilesStore);
@@ -156,17 +166,8 @@ export async function createContainer(): Promise<ControllerContainer> {
 
   // Wire cloud state change callback to sync refreshed cloud inventory without
   // auto-switching the default model during startup or first-channel connect.
-  configStore.onCloudStateChanged = async (change) => {
+  configStore.onCloudStateChanged = async () => {
     await openclawSyncService.syncAll();
-    if (
-      change.connected &&
-      !change.hadCloudInventory &&
-      change.hasCloudInventory
-    ) {
-      await openclawProcess.stop();
-      openclawProcess.enableAutoRestart();
-      openclawProcess.start();
-    }
   };
 
   return {
@@ -175,7 +176,11 @@ export async function createContainer(): Promise<ControllerContainer> {
     gatewayClient,
     runtimeHealth,
     openclawProcess,
-    agentChatService: new AgentChatService(wsClient, env),
+    agentChatService: new AgentChatService(
+      wsClient,
+      env,
+      configSyncCoordinator,
+    ),
     agentService: new AgentService(configStore, openclawSyncService),
     channelService: new ChannelService(
       env,
@@ -211,6 +216,7 @@ export async function createContainer(): Promise<ControllerContainer> {
     openclawAuthService,
     wsClient,
     gatewayService,
+    configSyncCoordinator,
     configStore,
     runtimeState,
     startBackgroundLoops: () => {

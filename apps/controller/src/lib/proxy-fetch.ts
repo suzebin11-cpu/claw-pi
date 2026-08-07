@@ -378,6 +378,20 @@ function createProxySafeError(
 
   const safeError = new Error(sanitizeErrorMessage(error.message, proxyEnv));
   safeError.name = error.name;
+  const directCode = (error as Error & { code?: unknown }).code;
+  const causeCode =
+    error.cause && typeof error.cause === "object"
+      ? (error.cause as { code?: unknown }).code
+      : undefined;
+  const code =
+    typeof directCode === "string"
+      ? directCode
+      : typeof causeCode === "string"
+        ? causeCode
+        : undefined;
+  if (code) {
+    (safeError as Error & { code?: string }).code = code;
+  }
   return safeError;
 }
 

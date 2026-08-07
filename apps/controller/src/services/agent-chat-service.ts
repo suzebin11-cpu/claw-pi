@@ -8,6 +8,10 @@ import type {
   OpenClawGatewayEvent,
   OpenClawWsClient,
 } from "../runtime/openclaw-ws-client.js";
+import type {
+  AgentChatLease,
+  ConfigSyncCoordinator,
+} from "./config-sync-coordinator.js";
 
 export interface AgentChatAttachment {
   name?: string;
@@ -26,6 +30,7 @@ export interface AgentChatStreamInput {
   executionMode?: AgentExecutionMode | null;
   attachments?: AgentChatAttachment[];
   signal?: AbortSignal;
+  requestId?: string;
 }
 
 export interface ExtractedAgentChatAttachment {
@@ -95,6 +100,8 @@ const AGENT_CHAT_RETRY_TIMEOUT_MS = 90_000;
 const AGENT_CHAT_HEARTBEAT_MS = 15_000;
 const OPENCLAW_GATEWAY_READY_TIMEOUT_MS = 360_000;
 const OPENCLAW_GATEWAY_READY_POLL_MS = 250;
+const AGENT_CHAT_RECOVERY_MAX_ATTEMPTS = 3;
+const AGENT_CHAT_RECOVERY_WAIT_MS = 30_000;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_TURNS = 6;
 const AGENT_CHAT_AUTO_CONTINUE_MAX_FINAL_CHARS = 1600;
 const ATTACHMENT_EXTRACT_MAX_CHARS = 24_000;
@@ -541,6 +548,26 @@ function extractMessageText(value: unknown): string {
   return "";
 }
 
+function extractRecoveredAssistantText(
+  history: unknown,
+  streamStartedAt: number,
+): string {
+  if (!isObject(history) || !Array.isArray(history.messages)) return "";
+  for (const message of [...history.messages].reverse()) {
+    if (!isObject(message) || message.role !== "assistant") continue;
+    const timestamp =
+      typeof message.timestamp === "number"
+        ? message.timestamp
+        : typeof message.createdAt === "number"
+          ? message.createdAt
+          : null;
+    if (timestamp !== null && timestamp < streamStartedAt - 1000) continue;
+    const text = extractMessageText(message);
+    if (text.trim()) return text;
+  }
+  return "";
+}
+
 function extractGeneratedImageText(value: Record<string, unknown>): string {
   const markdown =
     typeof value.markdown === "string" ? value.markdown.trim() : "";
@@ -772,6 +799,7 @@ export class AgentChatService {
   constructor(
     private readonly wsClient: OpenClawWsClient,
     private readonly env: ControllerEnv,
+    private readonly configCoordinator: ConfigSyncCoordinator | null = null,
   ) {}
 
   async extractAttachments(input: {
@@ -833,13 +861,23 @@ export class AgentChatService {
   ): Promise<Response> {
     const streamStartedAt = Date.now();
     const sessionKey = buildWorkbenchSessionKey(input.agentId, input.sessionId);
-    const runId = randomUUID();
+    const runId = input.requestId?.trim() || randomUUID();
+    let chatLease: AgentChatLease | null = null;
+    if (this.configCoordinator) {
+      chatLease = await this.configCoordinator.beginAgentChat(runId);
+    }
     const imageAttachments = normalizeImageAttachments(input.attachments);
-    const savedFiles = await this.saveWorkbenchFiles({
-      agentId: input.agentId,
-      sessionId: input.sessionId,
-      attachments: input.attachments,
-    });
+    let savedFiles: SavedWorkbenchFile[];
+    try {
+      savedFiles = await this.saveWorkbenchFiles({
+        agentId: input.agentId,
+        sessionId: input.sessionId,
+        attachments: input.attachments,
+      });
+    } catch (error) {
+      await chatLease?.release("setup_failed");
+      throw error;
+    }
     const permissionMode = normalizePermissionMode(input.permissionMode);
     const requestedExecutionMode = normalizeExecutionMode(input.executionMode);
     const executionMode = resolveEffectiveExecutionMode({
@@ -897,6 +935,13 @@ export class AgentChatService {
     let heartbeat: NodeJS.Timeout | null = null;
     let unsubscribe: (() => void) | null = null;
     let unsubscribeDisconnected: (() => void) | null = null;
+    let recoveryInFlight: Promise<void> | null = null;
+
+    const releaseChatLease = (result: string) => {
+      const lease = chatLease;
+      chatLease = null;
+      if (lease) void lease.release(result);
+    };
 
     const clearEmptyFinalRetryTimeout = () => {
       if (emptyFinalRetryTimeout) {
@@ -977,6 +1022,7 @@ export class AgentChatService {
         // Stream may already be cancelled by the browser.
       }
       settled = true;
+      releaseChatLease("completed");
       try {
         controllerRef?.close();
       } catch {
@@ -1037,6 +1083,7 @@ export class AgentChatService {
       } else {
         pendingError = error;
       }
+      releaseChatLease("failed");
     };
 
     const writeText = (nextText: string) => {
@@ -1301,11 +1348,7 @@ export class AgentChatService {
                     ? "agent_chat_empty_attachment_retry_failed"
                     : "agent_chat_empty_final_retry_failed",
                 );
-                fail(
-                  error instanceof Error
-                    ? error
-                    : new Error(String(error)),
-                );
+                fail(error instanceof Error ? error : new Error(String(error)));
               });
             emptyFinalRetryTimeout = setTimeout(() => {
               fail(
@@ -1402,11 +1445,7 @@ export class AgentChatService {
                 },
                 "agent_chat_auto_continue_failed",
               );
-              fail(
-                error instanceof Error
-                  ? error
-                  : new Error(String(error)),
-              );
+              fail(error instanceof Error ? error : new Error(String(error)));
             });
           emptyFinalRetryTimeout = setTimeout(() => {
             fail(
@@ -1452,10 +1491,99 @@ export class AgentChatService {
     timeout.unref?.();
 
     unsubscribe = this.wsClient.onEvent(handleChatEvent);
-    unsubscribeDisconnected = this.wsClient.onDisconnected(() => {
-      if (!settled && activeRunId !== null && !waitingForSessionContinuation) {
-        fail(new Error("OpenClaw gateway disconnected during agent chat"));
+    const recoverAfterRestart = async () => {
+      const recoveryRunId = activeRunId;
+      if (!recoveryRunId || settled) return;
+      for (
+        let attempt = 1;
+        attempt <= AGENT_CHAT_RECOVERY_MAX_ATTEMPTS && !settled;
+        attempt += 1
+      ) {
+        const reconnectDeadline = Date.now() + AGENT_CHAT_RECOVERY_WAIT_MS;
+        while (!this.wsClient.isConnected() && Date.now() < reconnectDeadline) {
+          await sleep(OPENCLAW_GATEWAY_READY_POLL_MS, input.signal);
+        }
+        if (!this.wsClient.isConnected()) continue;
+
+        try {
+          const status = await this.wsClient.request<{
+            status?: string;
+            error?: string;
+          }>(
+            "agent.wait",
+            { runId: recoveryRunId, timeoutMs: 5000 },
+            { timeoutMs: 7000 },
+          );
+          await chatLease?.markSubmitted();
+          if (status.status === "error") {
+            throw new Error(
+              status.error || "OpenClaw agent run failed after restart",
+            );
+          }
+          const history = await this.wsClient.request(
+            "chat.history",
+            { sessionKey, limit: 20 },
+            { timeoutMs: 7000 },
+          );
+          const recoveredText = extractRecoveredAssistantText(
+            history,
+            streamStartedAt,
+          );
+          if (recoveredText) {
+            writeText(recoveredText);
+            logger.info(
+              { runId, recoveryResult: "final_from_history", attempt },
+              "agent_chat_restart_recovered",
+            );
+            finish();
+            return;
+          }
+          if (status.status === "timeout") {
+            logger.info(
+              { runId, recoveryResult: "running_resubscribed", attempt },
+              "agent_chat_restart_recovered",
+            );
+            await sleep(1000, input.signal);
+          }
+        } catch (error) {
+          if (attempt === AGENT_CHAT_RECOVERY_MAX_ATTEMPTS) {
+            throw error;
+          }
+          await sleep(1000, input.signal);
+        }
       }
+      throw new Error(
+        `OpenClaw agent chat recovery exhausted after ${AGENT_CHAT_RECOVERY_MAX_ATTEMPTS} attempts`,
+      );
+    };
+
+    const startRecovery = () => {
+      if (settled || recoveryInFlight) return;
+      recoveryInFlight = recoverAfterRestart()
+        .catch((error) => {
+          fail(error instanceof Error ? error : new Error(String(error)));
+        })
+        .finally(() => {
+          recoveryInFlight = null;
+        });
+    };
+
+    const isRecoverableRestartClose = () => {
+      const close = this.wsClient.getLastClose?.();
+      return (
+        close?.code === 1012 ||
+        close?.reason?.trim().toLowerCase().includes("service restart") === true
+      );
+    };
+
+    unsubscribeDisconnected = this.wsClient.onDisconnected(() => {
+      if (settled || activeRunId === null || waitingForSessionContinuation)
+        return;
+      if (isRecoverableRestartClose()) {
+        startRecovery();
+        return;
+      }
+      fail(new Error("OpenClaw gateway disconnected during agent chat"));
     });
 
     input.signal?.addEventListener(
@@ -1566,6 +1694,7 @@ export class AgentChatService {
         "agent_chat_ws_request_start",
       );
       await sendAgentRun(runId, message);
+      await chatLease?.markSubmitted();
       logger.info(
         {
           route: "agentChat.stream",
@@ -1578,6 +1707,10 @@ export class AgentChatService {
         "agent_chat_ws_request_done",
       );
     })().catch((error) => {
+      if (isRecoverableRestartClose()) {
+        startRecovery();
+        return;
+      }
       const message = normalizeAgentErrorMessage(
         error instanceof Error ? error.message : "OpenClaw agent chat failed",
       );

@@ -1,9 +1,48 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import {
+  mkdir,
+  open,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "@nexu/shared";
 import type { ControllerEnv } from "../app/env.js";
 import { NEXU_INTERNAL_ACCOUNT_PREFIX } from "../lib/channel-binding-compiler.js";
 import { logger } from "../lib/logger.js";
+import {
+  normalizeOpenClawConfig,
+  openClawConfigRevision,
+} from "../lib/openclaw-config-normalization.js";
+
+export interface OpenClawConfigWriteResult {
+  changed: boolean;
+  revision: string;
+  config: OpenClawConfig;
+}
+
+async function atomicWriteFile(
+  targetPath: string,
+  content: string,
+): Promise<void> {
+  const temporaryPath = `${targetPath}.tmp-${process.pid}-${randomUUID()}`;
+  const handle = await open(temporaryPath, "wx", 0o600);
+  try {
+    await handle.writeFile(content, "utf8");
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await rename(temporaryPath, targetPath);
+  } catch (error) {
+    await rm(temporaryPath, { force: true }).catch(() => undefined);
+    throw error;
+  }
+}
 
 /**
  * Sync weixin account IDs from openclaw.json to the openclaw-weixin plugin's
@@ -65,42 +104,51 @@ async function syncWeixinAccountIndex(
 }
 
 export class OpenClawConfigWriter {
-  /** Last successfully written content — used to skip redundant writes. */
-  private lastWrittenContent: string | null = null;
+  private lastWrittenRevision: string | null = null;
 
   constructor(private readonly env: ControllerEnv) {}
 
-  async write(config: OpenClawConfig): Promise<void> {
+  async read(): Promise<OpenClawConfig | null> {
+    try {
+      return normalizeOpenClawConfig(
+        JSON.parse(
+          await readFile(this.env.openclawConfigPath, "utf8"),
+        ) as OpenClawConfig,
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  async write(config: OpenClawConfig): Promise<OpenClawConfigWriteResult> {
     await mkdir(path.dirname(this.env.openclawConfigPath), { recursive: true });
-    const content = `${JSON.stringify(config, null, 2)}\n`;
+    const normalized = normalizeOpenClawConfig(config);
+    const revision = openClawConfigRevision(normalized);
+    const content = `${JSON.stringify(normalized, null, 2)}\n`;
 
     // On cold start, seed the cache from the existing file on disk so the
     // first write() after a process restart doesn't trigger an unnecessary
     // OpenClaw reload when the config hasn't actually changed.
-    if (this.lastWrittenContent === null) {
-      try {
-        this.lastWrittenContent = await readFile(
-          this.env.openclawConfigPath,
-          "utf8",
-        );
-      } catch {
-        // File doesn't exist yet — leave cache empty.
-      }
+    if (this.lastWrittenRevision === null) {
+      const existing = await this.read();
+      this.lastWrittenRevision = existing
+        ? openClawConfigRevision(existing)
+        : null;
     }
 
     // Skip writing if the content hasn't changed since the last write.
     // This prevents OpenClaw's file watcher from triggering unnecessary
     // reloads/restarts when syncAll() is called without actual config changes
     // (e.g. on WS reconnect after a restart).
-    if (content === this.lastWrittenContent) {
+    if (revision === this.lastWrittenRevision) {
       logger.debug(
         { path: this.env.openclawConfigPath },
         "openclaw_config_write_skipped_unchanged",
       );
       const openclawStateDir =
         this.env.openclawStateDir ?? path.dirname(this.env.openclawConfigPath);
-      await syncWeixinAccountIndex(openclawStateDir, config);
-      return;
+      await syncWeixinAccountIndex(openclawStateDir, normalized);
+      return { changed: false, revision, config: normalized };
     }
 
     const writeStartedAt = Date.now();
@@ -112,15 +160,15 @@ export class OpenClawConfigWriter {
       },
       "openclaw_config_write_begin",
     );
-    await writeFile(this.env.openclawConfigPath, content, "utf8");
-    this.lastWrittenContent = content;
+    await atomicWriteFile(this.env.openclawConfigPath, content);
+    this.lastWrittenRevision = revision;
 
     // Sync weixin account index for openclaw-weixin plugin compatibility.
     // Older tests and some harnesses only provide openclawConfigPath; in that
     // case the config directory is the state directory that owns plugin state.
     const openclawStateDir =
       this.env.openclawStateDir ?? path.dirname(this.env.openclawConfigPath);
-    await syncWeixinAccountIndex(openclawStateDir, config);
+    await syncWeixinAccountIndex(openclawStateDir, normalized);
 
     const configStat = await stat(this.env.openclawConfigPath);
     logger.info(
@@ -135,5 +183,6 @@ export class OpenClawConfigWriter {
       },
       "openclaw_config_write_complete",
     );
+    return { changed: true, revision, config: normalized };
   }
 }

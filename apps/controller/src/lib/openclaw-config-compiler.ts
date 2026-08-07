@@ -687,6 +687,9 @@ function compilePlugins(
             ...configuredPluginIds,
             "nexu-runtime-model",
             imageGenerationPluginId,
+            // OpenClaw ships xai as enabledByDefault. Keep it explicit in the
+            // allowlist so its activation shape cannot oscillate across loads.
+            "xai",
           ],
         }
       : {}),
@@ -727,6 +730,12 @@ function compilePlugins(
           }
         : {}),
       "nexu-runtime-model": {
+        enabled: true,
+      },
+      // OpenClaw's bundled manifest declares xai enabledByDefault=true.
+      // Persist the equivalent explicit value so controller and gateway use
+      // the same stable representation.
+      xai: {
         enabled: true,
       },
       [imageGenerationPluginId]: {

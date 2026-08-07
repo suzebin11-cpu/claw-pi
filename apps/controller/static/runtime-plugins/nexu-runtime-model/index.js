@@ -15,6 +15,77 @@ let cachedMtimeMs = null;
 let cachedState = null;
 const llmRuns = new Map();
 
+const BASE_RELOAD_RULES = [
+  ["gateway.remote", "none"],
+  ["gateway.reload", "none"],
+  ["gateway.channelHealthCheckMinutes", "hot"],
+  ["gateway.channelStaleEventThresholdMinutes", "hot"],
+  ["gateway.channelMaxRestartsPerHour", "hot"],
+  ["diagnostics.stuckSessionWarnMs", "none"],
+  ["hooks", "hot"],
+  ["agents.defaults.heartbeat", "hot"],
+  ["agents.defaults.models", "hot"],
+  ["agents.defaults.model", "hot"],
+  ["models", "hot"],
+  ["agents.list", "hot"],
+  ["agent.heartbeat", "hot"],
+  ["cron", "hot"],
+  ["channels", "hot"],
+  ["meta", "none"],
+  ["identity", "none"],
+  ["wizard", "none"],
+  ["logging", "none"],
+  ["agents", "none"],
+  ["tools", "none"],
+  ["bindings", "none"],
+  ["audio", "none"],
+  ["agent", "none"],
+  ["routing", "none"],
+  ["messages", "none"],
+  ["session", "none"],
+  ["talk", "none"],
+  ["skills", "none"],
+  ["secrets", "none"],
+  ["plugins", "restart"],
+  ["ui", "none"],
+  ["gateway", "restart"],
+  ["discovery", "restart"],
+  ["canvasHost", "restart"],
+];
+
+function classifyReloadPath(path) {
+  for (const [prefix, kind] of BASE_RELOAD_RULES) {
+    if (path === prefix || path.startsWith(`${prefix}.`)) {
+      return kind;
+    }
+  }
+  return "restart";
+}
+
+function buildConfigPlan(params) {
+  const changedPaths = Array.isArray(params?.changedPaths)
+    ? params.changedPaths.filter((path) => typeof path === "string")
+    : [];
+  const hotReloadPaths = [];
+  const restartRequiredPaths = [];
+  const noopPaths = [];
+  for (const path of changedPaths) {
+    const kind = classifyReloadPath(path);
+    if (kind === "hot") hotReloadPaths.push(path);
+    else if (kind === "none") noopPaths.push(path);
+    else restartRequiredPaths.push(path);
+  }
+  return {
+    changedPaths,
+    hotReloadPaths,
+    restartRequiredPaths,
+    noopPaths,
+    restartRequired: restartRequiredPaths.length > 0,
+    configRevision:
+      typeof params?.configRevision === "string" ? params.configRevision : "",
+  };
+}
+
 function loadState() {
   try {
     const nextMtimeMs = statSync(statePath).mtimeMs;
@@ -88,6 +159,14 @@ const plugin = {
   description:
     "Injects Nexu runtime model selection into model routing and prompt context.",
   register(api) {
+    // Controller-facing planning RPC. It runs inside Gateway/plugin activation
+    // context, keeping reload classification out of controller business logic.
+    api.registerGatewayMethod(
+      "nexu.config.plan",
+      ({ params, respond }) => respond(true, buildConfigPlan(params)),
+      { scope: "operator.admin" },
+    );
+
     api.on("before_model_resolve", async () => {
       const state = loadState();
       if (!state) {

@@ -34,6 +34,64 @@ function parseRemoteError(text: string): string {
   return text;
 }
 
+const DNS_ERROR_CODES = new Set([
+  "EAI_AGAIN",
+  "EAI_FAIL",
+  "ENODATA",
+  "ENOTFOUND",
+]);
+const TLS_ERROR_CODES = new Set([
+  "CERT_HAS_EXPIRED",
+  "CERT_NOT_YET_VALID",
+  "DEPTH_ZERO_SELF_SIGNED_CERT",
+  "ERR_TLS_CERT_ALTNAME_INVALID",
+  "SELF_SIGNED_CERT_IN_CHAIN",
+  "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
+  "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+]);
+const TIMEOUT_ERROR_CODES = new Set([
+  "ETIMEDOUT",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+]);
+
+function readNetworkErrorCode(error: unknown): string {
+  if (!error || typeof error !== "object") return "";
+  const code = (error as { code?: unknown }).code;
+  if (typeof code === "string") return code.toUpperCase();
+  return readNetworkErrorCode((error as { cause?: unknown }).cause);
+}
+
+function describeLoginNetworkError(error: unknown): string {
+  const code = readNetworkErrorCode(error);
+  const name = error instanceof Error ? error.name : "";
+  const message = error instanceof Error ? error.message.toUpperCase() : "";
+
+  if (
+    name === "TimeoutError" ||
+    TIMEOUT_ERROR_CODES.has(code) ||
+    message.includes("TIMED OUT") ||
+    message.includes("CONNECT TIMEOUT")
+  ) {
+    return "Connection timed out";
+  }
+  if (
+    TLS_ERROR_CODES.has(code) ||
+    message.includes("CERTIFICATE") ||
+    message.includes("TLS")
+  ) {
+    return "TLS certificate validation failed";
+  }
+  if (DNS_ERROR_CODES.has(code) || message.includes("GETADDRINFO")) {
+    return "DNS lookup failed";
+  }
+  return "Server unreachable";
+}
+
+function isCredentialRejection(status: number): boolean {
+  return status === 400 || status === 401 || status === 403;
+}
+
 export class DesktopLocalService {
   constructor(
     private readonly configStore: NexuConfigStore,
@@ -198,8 +256,8 @@ export class DesktopLocalService {
         }),
         timeoutMs: 15_000,
       });
-    } catch {
-      return { ok: false, error: "Server unreachable" };
+    } catch (error) {
+      return { ok: false, error: describeLoginNetworkError(error) };
     }
 
     if (!res.ok) {
@@ -371,13 +429,18 @@ export class DesktopLocalService {
         }),
         timeoutMs: 15_000,
       });
-    } catch {
-      return { ok: false, error: "Server unreachable" };
+    } catch (error) {
+      return { ok: false, error: describeLoginNetworkError(error) };
     }
 
     if (!res.ok) {
       const text = await res.text().catch(() => "Unknown error");
-      return { ok: false, error: text };
+      return {
+        ok: false,
+        error: isCredentialRejection(res.status)
+          ? "Invalid email or password"
+          : parseRemoteError(text),
+      };
     }
 
     const data = (await res.json()) as ActivationServerResponse;

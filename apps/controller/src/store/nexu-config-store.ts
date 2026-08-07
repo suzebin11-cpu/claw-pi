@@ -328,10 +328,20 @@ function normalizeImportedCloudProfiles(
   defaultCloudProfile: CloudProfileEntry,
 ): CloudProfileEntry[] {
   const deduped = new Map<string, CloudProfileEntry>();
+  let storedDefaultProfile: CloudProfileEntry | null = null;
 
   for (const profile of profiles) {
     const name = profile.name.trim();
-    if (name.length === 0 || name === defaultCloudProfile.name) {
+    if (name.length === 0) {
+      continue;
+    }
+
+    if (name === defaultCloudProfile.name) {
+      storedDefaultProfile = {
+        name,
+        cloudUrl: profile.cloudUrl.trim(),
+        linkUrl: profile.linkUrl.trim(),
+      };
       continue;
     }
 
@@ -342,7 +352,10 @@ function normalizeImportedCloudProfiles(
     });
   }
 
-  return [defaultCloudProfile, ...Array.from(deduped.values())];
+  return [
+    storedDefaultProfile ?? defaultCloudProfile,
+    ...Array.from(deduped.values()),
+  ];
 }
 
 function isDefaultCloudProfileName(name: string): boolean {
@@ -2135,8 +2148,13 @@ export class NexuConfigStore {
   }
 
   async setDesktopCloudProfiles(profiles: CloudProfileInput[]) {
+    const existingProfiles = await this.listStoredCloudProfiles();
+    const currentDefaultProfile =
+      existingProfiles.find((profile) =>
+        isDefaultCloudProfileName(profile.name),
+      ) ?? this.defaultCloudProfile;
     const normalizedProfiles = normalizeImportedCloudProfiles(
-      profiles,
+      [currentDefaultProfile, ...profiles],
       this.defaultCloudProfile,
     );
     await this.cloudProfilesStore.write({

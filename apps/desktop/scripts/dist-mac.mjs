@@ -14,6 +14,10 @@ import { createReadStream } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  resolveBuildEndpoints,
+  verifyPackagedBuildEndpoints,
+} from "./lib/build-endpoints.mjs";
 
 const scriptDir = dirname(fileURLToPath(import.meta.url));
 const electronRoot = resolve(scriptDir, "..");
@@ -645,6 +649,7 @@ async function ensureBuildConfig() {
   };
 
   const config = {
+    ...resolveBuildEndpoints(merged, existingConfig),
     NEXU_DESKTOP_UPDATE_CHANNEL:
       merged.NEXU_DESKTOP_UPDATE_CHANNEL ??
       existingConfig.NEXU_DESKTOP_UPDATE_CHANNEL ??
@@ -957,6 +962,17 @@ async function main() {
           : notarizeEnv,
       });
     },
+    timings,
+  );
+  await timedStep(
+    "verify packaged cloud endpoints",
+    async () =>
+      verifyPackagedBuildEndpoints({
+        releaseRoot,
+        platform: "darwin",
+        productName: await getProductName(),
+        env,
+      }),
     timings,
   );
   await timedStep(

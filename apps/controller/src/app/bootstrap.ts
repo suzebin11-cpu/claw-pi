@@ -30,6 +30,10 @@ export async function bootstrapController(
   // invisible to the running agent until a restart.
   container.skillhubService.bootstrap();
 
+  // A crash after staging a restart-required config must not lose the update.
+  // Apply it before the gateway starts, when no chat can be interrupted.
+  await container.configSyncCoordinator?.recoverPendingBeforeGatewayStart();
+
   // Write config files BEFORE starting OpenClaw so it boots with the
   // correct configuration, avoiding a SIGUSR1 restart cycle on first connect.
   // Use syncAllImmediate() to bypass debounce — must complete before start().

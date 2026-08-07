@@ -81,14 +81,14 @@ function createBaseConfig(): NexuConfig {
 }
 
 describe("compileOpenClawConfig", () => {
-  it("prewarms Feishu plugin and a disabled internal account before first connect", () => {
+  it("prewarms disabled Feishu config before first connect", () => {
     const compiled = compileOpenClawConfig(createBaseConfig(), createEnv());
 
-    expect(compiled.plugins?.entries?.feishu).toEqual({ enabled: true });
+    expect(compiled.plugins?.entries?.feishu).toEqual({ enabled: false });
     expect(compiled.plugins?.entries?.["openclaw-weixin"]).toEqual({
       enabled: true,
     });
-    expect(compiled.channels?.feishu?.enabled).toBe(true);
+    expect(compiled.channels?.feishu?.enabled).toBe(false);
     expect(compiled.channels?.feishu?.accounts).toEqual({
       __nexu_internal_feishu_prewarm__: {
         enabled: false,
@@ -226,7 +226,7 @@ describe("compileOpenClawConfig", () => {
     ]);
   });
 
-  it("does not silently rewrite the default model to the first Link model", () => {
+  it("falls back to an available Link model when the configured default is unavailable", () => {
     const config = createBaseConfig();
     config.desktop = {
       cloud: {
@@ -249,7 +249,7 @@ describe("compileOpenClawConfig", () => {
     const compiled = compileOpenClawConfig(config, createEnv());
 
     expect(compiled.agents?.defaults?.model?.primary).toBe(
-      "anthropic/claude-sonnet-4",
+      "link/gemini-3.1-pro-preview",
     );
     expect(compiled.models?.providers?.link?.models).toHaveLength(1);
     expect(compiled.models?.providers?.link?.models[0]?.id).toBe(

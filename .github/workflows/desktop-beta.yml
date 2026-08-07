@@ -17,8 +17,8 @@ jobs:
     with:
       environment: nexu-prod
       sentry_env: "prod"
-      cloud_url: "https://api.clawpi.app:9443"
-      link_url: "https://api.clawpi.app:9443"
+      cloud_url: "http://47.108.215.151:9080"
+      link_url: "https://yunwu.ai"
       update_feed_url: ""
       build_source: "beta"
       release_tag: desktop-beta

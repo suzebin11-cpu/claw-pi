@@ -12,6 +12,11 @@
 import { createHash } from "node:crypto";
 import type { OpenClawConfig } from "@nexu/shared";
 import { logger } from "../lib/logger.js";
+import {
+  diffOpenClawConfigPaths,
+  normalizeOpenClawConfig,
+  openClawConfigRevision,
+} from "../lib/openclaw-config-normalization.js";
 import type {
   OpenClawProcessLike,
   OpenClawWsClient,
@@ -111,6 +116,15 @@ export interface SendChannelMessageResult {
 export interface LogoutChannelAccountResult {
   cleared?: boolean;
   loggedOut?: boolean;
+}
+
+export interface OpenClawConfigReloadPlan {
+  changedPaths: string[];
+  hotReloadPaths: string[];
+  restartRequiredPaths: string[];
+  noopPaths: string[];
+  restartRequired: boolean;
+  configRevision: string;
 }
 
 interface LiveStatusChannelInput {
@@ -241,6 +255,94 @@ export class OpenClawGatewayService {
     if (this.trackDisconnectedWrites && !this.wsClient.isConnected()) {
       this.wroteWhileDisconnected = true;
     }
+  }
+
+  async planConfigChange(
+    previous: OpenClawConfig | null,
+    next: OpenClawConfig,
+  ): Promise<OpenClawConfigReloadPlan> {
+    const normalizedNext = normalizeOpenClawConfig(next);
+    const revision = openClawConfigRevision(normalizedNext);
+    const changedPaths = previous
+      ? diffOpenClawConfigPaths(
+          normalizeOpenClawConfig(previous),
+          normalizedNext,
+        )
+      : ["<root>"];
+    if (changedPaths.length === 0) {
+      return {
+        changedPaths,
+        hotReloadPaths: [],
+        restartRequiredPaths: [],
+        noopPaths: [],
+        restartRequired: false,
+        configRevision: revision,
+      };
+    }
+
+    if (this.wsClient.isConnected()) {
+      try {
+        const remotePlan = await this.wsClient.request<
+          Partial<OpenClawConfigReloadPlan>
+        >(
+          "nexu.config.plan",
+          { changedPaths, configRevision: revision },
+          { timeoutMs: 5000 },
+        );
+        const hotReloadPaths = Array.isArray(remotePlan.hotReloadPaths)
+          ? remotePlan.hotReloadPaths.filter(
+              (value) => typeof value === "string",
+            )
+          : [];
+        const reportedRestartPaths = Array.isArray(
+          remotePlan.restartRequiredPaths,
+        )
+          ? remotePlan.restartRequiredPaths.filter(
+              (value) => typeof value === "string",
+            )
+          : [];
+        const noopPaths = Array.isArray(remotePlan.noopPaths)
+          ? remotePlan.noopPaths.filter((value) => typeof value === "string")
+          : [];
+        const classifiedPaths = new Set([
+          ...hotReloadPaths,
+          ...reportedRestartPaths,
+          ...noopPaths,
+        ]);
+        const restartRequiredPaths = [
+          ...reportedRestartPaths,
+          ...changedPaths.filter((path) => !classifiedPaths.has(path)),
+        ];
+        return {
+          changedPaths,
+          hotReloadPaths,
+          restartRequiredPaths,
+          noopPaths,
+          restartRequired: restartRequiredPaths.length > 0,
+          configRevision: revision,
+        };
+      } catch (error) {
+        logger.warn(
+          {
+            configRevision: revision,
+            changedPaths,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "openclaw_config_plan_rpc_failed",
+        );
+      }
+    }
+
+    // An unavailable/older planning endpoint must fail safe. Deferring an
+    // unnecessary restart is preferable to interrupting an active chat.
+    return {
+      changedPaths,
+      hotReloadPaths: [],
+      restartRequiredPaths: changedPaths,
+      noopPaths: [],
+      restartRequired: true,
+      configRevision: revision,
+    };
   }
 
   /**
@@ -840,6 +942,6 @@ export class OpenClawGatewayService {
   }
 
   private configHash(config: OpenClawConfig): string {
-    return createHash("sha256").update(JSON.stringify(config)).digest("hex");
+    return openClawConfigRevision(config);
   }
 }

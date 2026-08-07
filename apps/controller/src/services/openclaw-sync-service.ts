@@ -1,5 +1,5 @@
-import { existsSync, type Dirent } from "node:fs";
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { type Dirent, existsSync } from "node:fs";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type { ChannelType } from "@nexu/shared";
 import { selectPreferredModel } from "@nexu/shared";
@@ -21,6 +21,7 @@ import type { WorkspaceTemplateWriter } from "../runtime/workspace-template-writ
 import type { CompiledOpenClawStore } from "../store/compiled-openclaw-store.js";
 import type { NexuConfigStore } from "../store/nexu-config-store.js";
 import type { NexuConfig } from "../store/schemas.js";
+import type { ConfigSyncCoordinator } from "./config-sync-coordinator.js";
 import type { OpenClawGatewayService } from "./openclaw-gateway-service.js";
 import type { SkillDb } from "./skillhub/skill-db.js";
 import type { WorkspaceSkillScanner } from "./skillhub/workspace-skill-scanner.js";
@@ -162,6 +163,7 @@ export class OpenClawSyncService {
     private readonly gatewayService: OpenClawGatewayService,
     private readonly skillDb: SkillDb | null = null,
     private readonly workspaceScanner: WorkspaceSkillScanner | null = null,
+    private readonly configCoordinator: ConfigSyncCoordinator | null = null,
   ) {}
 
   async compileCurrentConfig(): Promise<
@@ -344,7 +346,7 @@ export class OpenClawSyncService {
    * Used during bootstrap where we need the config written before OpenClaw starts.
    */
   async syncAllImmediate(): Promise<{ configPushed: boolean }> {
-    return this.doSync();
+    return this.doSync({ bootstrap: true });
   }
 
   async ensureRuntimeModelPlugin(): Promise<void> {
@@ -535,7 +537,9 @@ export class OpenClawSyncService {
     );
   }
 
-  private async doSync(): Promise<{ configPushed: boolean }> {
+  private async doSync(
+    options: { bootstrap?: boolean } = {},
+  ): Promise<{ configPushed: boolean }> {
     const seq = ++this.syncCounter;
     const config = await this.configStore.getConfig();
     const oauthState = await this.authProfilesStore.getOAuthConnectionState();
@@ -583,23 +587,23 @@ export class OpenClawSyncService {
       "doSync: pushing config to OpenClaw",
     );
 
-    // 1. Decide whether this config differs from the last observed snapshot.
-    let configPushed = false;
-    if (this.gatewayService.isConnected()) {
-      try {
-        configPushed = await this.gatewayService.shouldPushConfig(compiled);
-      } catch (err) {
-        logger.warn(
-          { error: err instanceof Error ? err.message : String(err) },
-          "openclaw config diff check failed",
-        );
-      }
-    }
-
-    // 2. Always write files once (persistence + watcher hot-reload path).
-    await this.configWriter.write(compiled);
+    // The coordinator owns semantic diffing, persistence, and restart timing.
+    // Tests and narrow harnesses may omit it and retain direct bootstrap writes.
+    const coordination = this.configCoordinator
+      ? await this.configCoordinator.submitConfig(compiled, {
+          bootstrap: options.bootstrap,
+        })
+      : null;
+    const directWrite = coordination
+      ? null
+      : await this.configWriter.write(compiled);
+    const configPushed = coordination
+      ? coordination.applied || coordination.deferred
+      : Boolean(directWrite?.changed);
     await this.authProfilesWriter.writeForAgents(compiled, config.providers);
-    this.gatewayService.noteConfigWritten(compiled);
+    if (directWrite) {
+      this.gatewayService.noteConfigWritten(directWrite.config);
+    }
     const runtimeModelRef = resolvePrimaryModelRef(
       compiled.agents.defaults?.model,
       config,
@@ -626,20 +630,11 @@ export class OpenClawSyncService {
     );
     await this.compiledStore.saveConfig(compiled);
 
-    // 3. Nudge the file watcher when OpenClaw may not have seen the config:
-    //    - WS not connected: file watcher is the only reload path.
-    //    - configPushed (hash stale): gateway restarted and may have missed
-    //      writes that landed on disk while WS was down. Touch the file so
-    //      the watcher triggers a reload even when the content is identical.
-    if (!this.gatewayService.isConnected() || configPushed) {
-      await this.watchTrigger.touchConfig();
-    }
-
-    // 4. Nudge OpenClaw's skills chokidar watcher so it bumps snapshotVersion.
+    // Nudge OpenClaw's skills chokidar watcher only after an applied change.
     // Without this, existing sessions keep using a stale skills snapshot
     // even after the allowlist changes, because OpenClaw's config-reload
     // treats agents/skills changes as kind "none" (no hot-reload action).
-    if (configPushed) {
+    if (coordination?.applied || directWrite?.changed) {
       await this.touchAnySkillMarker();
     }
 

@@ -14,7 +14,7 @@ on:
       windows_only:
         description: "Skip macOS and publish Windows only"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -26,8 +26,39 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  source-health:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout immutable release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag_name || github.ref }}
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.26.0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        env:
+          NEXU_SKIP_RUNTIME_POSTINSTALL: "1"
+        run: pnpm install --frozen-lockfile
+
+      - name: Verify release source
+        run: pnpm release:desktop:check
+
   release:
-    if: github.event_name != 'workflow_dispatch' || inputs.windows_only != true
+    needs: source-health
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_only != true
     strategy:
       max-parallel: 1
       matrix:
@@ -167,8 +198,8 @@ jobs:
             };
             const sentryDsn = sentryDsnByEnvironment[process.env.SENTRY_ENV] ?? "";
             const config = {
-              NEXU_CLOUD_URL: "https://api.clawpi.app:9443",
-              NEXU_LINK_URL: "https://api.clawpi.app:9443",
+              NEXU_CLOUD_URL: "http://47.108.215.151:9080",
+              NEXU_LINK_URL: "https://yunwu.ai",
               NEXU_SENTRY_ENV: process.env.SENTRY_ENV,
               CLAWPI_UPDATE_FEED_URL: "",
               NEXU_DESKTOP_APP_VERSION: version,
@@ -499,8 +530,23 @@ jobs:
           fi
 
   release-windows:
-    needs: release
-    if: always() && needs.release.result != 'cancelled'
+    needs: [source-health, release]
+    if: >-
+      always() &&
+      needs.source-health.result == 'success' &&
+      (
+        needs.release.result == 'success' ||
+        (
+          needs.release.result == 'skipped' &&
+          (
+            github.event_name == 'push' ||
+            (
+              github.event_name == 'workflow_dispatch' &&
+              inputs.windows_only == true
+            )
+          )
+        )
+      )
     runs-on: windows-latest
 
     steps:
@@ -591,8 +637,8 @@ jobs:
           };
           const sentryDsn = sentryDsnByEnvironment[process.env.SENTRY_ENV] ?? "";
           const config = {
-            NEXU_CLOUD_URL: "https://api.clawpi.app:9443",
-            NEXU_LINK_URL: "https://api.clawpi.app:9443",
+            NEXU_CLOUD_URL: "http://47.108.215.151:9080",
+            NEXU_LINK_URL: "https://yunwu.ai",
             NEXU_SENTRY_ENV: process.env.SENTRY_ENV,
             CLAWPI_UPDATE_FEED_URL: "",
             NEXU_DESKTOP_APP_VERSION: version,
@@ -733,11 +779,10 @@ jobs:
           CHECKSUM_NAME: ${{ steps.artifacts.outputs.checksum_name }}
         run: |
           $artifactDir = "apps/desktop/release-artifacts-win"
-          $artifacts = @(
+          $immutableArtifacts = @(
             $env:INSTALLER_NAME,
             $env:BLOCKMAP_NAME,
-            $env:CHECKSUM_NAME,
-            "latest.yml"
+            $env:CHECKSUM_NAME
           )
 
           $prefixes = @(
@@ -746,8 +791,8 @@ jobs:
           )
 
           foreach ($prefix in $prefixes) {
-            Write-Host "[r2] Uploading Windows update feed to $prefix/"
-            foreach ($artifact in $artifacts) {
+            Write-Host "[r2] Uploading immutable Windows artifacts to $prefix/"
+            foreach ($artifact in $immutableArtifacts) {
               Write-Host "[r2] Uploading $artifact to $prefix/$artifact"
               node scripts/upload-r2-object.mjs `
                 --key "$prefix/$artifact" `
@@ -755,6 +800,16 @@ jobs:
               if ($LASTEXITCODE -ne 0) {
                 throw "R2 upload failed for $prefix/$artifact"
               }
+            }
+          }
+
+          foreach ($prefix in $prefixes) {
+            Write-Host "[r2] Publishing latest.yml last to $prefix/latest.yml"
+            node scripts/upload-r2-object.mjs `
+              --key "$prefix/latest.yml" `
+              --file "$artifactDir/latest.yml"
+            if ($LASTEXITCODE -ne 0) {
+              throw "R2 manifest upload failed for $prefix/latest.yml"
             }
           }
 

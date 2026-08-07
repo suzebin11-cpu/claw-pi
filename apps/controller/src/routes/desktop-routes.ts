@@ -24,6 +24,16 @@ const desktopReadyResponseSchema = z.object({
   openclawDashboardUrl: z.string().optional(),
   openclawChatUrl: z.string().optional(),
   bootTimestamp: z.number(),
+  configSync: z
+    .object({
+      state: z.string(),
+      activeAgentStreams: z.number(),
+      pendingAgentRequests: z.number(),
+      acceptingNewChats: z.boolean(),
+      pendingRevision: z.string().nullable(),
+      restartDeferredReason: z.string().nullable(),
+    })
+    .optional(),
 });
 
 const fallbackEventSchema = z.object({
@@ -538,6 +548,7 @@ export function registerDesktopRoutes(
           openclawDashboardUrl,
           openclawChatUrl,
           bootTimestamp: container.bootTimestamp,
+          configSync: container.configSyncCoordinator?.snapshot(),
         },
         200,
       );

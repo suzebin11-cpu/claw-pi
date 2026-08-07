@@ -258,6 +258,66 @@ describe("NexuConfigStore", () => {
     });
   });
 
+  it("keeps the user's stored active default profile across package updates", async () => {
+    await mkdir(env.nexuHomeDir, { recursive: true });
+    await writeFile(
+      path.join(env.nexuHomeDir, "cloud-profiles.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: [
+          {
+            name: "Default",
+            cloudUrl: "http://47.108.215.151:9080",
+            linkUrl: "https://yunwu.ai",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    env.nexuCloudUrl = "https://expired-package.example.com";
+    env.nexuLinkUrl = "https://expired-link.example.com";
+
+    const store = new NexuConfigStore(env);
+    const status = await store.getDesktopCloudStatus();
+
+    expect(status.activeProfileName).toBe("Default");
+    expect(status.cloudUrl).toBe("http://47.108.215.151:9080");
+    expect(status.linkUrl).toBe("https://yunwu.ai");
+  });
+
+  it("preserves the stored default profile when importing custom profiles", async () => {
+    await mkdir(env.nexuHomeDir, { recursive: true });
+    await writeFile(
+      path.join(env.nexuHomeDir, "cloud-profiles.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: [
+          {
+            name: "Default",
+            cloudUrl: "http://47.108.215.151:9080",
+            linkUrl: "https://yunwu.ai",
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const store = new NexuConfigStore(env);
+
+    const status = await store.setDesktopCloudProfiles([
+      {
+        name: "Staging",
+        cloudUrl: "https://cloud.staging.example.com",
+        linkUrl: "https://link.staging.example.com",
+      },
+    ]);
+
+    expect(status.profiles[0]).toMatchObject({
+      name: "Default",
+      cloudUrl: "http://47.108.215.151:9080",
+      linkUrl: "https://yunwu.ai",
+    });
+  });
+
   it("persists the built-in GPT-5.5 fallback for an authenticated empty catalog", async () => {
     const store = new NexuConfigStore(env);
 
