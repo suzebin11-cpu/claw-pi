@@ -35,6 +35,10 @@ vi.mock("node:fs", () => ({
     (target: string) => fsState.stampContents.get(target) ?? "",
   ),
   statSync: vi.fn(() => ({ size: 123, mtimeMs: 456 })),
+  rmSync: vi.fn((target: string) => {
+    fsState.paths.delete(target);
+    fsState.stampContents.delete(target);
+  }),
   writeFileSync: vi.fn((target: string, contents: string) => {
     fsState.paths.add(target);
     fsState.stampContents.set(target, contents);
