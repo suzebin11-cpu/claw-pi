@@ -963,6 +963,9 @@ const openclawSidecarCacheRoot = resolve(
   "openclaw",
 );
 
+// Bump only when this script changes the final runtime artifact through code
+// that is not otherwise represented by an input below.
+const OPENCLAW_SIDECAR_RUNTIME_REVISION = "1";
 const openclawSidecarFingerprintInputs = [
   resolve(openclawRuntimeRoot, "package.json"),
   resolve(openclawRuntimeRoot, "package-lock.json"),
@@ -971,8 +974,6 @@ const openclawSidecarFingerprintInputs = [
   resolve(openclawRuntimeRoot, "postinstall-cache.mjs"),
   resolve(openclawRuntimeRoot, "prune-runtime.mjs"),
   resolve(openclawRuntimeRoot, "prune-runtime-paths.mjs"),
-  resolve(repoRoot, "apps/desktop/scripts/prepare-openclaw-sidecar.mjs"),
-  resolve(repoRoot, "apps/desktop/scripts/lib/sidecar-paths.mjs"),
 ];
 
 function getPackagedOpenclawEntry(targetSidecarRoot) {
@@ -1009,6 +1010,8 @@ async function hashPath(hash, absolutePath, label) {
 
 async function computeOpenclawSidecarFingerprint() {
   const hash = createHash("sha256");
+  hash.update(OPENCLAW_SIDECAR_RUNTIME_REVISION);
+  hash.update("\0");
   hash.update(process.platform);
   hash.update("\0");
   hash.update(process.arch);
@@ -1048,6 +1051,7 @@ async function writeSidecarMetadataAndLaunchers(
       {
         strategy: "sidecar-node-modules",
         openclawEntry: targetPackagedOpenclawEntry,
+        runtimeFingerprint: fingerprint,
         fingerprint,
       },
       null,
@@ -1120,6 +1124,7 @@ async function writeArchivedSidecarMetadata(
           format: archiveFormat,
           path: payloadFileName,
         },
+        runtimeFingerprint: fingerprint,
         fingerprint,
       },
       null,
@@ -1142,7 +1147,10 @@ async function hasReusableOpenclawSidecarCache(expectedFingerprint) {
 
   try {
     const metadata = JSON.parse(await readFile(cacheMetadataPath, "utf8"));
-    return metadata?.fingerprint === expectedFingerprint;
+    return (
+      metadata?.runtimeFingerprint === expectedFingerprint ||
+      metadata?.fingerprint === expectedFingerprint
+    );
   } catch {
     return false;
   }
@@ -1159,7 +1167,10 @@ async function hasReusableOpenclawSidecarRoot(expectedFingerprint) {
 
   try {
     const metadata = JSON.parse(await readFile(metadataPath, "utf8"));
-    return metadata?.fingerprint === expectedFingerprint;
+    return (
+      metadata?.runtimeFingerprint === expectedFingerprint ||
+      metadata?.fingerprint === expectedFingerprint
+    );
   } catch {
     return false;
   }

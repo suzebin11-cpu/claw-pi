@@ -789,7 +789,11 @@ export function compileOpenClawConfig(
     gateway: {
       port: env.openclawGatewayPort,
       mode: "local",
-      bind: config.runtime.gateway.bind,
+      // The Controller always uses ws://127.0.0.1. Pin the sidecar to that
+      // IPv4 address so Windows cold starts cannot leave it listening only on
+      // ::1 after dual-stack resolution.
+      bind: "custom",
+      customBindHost: "127.0.0.1",
       auth: resolveGatewayAuthConfig(config, env),
       reload: {
         mode: "hybrid",

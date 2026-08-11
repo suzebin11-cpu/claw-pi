@@ -16,7 +16,7 @@ export class RuntimeHealth {
       // Bound the probe: a hung socket on a loopback health check must not
       // stall the startup/health loop indefinitely.
       const response = await proxyFetch(
-        `http://127.0.0.1:${this.env.openclawGatewayPort}/health`,
+        `http://127.0.0.1:${this.env.openclawGatewayPort}/healthz`,
         { timeoutMs: HEALTH_PROBE_TIMEOUT_MS },
       );
       return {

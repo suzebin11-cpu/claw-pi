@@ -65,6 +65,7 @@ vi.mock("node:fs", () => ({
 }));
 
 import {
+  assertOpenclawLauncherAvailable,
   buildSkillNodePath,
   createRuntimeUnitManifests,
   ensurePackagedOpenclawSidecar,
@@ -125,6 +126,33 @@ describe("desktop runtime manifests", () => {
     fsState.paths.clear();
     fsState.stampContents.clear();
     execFileSyncMock.mockReset();
+  });
+
+  describe("assertOpenclawLauncherAvailable", () => {
+    it("accepts an existing launcher", () => {
+      const launcherPath = path.resolve("tmp", "openclaw", "bin", "openclaw");
+      fsState.paths.add(launcherPath);
+
+      expect(() =>
+        assertOpenclawLauncherAvailable(launcherPath, false),
+      ).not.toThrow();
+    });
+
+    it("gives a development recovery command when the launcher is missing", () => {
+      const launcherPath = path.resolve("tmp", "openclaw", "bin", "openclaw");
+
+      expect(() =>
+        assertOpenclawLauncherAvailable(launcherPath, false),
+      ).toThrow("prepare:runtime-sidecars");
+    });
+
+    it("identifies a damaged packaged runtime when the launcher is missing", () => {
+      const launcherPath = path.resolve("runtime", "openclaw", "bin", "openclaw");
+
+      expect(() =>
+        assertOpenclawLauncherAvailable(launcherPath, true),
+      ).toThrow("Reinstall Claw-Pi");
+    });
   });
 
   describe("buildSkillNodePath", () => {
@@ -398,6 +426,23 @@ describe("desktop runtime manifests", () => {
         NEXU_CLOUD_URL: "https://api.clawpi.app:9443",
         NEXU_LINK_URL: "https://api.clawpi.app:9443",
       });
+    });
+
+    it("enables the packaged controller gateway liveness probe", () => {
+      const manifests = createRuntimeUnitManifests(
+        "/Applications/Nexu.app/Contents/Resources",
+        "/Users/testuser/Library/Application Support/@nexu/desktop",
+        true,
+        createRuntimeConfig(),
+      );
+
+      const controllerManifest = manifests.find(
+        (manifest) => manifest.id === "controller",
+      );
+
+      expect(controllerManifest?.env?.RUNTIME_GATEWAY_PROBE_ENABLED).toBe(
+        "true",
+      );
     });
   });
 });

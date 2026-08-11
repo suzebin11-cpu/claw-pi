@@ -67,6 +67,7 @@ const zhCN = {
   "welcome.activation.invalidCode": "激活码无效",
   "welcome.activation.noAccountHint": "第一次使用？请使用「激活」标签页。",
   "welcome.activation.hasAccountHint": "已经激活过？直接登录即可。",
+  "welcome.activation.forgotPassword": "忘记密码？联系支持",
 
   // ── Auth ──
   "auth.terms": "服务条款",
@@ -1146,6 +1147,7 @@ const zhCN = {
   "recharge.totalRecharged": "累计充值",
   "recharge.loadingBalance": "加载余额中...",
   "recharge.balanceUnavailable": "无法加载余额",
+  "recharge.historyUnavailable": "无法加载账务记录，请稍后重试",
   "recharge.providerUnavailable": "余额统计服务暂时不可用，模型调用不受影响",
   "recharge.retryBalance": "重新加载",
   "recharge.codePlaceholder": "输入充值码",

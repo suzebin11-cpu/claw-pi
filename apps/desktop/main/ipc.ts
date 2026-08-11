@@ -3,6 +3,7 @@ import { BrowserWindow, app, crashReporter, ipcMain, shell } from "electron";
 import {
   type HostInvokePayloadMap,
   type HostInvokeResultMap,
+  type StartupProgress,
   type StartupProbePayload,
   hostInvokeChannels,
 } from "../shared/host";
@@ -23,6 +24,7 @@ let updateManager: UpdateManager | null = null;
 let componentUpdater: ComponentUpdater | null = null;
 let quitHandlerOpts: QuitHandlerOptions | null = null;
 let quitFallback: (() => Promise<void>) | null = null;
+let startupProgressProvider: (() => StartupProgress) | null = null;
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -118,6 +120,12 @@ export function setQuitFallback(fallback: () => Promise<void>): void {
   quitFallback = fallback;
 }
 
+export function setStartupProgressProvider(
+  provider: (() => StartupProgress) | null,
+): void {
+  startupProgressProvider = provider;
+}
+
 function assertValidChannel(
   channel: string,
 ): asserts channel is keyof HostInvokePayloadMap {
@@ -208,6 +216,14 @@ export function registerIpcHandlers(
             runtimeConfig,
             source: typedPayload.source,
           });
+        }
+
+        case "startup:get-status": {
+          return (
+            startupProgressProvider?.() ?? {
+              stage: "preparing-runtime",
+            }
+          );
         }
 
         case "env:get-controller-base-url": {

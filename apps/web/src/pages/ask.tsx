@@ -2584,9 +2584,12 @@ export function AskPage() {
                 durationMs: Date.now() - requestStartedAt,
                 streaming: false,
               }
-            : message,
+              : message,
         ),
       }));
+      queryClient.invalidateQueries({ queryKey: ["user-balance"] });
+      queryClient.invalidateQueries({ queryKey: ["transactions"] });
+      queryClient.invalidateQueries({ queryKey: ["usage-logs"] });
       void compactSessionIfNeeded({
         sessionId: targetSessionId,
         modelId: currentModelId,

@@ -28,7 +28,8 @@ const gatewayConfigSchema = z
   .object({
     port: z.number().default(18789),
     mode: z.literal("local").default("local"),
-    bind: z.enum(["loopback", "lan", "auto"]).default("lan"),
+    bind: z.enum(["loopback", "lan", "auto", "custom"]).default("lan"),
+    customBindHost: z.string().optional(),
     auth: gatewayAuthSchema,
     reload: gatewayReloadSchema.default({ mode: "hybrid" }),
     controlUi: controlUiSchema,

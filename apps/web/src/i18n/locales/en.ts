@@ -71,6 +71,7 @@ const en = {
   "welcome.activation.invalidCode": "Invalid activation code",
   "welcome.activation.noAccountHint": "First time? Use the Activate tab.",
   "welcome.activation.hasAccountHint": "Already activated? Sign in directly.",
+  "welcome.activation.forgotPassword": "Forgot password? Contact support",
 
   // ── Auth ──
   "auth.terms": "Terms of Service",
@@ -1219,6 +1220,7 @@ const en = {
   "recharge.totalRecharged": "Total recharged",
   "recharge.loadingBalance": "Loading balance...",
   "recharge.balanceUnavailable": "Unable to load balance",
+  "recharge.historyUnavailable": "Unable to load billing history. Please try again later.",
   "recharge.providerUnavailable":
     "Balance reporting is temporarily unavailable. Model calls are unaffected.",
   "recharge.retryBalance": "Reload",

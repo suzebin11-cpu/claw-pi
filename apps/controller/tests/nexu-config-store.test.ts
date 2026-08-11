@@ -259,6 +259,37 @@ describe("NexuConfigStore", () => {
     });
   });
 
+  it("keeps the activation device id across restarts and credential clearing", async () => {
+    const store = new NexuConfigStore(env);
+    const deviceId = await store.getOrCreateActivationDeviceId();
+
+    expect(deviceId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+    );
+    await expect(store.getOrCreateActivationDeviceId()).resolves.toBe(deviceId);
+
+    const restartedStore = new NexuConfigStore(env);
+    await expect(
+      restartedStore.getOrCreateActivationDeviceId(),
+    ).resolves.toBe(deviceId);
+
+    await restartedStore.setActivationState({
+      activated: true,
+      email: "user@nexu.io",
+      jwt: "activation-jwt",
+      apiKey: "activation-api-key",
+      activatedAt: "2026-08-10T00:00:00.000Z",
+      codePrefix: null,
+    });
+    await restartedStore.clearActivation();
+
+    await expect(
+      restartedStore.getOrCreateActivationDeviceId(),
+    ).resolves.toBe(deviceId);
+    await expect(restartedStore.getActivationJwt()).resolves.toBeNull();
+    await expect(restartedStore.getActivationApiKey()).resolves.toBeNull();
+  });
+
   it("keeps the user's stored active default profile across package updates", async () => {
     await mkdir(env.nexuHomeDir, { recursive: true });
     await writeFile(

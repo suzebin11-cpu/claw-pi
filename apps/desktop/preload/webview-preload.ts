@@ -6,6 +6,7 @@ import {
   type HostInvokePayloadMap,
   type HostInvokeResultMap,
   type RuntimeEvent,
+  type StartupProgress,
   type StartupProbePayload,
   hostInvokeChannels,
 } from "../shared/host";
@@ -49,6 +50,21 @@ const hostBridge: HostBridge = {
 
   reportStartupProbe(payload) {
     reportStartupProbe(payload);
+  },
+
+  onStartupProgress(listener) {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      progress: StartupProgress,
+    ) => {
+      listener(progress);
+    };
+
+    ipcRenderer.on("host:startup-progress", wrapped);
+
+    return () => {
+      ipcRenderer.removeListener("host:startup-progress", wrapped);
+    };
   },
 
   onDesktopCommand(listener) {

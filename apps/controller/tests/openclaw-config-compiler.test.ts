@@ -152,6 +152,10 @@ describe("compileOpenClawConfig", () => {
 
     expect(result.gateway.auth.mode).toBe("token");
     expect(result.gateway.auth.token).toBe("token-123");
+    expect(result.gateway).toMatchObject({
+      bind: "custom",
+      customBindHost: "127.0.0.1",
+    });
     expect(result.agents.defaults?.model).toEqual({
       primary: "byok_anthropic/anthropic/claude-sonnet-4",
     });
@@ -188,6 +192,7 @@ describe("compileOpenClawConfig", () => {
     });
     expect(result.plugins?.entries?.feishu?.enabled).toBe(true);
     expect(result.plugins?.allow).toContain("feishu");
+    expect(result.plugins?.entries?.xai).toEqual({ enabled: true });
     expect(result.plugins?.allow).toContain("openclaw-weixin");
     expect(result.plugins?.entries?.["openclaw-weixin"]?.enabled).toBe(true);
     expect(result.channels?.["openclaw-weixin"]?.enabled).toBe(true);

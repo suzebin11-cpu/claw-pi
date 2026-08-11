@@ -252,13 +252,16 @@ Recharge UI
   -> Controller GET /api/internal/activation/balance
   -> Claw-Pi cloud GET /api/auth/balance with activation JWT
   -> return balance and cumulative recharge when available
+  -> Controller reads Yunwu billing total as an idempotent GET-only check
+  -> compare cloud total_recharged with Yunwu upstream_total_cents
+  -> return reconciliation status/delta only; never call recharge mutation
 
 If the cloud balance request fails:
   -> Controller reads the locally stored activation API key
   -> Yunwu GET /v1/dashboard/billing/subscription
   -> Yunwu GET /v1/dashboard/billing/usage
   -> calculate balance_cents = hard_limit_usd * 100 - total_usage
-  -> return the current balance without exposing or logging the API key
+  -> return the current balance and upstream_total_cents without exposing or logging the API key
 ----
 
 该兜底只补充当前余额，不伪造累计充值金额。若两条路径都失败，投喂页保留在当前页面并提供重新加载，不触发账号断开或重新登录。
@@ -887,6 +890,101 @@ minimizes that mismatch. SOCKS-only system proxies are not converted because
 the bundled Node fetch path supports HTTP(S) environment proxies; those users
 must use a compatible HTTP proxy listener or a future explicit SOCKS agent.
 
+== Cold-start launcher and Yunwu reachability addendum (2026-08-10)
+
+=== Server-side Yunwu gateway compatibility
+
+The desktop runtime keeps the existing `desktop.cloud.linkUrl` and
+`link/<model-id>` contract, but the link URL now points to an OpenAI-compatible
+cloud gateway owned by the service operator. The gateway authenticates the
+desktop token, maps stable public model IDs to Yunwu upstream IDs, and forwards
+chat completions, SSE streams, and model discovery to `https://yunwu.ai/v1`.
+Yunwu credentials remain server-side. A server-level `HTTPS_PROXY` is an
+optional infrastructure fallback and is never a user-facing proxy-node
+requirement.
+
+For deployment details, including the Nginx SSE settings and environment
+variables, see `docs/operations/cloud-gateway-yunwu.md`.
+
+The local desktop sidecar is explicitly bound to IPv4 loopback
+(`bind=custom`, `customBindHost=127.0.0.1`) so the Controller's existing
+`ws://127.0.0.1:<port>` endpoint remains valid on Windows cold starts. The
+Controller also persists the xAI plugin's disabled `webSearch` default to
+prevent OpenClaw's first-load normalization from initiating a restart while a
+chat request is being admitted.
+
+=== 4. Solution strategy
+
+Desktop startup may resolve a system/PAC proxy for the Cloud gateway, but proxy
+resolution is not a readiness prerequisite for model access. The default model
+path is the service-operated Cloud gateway, which reaches Yunwu from the
+server. If a desktop deployment still needs an enterprise egress proxy for the
+Cloud gateway, it is injected before either orchestrator children or launchd
+plists are started; launchd snapshots its plist environment during bootstrap.
+
+The OpenClaw launcher is a readiness prerequisite after sidecar extraction.
+The desktop process checks the exact launcher path before starting Controller or
+launchd services. Missing development artifacts report the sidecar preparation
+command; missing packaged artifacts fail as a damaged installation instead of
+producing an apparently live local port with endless WebSocket retries.
+
+Local ports remain loopback-only. They provide the Web surface, Controller, and
+OpenClaw Gateway control plane. Model requests target the service-operated
+Cloud gateway. That gateway reaches `https://yunwu.ai/v1` directly from the
+server, with a server-managed proxy only when infrastructure requires one.
+
+=== 6. Runtime flow
+
+. Packaged startup extracts or verifies the OpenClaw sidecar.
+. The desktop process validates `bin/openclaw.cmd` on Windows or
+  `bin/openclaw` on macOS/Linux.
+. Optional system/PAC proxy settings for the Cloud gateway are resolved.
+. When present, the proxy environment is injected before either orchestrator
+  children or launchd plists are started.
+. Controller and OpenClaw bind to IPv4 loopback; model traffic uses the Cloud
+  gateway HTTPS origin.
+
+=== 7. Deployment and packaging
+
+Formal installers must include the OpenClaw launcher, the OpenClaw module entry
+point, and `resources/build-config.json`. The unpacked package is rejected if
+the launcher is absent or if endpoint validation fails. The server-side Yunwu
+service should bind to loopback/private networking and be exposed publicly
+through HTTPS reverse proxying with streaming buffering disabled.
+
+=== 9. Architecture decisions
+
+==== ADR-021: Validate the launcher before bootstrap
+
+*Status:* accepted
+
+An absent launcher is a packaging/readiness failure, not a network failure.
+Failing before process spawn makes the diagnosis actionable and prevents
+misleading local-port and WebSocket symptoms.
+
+==== ADR-022: Keep loopback runtime ports separate from Yunwu upstream
+
+*Status:* accepted
+
+The desktop's local ports are control-plane addresses and must never replace
+the remote model origin. The Cloud gateway is the desktop's stable HTTPS
+OpenAI-compatible origin; it forwards `/v1/*` to the private Yunwu upstream.
+
+=== 10. Quality requirements
+
+Cold start must fail with a concrete launcher path when the sidecar artifact is
+missing. A missing desktop system proxy must not prevent Cloud gateway model
+access. Streaming model requests must preserve SSE, disable proxy buffering,
+and allow a 300-second read timeout at the Cloud gateway.
+
+=== 11. Technical risks
+
+The current Cloud seed is still `http://47.108.215.151:9080`, which does not
+provide transport confidentiality for account credentials. Yunwu model traffic
+must use its verified HTTPS origin. Migrating the Cloud service to HTTPS
+requires an atomic update of the build endpoint constant, release workflow
+inputs, endpoint tests, DNS, certificate, and reverse-proxy configuration.
+
 == Cloud endpoint ownership and release guard addendum (2026-08-04)
 
 === 4. Solution strategy
@@ -1058,11 +1156,17 @@ would remove that residual ambiguity.
 
 === 4. Solution strategy
 
-Controller treats HTTP 401 from every activation-JWT-backed cloud request as
-an authoritative local session-expiry signal. It clears the local activation
-state and returns a stable `Not authenticated` error. Other HTTP failures and
-transport failures remain recoverable request errors and do not log the user
-out.
+Controller classifies activation-JWT-backed HTTP 401 responses. Explicit
+session revocation, device kick, or token/session expiry ends the local
+activation. An unclassified HTTP 401 remains a recoverable request error and
+does not destroy a locally valid session. Other HTTP failures and transport
+failures likewise do not log the user out.
+
+Credential login is single-flight inside Controller. A stable random desktop
+device ID is persisted independently of the JWT and is included in credential
+login and registration requests using the compatibility fields `device_id`
+and `deviceId`. The Cloud account service remains authoritative for enforcing
+one active device and must bind replacement sessions to that device identity.
 
 An API key rejected by authenticated model discovery is quarantined only in
 memory for the lifetime of the current Controller process. The persisted cloud
@@ -1071,15 +1175,20 @@ the desktop therefore permits the same key to be imported and validated again.
 
 === 5. Building blocks and ownership
 
-`DesktopLocalService` owns the shared HTTP 401 handling for activation-JWT
-cloud calls. `NexuConfigStore` owns process-local API key quarantine.
+`DesktopLocalService` owns credential-login serialization and classified HTTP
+401 handling for activation-JWT cloud calls. `NexuConfigStore` owns the stable
+activation device ID and process-local API key quarantine.
 `DesktopActivationGuard` polls local activation status and returns an expired
 desktop session to the activation screen.
 
 === 6. Runtime flow
 
+. Controller reuses the persisted device ID for a credential login and
+  coalesces concurrent submissions into one Cloud request.
 . A JWT-backed cloud call returns HTTP 401.
-. Controller clears local activation and returns `Not authenticated`.
+. Controller parses the response code/message. Explicit expiry or revocation
+  clears local activation and returns `Not authenticated`; an unclassified
+  401 remains visible as a request failure without changing activation state.
 . The desktop workspace observes `activated=false` within the polling window.
 . The web client removes `nexu_setup_complete` and redirects to `/`.
 . Controller or local API unavailability does not independently trigger logout.
@@ -1091,15 +1200,16 @@ activation explicitly clears any matching in-memory quarantine entry.
 
 === 9. Architecture decisions
 
-==== ADR-022: Activation JWT 401 ends the local desktop session
+==== ADR-022: Only authoritative activation failures end the local desktop session
 
 *Status:* accepted
 
-Continuing to render the workspace after the cloud has rejected the activation
-JWT creates a dead state in which chat and balance requests cannot recover.
-Controller therefore centralizes HTTP 401 handling, while the desktop web
-client observes local activation state and exits the workspace. HTTP 5xx and
-network failures are not authentication decisions.
+Explicit expiry, revocation, and `SESSION_KICKED` responses are authoritative
+and end the local session. A bare or upstream-generated HTTP 401 is not enough
+evidence to erase persistent credentials because transient gateway failures
+would otherwise force repeated login. Controller centralizes this
+classification, while the desktop web client observes local activation state
+and exits the workspace only after an authoritative failure.
 
 ==== ADR-023: API key rejection is process-local quarantine
 
@@ -1111,14 +1221,26 @@ fingerprints are retained only in memory to stop an immediate stale bootstrap
 loop. Legacy persisted fingerprints are ignored and cleared on the next
 successful import.
 
+==== ADR-025: Credential login is device-stable and single-flight
+
+*Status:* accepted
+
+The desktop persists a random device ID across login, logout, and token
+replacement. Concurrent credential submissions share one request so response
+reordering cannot persist a token that the server has already superseded. The
+Cloud account service must use the supplied device identity when applying its
+single-device policy; older servers may ignore the compatibility fields.
+
 === 10. Quality requirements
 
 JWT expiry must leave the workspace within one five-second activation polling
-window. Non-401 upstream failures must preserve activation. API key quarantine
-must prevent repeated import in one Controller process but must not survive a
-restart. Tests cover balance and transaction JWT expiry, non-401 behavior,
-same-process API key suppression, restart recovery, and legacy fingerprint
-migration.
+window. Unclassified 401 and non-401 upstream failures must preserve
+activation. API key quarantine must prevent repeated import in one Controller
+process but must not survive a restart. Tests cover concurrent credential
+submissions, stable device identity, balance and transaction JWT expiry,
+generic 401 preservation, explicit session revocation, billing fallback,
+visible usage-log failures, same-process API key suppression, restart
+recovery, and legacy fingerprint migration.
 
 === 11. Technical risks
 
@@ -1126,7 +1248,11 @@ The workspace guard is polling-based, so logout is not instantaneous. A future
 Controller-to-web event could remove the five-second delay. Process-local API
 key quarantine intentionally permits a retry after every restart; repeated
 rejection then depends on normal activation and model-refresh error handling
-rather than durable client-side denial.
+rather than durable client-side denial. The desktop cannot prove that a remote
+`SESSION_KICKED` response was issued for a genuinely different device.
+Incorrect Cloud-side device binding can still force one re-login after an
+upgrade; server deployment must honor the stable device ID contract for
+persistence to be complete.
 
 == Gateway draining recovery hotfix addendum (2026-08-07)
 
@@ -1188,3 +1314,159 @@ message. If a future OpenClaw version can emit that message after accepting a
 task, the exception must be removed or replaced by an authoritative run-status
 query. Health success also assumes the probed runtime is the same instance
 serving the reconnected WebSocket.
+
+== Assisted password recovery addendum (2026-08-07)
+
+=== 4. Solution strategy
+
+Until the Cloud account service provides a self-service reset flow, the desktop
+sign-in screen exposes an assisted-recovery contact action. It creates an email
+to the support address with the entered account email and explicit guidance
+not to disclose any password.
+
+The desktop does not attempt to update credentials. Password hashing, account
+ownership checks, session revocation, and audit logging remain Cloud account
+service responsibilities.
+
+=== 5. Building blocks and ownership
+
+`WelcomePage` owns the user-visible recovery action.
+`buildPasswordRecoveryMailto` owns the localized, password-free support request.
+The support operator and Cloud account service own identity verification and
+the actual credential reset. The temporary operational procedure is documented
+in `docs/operations/assisted-password-recovery.md`.
+
+=== 6. Runtime flow
+
+. The user enters the registered email and selects the recovery action.
+. The desktop opens the local mail client with the support address, registered
+  email, and account-ownership guidance prefilled.
+. Support verifies that the request originates from the registered email and
+  checks an additional server-side account record.
+. The Cloud operator uses the account service's native password-hashing path,
+  revokes existing sessions, and sends a unique generated password only to the
+  verified registered email.
+. The user signs in through the unchanged `/api/auth/login` flow.
+
+=== 9. Architecture decisions
+
+==== ADR-024: Temporary password recovery is assisted and Cloud-owned
+
+*Status:* accepted
+
+The desktop repository contains no Cloud user store or password verification
+implementation. A local reset endpoint would therefore create a misleading or
+insecure credential path. The temporary solution is an explicit support
+handoff; a future permanent solution must use short-lived, single-use email
+tokens in the Cloud account service and revoke existing sessions after reset.
+
+=== 10. Quality requirements
+
+The recovery request must never include a password, activation secret, API key,
+or JWT. The sign-in screen must expose the action in both supported languages.
+Automated tests cover email trimming, localized content, and the empty-email
+fallback. Documentation must describe the assisted flow rather than claim that
+an automated reset email is already available.
+
+=== 11. Technical risks
+
+Manual recovery has operator latency and social-engineering risk. Requiring the
+registered sender address plus a second server-side record reduces, but does not
+eliminate, that risk. The Cloud service currently uses a plain HTTP production
+seed for credential login, so HTTPS migration remains a prerequisite for a
+complete self-service recovery design.
+
+== Desktop runtime reuse and startup progress addendum (2026-08-07)
+
+=== 6. Runtime flow
+
+When a packaged desktop build starts, the main process exposes real startup
+stages to the renderer: runtime preparation, OpenClaw extraction, verification,
+local service startup, ready, or failure. The renderer shows this state only
+when the packaged sidecar needs extraction. It never presents synthetic
+percentages or delays readiness for a decorative animation.
+
+=== 7. Deployment and packaging
+
+The archived OpenClaw sidecar stamp is derived from the inputs that determine
+the final runtime artifact: runtime package metadata, install and prune rules,
+runtime patches, platform, architecture, and an explicit runtime revision.
+Changes to desktop packaging orchestration alone do not invalidate an already
+extracted sidecar. A runtime artifact change still deliberately causes a fresh,
+atomic extraction.
+
+=== 9. Architecture decisions
+
+The Controller records the successful plugin configuration signature for its
+current process. Repeated synchronization with the same configured channel set
+does not copy plugins again; a changed channel set still performs a full sync
+so stale bundled plugins can be removed.
+
+=== 10. Quality requirements
+
+Ordinary desktop OTA updates must reuse the extracted OpenClaw runtime whenever
+the runtime fingerprint is unchanged. First launch and required runtime
+migrations remain transparent about their actual stage, and service readiness
+is never held behind a fixed-duration animation.
+
+=== 11. Technical risks
+
+The process-local plugin signature intentionally does not survive a Controller
+restart. This keeps startup optimization conservative and ensures every new
+process revalidates the on-disk extensions. Future code that changes the
+generated Sidecar artifact without changing a listed input must increment the
+runtime revision.
+
+== Gateway config compatibility and liveness addendum (2026-08-10)
+
+=== 6. Runtime flow
+
+Before launching OpenClaw, Controller writes a configuration normalized for the
+bundled runtime schema. The xAI built-in plugin remains explicitly enabled, but
+the legacy `plugins.entries.xai.config.webSearch.enabled` field is removed
+because OpenClaw 2026.4 rejects it as an additional property.
+
+Controller probes `http://127.0.0.1:{gatewayPort}/healthz`. An unreachable
+Gateway remains `starting` while the managed OpenClaw process is alive; health
+recovery must not restart a live process merely because plugin and state
+initialization takes several minutes. Once `/healthz` succeeds, Controller
+nudges the Gateway WebSocket client to reconnect immediately.
+
+=== 10. Quality requirements
+
+Packaged and development manifests must enable the Gateway liveness probe.
+Probe-disabled mode must not be used to report a synthetic healthy result in
+normal desktop operation. Tests cover the `/healthz` endpoint, unreachable and
+HTTP-error responses, packaged manifest parity, and migration of the rejected
+xAI legacy field while preserving valid xAI credentials.
+
+The August 10 Windows development validation observed OpenClaw listening after
+approximately 219 seconds with an existing populated state directory, followed
+by `openclaw_ws_connected` approximately two seconds later. Startup supervision
+must tolerate this interval while the process remains alive.
+
+The isolated Windows portable validation observed first-run sidecar extraction
+complete after approximately 133 seconds. The packaged OpenClaw process then
+needed approximately 212 seconds to expose `/healthz`; Gateway WebSocket
+connection completed about four seconds before the health probe succeeded.
+Total application launch to healthy Gateway was approximately 355 seconds.
+
+=== 11. Technical risks
+
+OpenClaw sidecar and Controller config-schema drift can make a syntactically
+valid generated file fatal to the bundled Gateway. Release validation must run
+the bundled `openclaw config validate` against Controller output and launch the
+packaged sidecar from an isolated user-data directory.
+
+Large existing state, extension loading, or first-run dependency work can delay
+the listening socket for several minutes. The current liveness loop distinguishes
+a live-but-starting process from a dead process, but prolonged startup still
+degrades user experience and can exceed higher-level readiness deadlines.
+
+The Windows release sidecar currently contains about 53,000 files before
+archiving. LZMA2 level-7 archive creation exceeded 20 minutes in the August 10
+validation. An interrupted release command can therefore leave a populated but
+incomplete `.dist-runtime` tree; invoking electron-builder directly against that
+tree can produce a partial package. Release automation must treat sidecar
+preparation and package verification as one atomic pipeline and must verify that
+the controller, OpenClaw, and Web sidecars are all present before publishing.

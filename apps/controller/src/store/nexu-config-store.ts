@@ -91,6 +91,7 @@ type ActivationState = {
   apiKey: string | null;
   activatedAt: string | null;
   codePrefix: string | null;
+  deviceId: string | null;
 };
 
 const DEFAULT_MANAGED_CHANNEL_ACCOUNT_ID = "default";
@@ -302,6 +303,8 @@ function readDesktopActivation(config: NexuConfig): ActivationState {
         : null,
     codePrefix:
       typeof activation?.codePrefix === "string" ? activation.codePrefix : null,
+    deviceId:
+      typeof activation?.deviceId === "string" ? activation.deviceId : null,
   };
 }
 
@@ -2614,6 +2617,32 @@ export class NexuConfigStore {
     return activation.apiKey;
   }
 
+  async getOrCreateActivationDeviceId(): Promise<string> {
+    let deviceId = "";
+    await this.store.update((config) => {
+      const activation = readDesktopActivation(config);
+      deviceId = activation.deviceId ?? crypto.randomUUID();
+      const desktop = config.desktop as Record<string, unknown>;
+      const currentActivation =
+        typeof desktop.activation === "object" &&
+        desktop.activation !== null
+          ? (desktop.activation as Record<string, unknown>)
+          : {};
+
+      return {
+        ...config,
+        desktop: {
+          ...config.desktop,
+          activation: {
+            ...currentActivation,
+            deviceId,
+          },
+        },
+      };
+    });
+    return deviceId;
+  }
+
   async setActivationState(input: {
     activated: boolean;
     email: string | null;
@@ -2621,8 +2650,10 @@ export class NexuConfigStore {
     apiKey: string | null;
     activatedAt: string | null;
     codePrefix: string | null;
+    deviceId?: string | null;
   }): Promise<void> {
     await this.store.update((config) => {
+      const currentActivation = readDesktopActivation(config);
       return {
         ...config,
         desktop: {
@@ -2634,6 +2665,7 @@ export class NexuConfigStore {
             apiKey: input.apiKey,
             activatedAt: input.activatedAt,
             codePrefix: input.codePrefix,
+            deviceId: input.deviceId ?? currentActivation.deviceId,
           },
         },
       };
@@ -2642,6 +2674,7 @@ export class NexuConfigStore {
 
   async clearActivation(): Promise<void> {
     await this.store.update((config) => {
+      const currentActivation = readDesktopActivation(config);
       return {
         ...config,
         desktop: {
@@ -2653,6 +2686,7 @@ export class NexuConfigStore {
             apiKey: null,
             activatedAt: null,
             codePrefix: null,
+            deviceId: currentActivation.deviceId,
           },
         },
       };

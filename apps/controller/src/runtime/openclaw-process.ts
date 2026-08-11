@@ -1,4 +1,9 @@
-import { type ChildProcess, execSync, spawn } from "node:child_process";
+import {
+  type ChildProcess,
+  execFileSync,
+  execSync,
+  spawn,
+} from "node:child_process";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { readdir, rm } from "node:fs/promises";
 import net from "node:net";
@@ -650,6 +655,44 @@ export class OpenClawProcessManager {
 
   private killOrphanedOpenClawProcesses(): void {
     if (process.platform === "win32") {
+      const entryPath = resolveOpenClawEntryFromBin(this.env.openclawBin)
+        .replace(/\//g, "\\")
+        .toLowerCase();
+      const currentPid = process.pid;
+      const script = `
+$entry = '${entryPath.replace(/'/g, "''")}';
+$currentPid = ${currentPid};
+Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" |
+  Where-Object {
+    $_.ProcessId -ne $currentPid -and
+    $_.CommandLine -and
+    $_.CommandLine.ToLower().Contains($entry) -and
+    $_.CommandLine.ToLower().Contains('gateway run')
+  } |
+  ForEach-Object {
+    Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+  }
+`;
+
+      try {
+        execFileSync(
+          "powershell.exe",
+          ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script],
+          { stdio: "ignore", windowsHide: true, timeout: 5000 },
+        );
+        logger.info(
+          { entryPath },
+          "openclaw_windows_orphan_scan_complete",
+        );
+      } catch (error) {
+        logger.warn(
+          {
+            entryPath,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "openclaw_windows_orphan_scan_failed",
+        );
+      }
       return;
     }
 

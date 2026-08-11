@@ -14,6 +14,30 @@ type ActivationServerResponse = {
   error?: string;
 };
 
+type CredentialLoginResult = {
+  ok: boolean;
+  error?: string;
+  email?: string;
+};
+
+type RechargeReconcileStatus = "matched" | "cloud_behind" | "cloud_ahead";
+
+type BalanceResult = {
+  ok: boolean;
+  error?: string;
+  balance_cents?: number;
+  total_recharged?: number;
+  upstream_total_cents?: number;
+  recharge_delta_cents?: number;
+  recharge_reconcile_status?: RechargeReconcileStatus;
+};
+
+type UserBillingSnapshot = {
+  ok: true;
+  balance_cents: number;
+  upstream_total_cents: number;
+};
+
 function maskActivationCode(code: string): string {
   if (code.length <= 8) return code;
   return `${code.slice(0, 4)}...${code.slice(-4)}`;
@@ -32,6 +56,101 @@ function parseRemoteError(text: string): string {
     // The upstream may return a plain-text error.
   }
   return text;
+}
+
+function parseRemoteErrorCode(text: string): string | null {
+  try {
+    const parsed = JSON.parse(text) as {
+      code?: unknown;
+      error?: unknown;
+      message?: unknown;
+    };
+    if (typeof parsed.code === "string") {
+      return parsed.code;
+    }
+    if (typeof parsed.error === "string") {
+      return parseRemoteErrorCode(parsed.error);
+    }
+    if (typeof parsed.message === "string") {
+      return parseRemoteErrorCode(parsed.message);
+    }
+  } catch {
+    // Plain-text failures have no structured code.
+  }
+  return null;
+}
+
+const TERMINAL_ACTIVATION_CODES = new Set([
+  "AUTH_EXPIRED",
+  "INVALID_SESSION",
+  "JWT_EXPIRED",
+  "SESSION_EXPIRED",
+  "SESSION_KICKED",
+  "SESSION_REVOKED",
+  "TOKEN_EXPIRED",
+]);
+
+function isTerminalActivationFailure(text: string): boolean {
+  const code = parseRemoteErrorCode(text)?.toUpperCase();
+  if (code && TERMINAL_ACTIVATION_CODES.has(code)) {
+    return true;
+  }
+
+  const message = parseRemoteError(text).toLowerCase();
+  return (
+    /\b(?:jwt|token|session)\b.{0,24}\b(?:expired|revoked|kicked)\b/u.test(
+      message,
+    ) ||
+    message.includes("账号已在其它设备登录") ||
+    message.includes("会话已失效")
+  );
+}
+
+function formatBillingDate(date: Date): string {
+  return date.toISOString().slice(0, 10);
+}
+
+function readNonNegativeFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+function buildRechargeReconciliation(
+  totalRecharged: number | undefined,
+  billing: UserBillingSnapshot | null,
+): Pick<
+  BalanceResult,
+  | "upstream_total_cents"
+  | "recharge_delta_cents"
+  | "recharge_reconcile_status"
+> {
+  if (!billing) {
+    return {};
+  }
+
+  if (totalRecharged === undefined) {
+    return { upstream_total_cents: billing.upstream_total_cents };
+  }
+
+  const rechargeDeltaCents = billing.upstream_total_cents - totalRecharged;
+  return {
+    upstream_total_cents: billing.upstream_total_cents,
+    recharge_delta_cents: rechargeDeltaCents,
+    recharge_reconcile_status:
+      rechargeDeltaCents === 0
+        ? "matched"
+        : rechargeDeltaCents > 0
+          ? "cloud_behind"
+          : "cloud_ahead",
+  };
 }
 
 const DNS_ERROR_CODES = new Set([
@@ -54,6 +173,8 @@ const TIMEOUT_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
 ]);
+const BILLING_FETCH_ATTEMPTS = 3;
+const BILLING_FETCH_RETRY_DELAY_MS = 300;
 
 function readNetworkErrorCode(error: unknown): string {
   if (!error || typeof error !== "object") return "";
@@ -93,6 +214,8 @@ function isCredentialRejection(status: number): boolean {
 }
 
 export class DesktopLocalService {
+  private credentialLoginInFlight: Promise<CredentialLoginResult> | null = null;
+
   constructor(
     private readonly configStore: NexuConfigStore,
     private readonly modelProviderService: ModelProviderService,
@@ -239,6 +362,14 @@ export class DesktopLocalService {
       return false;
     }
 
+    const text = await response
+      .clone()
+      .text()
+      .catch(() => "");
+    if (!isTerminalActivationFailure(text)) {
+      return false;
+    }
+
     await this.configStore.clearActivation();
     return true;
   }
@@ -255,6 +386,7 @@ export class DesktopLocalService {
   }> {
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
     const cloudUrl = cloudStatus.cloudUrl;
+    const deviceId = await this.configStore.getOrCreateActivationDeviceId();
 
     let res: Response;
     try {
@@ -265,6 +397,8 @@ export class DesktopLocalService {
           code: input.code,
           email: input.email,
           password: input.password,
+          device_id: deviceId,
+          deviceId,
         }),
         timeoutMs: 15_000,
       });
@@ -291,6 +425,7 @@ export class DesktopLocalService {
       apiKey: data.api_key ?? null,
       activatedAt: now,
       codePrefix: maskActivationCode(input.code),
+      deviceId,
     });
 
     if (data.api_key) {
@@ -368,12 +503,7 @@ export class DesktopLocalService {
     };
   }
 
-  async getBalance(): Promise<{
-    ok: boolean;
-    error?: string;
-    balance_cents?: number;
-    total_recharged?: number;
-  }> {
+  async getBalance(): Promise<BalanceResult> {
     const jwt = await this.configStore.getActivationJwt();
     if (!jwt) {
       return { ok: false, error: "Not authenticated" };
@@ -392,49 +522,200 @@ export class DesktopLocalService {
         timeoutMs: 10_000,
       });
     } catch {
-      return {
-        ok: false,
-        error: "Server unreachable",
-      };
+      return (
+        (await this.getBalanceFromUserBilling()) ?? {
+          ok: false,
+          error: "Server unreachable",
+        }
+      );
     }
 
     if (!res.ok) {
+      const fallback = await this.getBalanceFromUserBilling();
       if (await this.clearActivationIfUnauthorized(res)) {
         return { ok: false, error: "Not authenticated" };
       }
       const text = await res.text().catch(() => "Unknown error");
-      return {
-        ok: false,
-        error: parseRemoteError(text),
-      };
+      return (
+        fallback ?? {
+          ok: false,
+          error: parseRemoteError(text),
+        }
+      );
     }
 
-    const data = (await res.json()) as {
+    let data: {
       success?: boolean;
       balance_cents?: number;
       total_recharged?: number;
       error?: string;
     };
-    if (data.error) {
-      return {
-        ok: false,
-        error: parseRemoteError(data.error),
-      };
+    try {
+      data = (await res.json()) as typeof data;
+    } catch {
+      return (
+        (await this.getBalanceFromUserBilling()) ?? {
+          ok: false,
+          error: "Balance unavailable",
+        }
+      );
     }
+    if (data.error) {
+      return (
+        (await this.getBalanceFromUserBilling()) ?? {
+          ok: false,
+          error: parseRemoteError(data.error),
+        }
+      );
+    }
+    if (data.success === false) {
+      return (
+        (await this.getBalanceFromUserBilling()) ?? {
+          ok: false,
+          error: "Balance unavailable",
+        }
+      );
+    }
+    const balanceCents = readNonNegativeFiniteNumber(data.balance_cents);
+    const totalRecharged = readNonNegativeFiniteNumber(data.total_recharged);
+
+    if (balanceCents === undefined) {
+      return (
+        (await this.getBalanceFromUserBilling()) ?? {
+          ok: false,
+          error: "Balance unavailable",
+        }
+      );
+    }
+
+    const billing = await this.getBalanceFromUserBilling();
 
     return {
       ok: true,
-      balance_cents: data.balance_cents,
-      total_recharged: data.total_recharged,
+      balance_cents: balanceCents,
+      ...(totalRecharged === undefined
+        ? {}
+        : { total_recharged: totalRecharged }),
+      ...buildRechargeReconciliation(totalRecharged, billing),
     };
+  }
+
+  private async fetchUserBillingResponse(
+    url: string,
+    headers: Record<string, string>,
+  ): Promise<Response> {
+    let lastError: unknown;
+    let lastResponse: Response | null = null;
+
+    for (let attempt = 0; attempt < BILLING_FETCH_ATTEMPTS; attempt++) {
+      try {
+        const response = await proxyFetch(url, {
+          method: "GET",
+          headers,
+          timeoutMs: 10_000,
+        });
+        if (response.ok || response.status < 500) {
+          return response;
+        }
+        lastResponse = response;
+      } catch (error) {
+        lastError = error;
+      }
+
+      if (attempt < BILLING_FETCH_ATTEMPTS - 1) {
+        await sleep(BILLING_FETCH_RETRY_DELAY_MS);
+      }
+    }
+
+    if (lastResponse) {
+      return lastResponse;
+    }
+    throw lastError instanceof Error ? lastError : new Error("Billing failed");
+  }
+
+  private async getBalanceFromUserBilling(): Promise<UserBillingSnapshot | null> {
+    const apiKey = await this.configStore.getActivationApiKey();
+    if (!apiKey) {
+      return null;
+    }
+
+    const cloudStatus = await this.configStore.getDesktopCloudStatus();
+    const billingBaseUrl = cloudStatus.linkUrl ?? "https://yunwu.ai";
+    const usageEndDate = new Date();
+    usageEndDate.setUTCDate(usageEndDate.getUTCDate() + 1);
+    const headers = { Authorization: `Bearer ${apiKey}` };
+
+    try {
+      const [subscriptionResponse, usageResponse] = await Promise.all([
+        this.fetchUserBillingResponse(
+          `${billingBaseUrl}/v1/dashboard/billing/subscription`,
+          headers,
+        ),
+        this.fetchUserBillingResponse(
+          `${billingBaseUrl}/v1/dashboard/billing/usage?start_date=1970-01-01&end_date=${formatBillingDate(usageEndDate)}`,
+          headers,
+        ),
+      ]);
+
+      if (!subscriptionResponse.ok || !usageResponse.ok) {
+        return null;
+      }
+
+      const subscription = (await subscriptionResponse.json()) as {
+        hard_limit_usd?: unknown;
+      };
+      const usage = (await usageResponse.json()) as {
+        total_usage?: unknown;
+      };
+      const hardLimitUsd = readNonNegativeFiniteNumber(
+        subscription.hard_limit_usd,
+      );
+      const totalUsageCents = readNonNegativeFiniteNumber(usage.total_usage);
+
+      if (hardLimitUsd === undefined || totalUsageCents === undefined) {
+        return null;
+      }
+
+      const upstreamTotalCents = Math.round(hardLimitUsd * 100);
+      return {
+        ok: true,
+        balance_cents: Math.max(
+          0,
+          Math.round(upstreamTotalCents - totalUsageCents),
+        ),
+        upstream_total_cents: upstreamTotalCents,
+      };
+    } catch {
+      return null;
+    }
   }
 
   async loginWithCredentials(input: {
     email: string;
     password: string;
-  }): Promise<{ ok: boolean; error?: string; email?: string }> {
+  }): Promise<CredentialLoginResult> {
+    if (this.credentialLoginInFlight) {
+      return this.credentialLoginInFlight;
+    }
+
+    const request = this.performCredentialLogin(input);
+    this.credentialLoginInFlight = request;
+    try {
+      return await request;
+    } finally {
+      if (this.credentialLoginInFlight === request) {
+        this.credentialLoginInFlight = null;
+      }
+    }
+  }
+
+  private async performCredentialLogin(input: {
+    email: string;
+    password: string;
+  }): Promise<CredentialLoginResult> {
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
     const cloudUrl = cloudStatus.cloudUrl;
+    const deviceId = await this.configStore.getOrCreateActivationDeviceId();
 
     let res: Response;
     try {
@@ -444,6 +725,8 @@ export class DesktopLocalService {
         body: JSON.stringify({
           email: input.email,
           password: input.password,
+          device_id: deviceId,
+          deviceId,
         }),
         timeoutMs: 15_000,
       });
@@ -476,6 +759,7 @@ export class DesktopLocalService {
       apiKey: data.api_key ?? null,
       activatedAt: existingStatus.activatedAt ?? now,
       codePrefix: existingStatus.codePrefix ?? null,
+      deviceId,
     });
 
     if (data.api_key) {
@@ -547,7 +831,7 @@ export class DesktopLocalService {
         total: 0,
         page,
         page_size: pageSize,
-        error: text,
+        error: parseRemoteError(text),
       };
     }
 
@@ -851,7 +1135,7 @@ export class DesktopLocalService {
         total: 0,
         page,
         page_size: pageSize,
-        error: text,
+        error: parseRemoteError(text),
       };
     }
 

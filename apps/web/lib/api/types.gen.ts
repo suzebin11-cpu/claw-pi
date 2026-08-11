@@ -126,6 +126,9 @@ export type GetApiInternalActivationBalanceResponses = {
         error?: string;
         balance_cents?: number;
         total_recharged?: number;
+        upstream_total_cents?: number;
+        recharge_delta_cents?: number;
+        recharge_reconcile_status?: 'matched' | 'cloud_behind' | 'cloud_ahead';
     };
 };
 

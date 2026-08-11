@@ -126,6 +126,36 @@ describe("Launch path safety", () => {
   });
 });
 
+describe("Desktop bootstrap ordering", () => {
+  const indexTs = readFile("apps/desktop/main/index.ts");
+
+  it("resolves the system proxy before selecting launchd or orchestrator", () => {
+    const bootstrapBranch = indexTs.indexOf("if (useLaunchdMode)");
+    const proxyResolution = indexTs.lastIndexOf(
+      "await applyResolvedSystemProxyToRuntimeUnits();",
+      bootstrapBranch,
+    );
+
+    expect(bootstrapBranch).toBeGreaterThan(-1);
+    expect(proxyResolution).toBeGreaterThan(-1);
+    expect(proxyResolution).toBeLessThan(bootstrapBranch);
+  });
+
+  it("does not limit system proxy resolution to runDesktopColdStart", () => {
+    const desktopStart = indexTs.indexOf(
+      "async function runDesktopColdStart()",
+    );
+    const launchdStart = indexTs.indexOf(
+      "async function runLaunchdColdStart()",
+    );
+    const desktopColdStart = indexTs.slice(desktopStart, launchdStart);
+
+    expect(desktopColdStart).not.toContain(
+      "applyResolvedSystemProxyToRuntimeUnits",
+    );
+  });
+});
+
 // =========================================================================
 // ELECTRON_RUN_AS_NODE coverage
 // =========================================================================

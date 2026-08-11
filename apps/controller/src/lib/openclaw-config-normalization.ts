@@ -16,7 +16,25 @@ function normalizeBuiltInPluginDefaults(config: JsonObject): void {
   const plugins = isRecord(config.plugins) ? config.plugins : {};
   const entries = isRecord(plugins.entries) ? plugins.entries : {};
   const xai = isRecord(entries.xai) ? entries.xai : {};
-  entries.xai = { ...xai, enabled: xai.enabled !== false };
+  const xaiConfig = isRecord(xai.config) ? { ...xai.config } : null;
+
+  if (xaiConfig && isRecord(xaiConfig.webSearch)) {
+    const webSearch = { ...xaiConfig.webSearch };
+    delete webSearch.enabled;
+    if (Object.keys(webSearch).length > 0) {
+      xaiConfig.webSearch = webSearch;
+    } else {
+      delete xaiConfig.webSearch;
+    }
+  }
+
+  entries.xai = {
+    ...xai,
+    ...(xaiConfig && Object.keys(xaiConfig).length > 0
+      ? { config: xaiConfig }
+      : { config: undefined }),
+    enabled: xai.enabled !== false,
+  };
   plugins.entries = entries;
 
   if (Array.isArray(plugins.allow) && !plugins.allow.includes("xai")) {

@@ -11,6 +11,7 @@ import { BrandRail } from "../components/brand-rail";
 import { LanguageSwitcher } from "../components/language-switcher";
 import { useLocale } from "../hooks/use-locale";
 import { usePageTitle } from "../hooks/use-page-title";
+import { buildPasswordRecoveryMailto } from "../lib/password-recovery";
 import { track } from "../lib/tracking";
 
 const SETUP_COMPLETE_KEY = "nexu_setup_complete";
@@ -55,7 +56,7 @@ function FadeIn({
 type Tab = "register" | "login";
 
 export function WelcomePage() {
-  const { t } = useLocale();
+  const { locale, t } = useLocale();
   usePageTitle(t("welcome.pageTitle"));
   const navigate = useNavigate();
   const authPreviewMode = isAuthPreviewMode();
@@ -349,9 +350,20 @@ export function WelcomePage() {
                           </button>
                         </div>
 
-                        <p className="px-1 text-[11px] text-black/40">
-                          {t("welcome.activation.hasAccountHint")}
-                        </p>
+                        <div className="flex items-center justify-between gap-3 px-1 text-[11px]">
+                          <p className="text-black/40">
+                            {t("welcome.activation.hasAccountHint")}
+                          </p>
+                          <a
+                            href={buildPasswordRecoveryMailto(email, locale)}
+                            onClick={() =>
+                              track("welcome_activation_password_recovery")
+                            }
+                            className="shrink-0 font-medium text-[#B94F1D] transition-colors hover:text-[#8F3915]"
+                          >
+                            {t("welcome.activation.forgotPassword")}
+                          </a>
+                        </div>
                       </div>
                     </FadeIn>
                   )}

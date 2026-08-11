@@ -18,6 +18,7 @@ import type {
   RuntimeUnitPhase,
   RuntimeUnitSnapshot,
   RuntimeUnitState,
+  StartupProgress,
 } from "../shared/host";
 import { getDesktopSentryBuildMetadata } from "../shared/sentry-build-metadata";
 import { SurfaceFrame } from "./components/surface-frame";
@@ -29,10 +30,11 @@ import {
   getDiagnosticsInfo,
   getRuntimeConfig,
   getRuntimeState,
+  getStartupProgress,
   installComponent,
-  notifySetupAnimationComplete,
   onDesktopCommand,
   onRuntimeEvent,
+  onStartupProgress,
   reportStartupProbe,
   showRuntimeLogFile,
   startUnit,
@@ -50,8 +52,6 @@ const rendererSentryDsn =
 let rendererSentryInitialized = false;
 let amplitudeTelemetryInitialized = false;
 let rendererCommitReported = false;
-const setupVideoUrl = "data:,";
-const setupLoopVideoUrl = "data:,";
 
 function sendRendererStartupProbe(
   stage: string,
@@ -995,8 +995,49 @@ function isDesktopApiReady(payload: DesktopReadyPayload): boolean {
   return Boolean(payload.ready);
 }
 
+function getStartupProgressCopy(progress: StartupProgress): {
+  title: string;
+  detail: string;
+} {
+  switch (progress.stage) {
+    case "extracting-openclaw":
+      return {
+        title: "Preparing OpenClaw",
+        detail: "Unpacking the local runtime",
+      };
+    case "verifying-openclaw":
+      return {
+        title: "Verifying OpenClaw",
+        detail: "Checking the local runtime",
+      };
+    case "starting-services":
+      return {
+        title: "Starting local services",
+        detail: "Synchronizing plugins and preparing the workspace",
+      };
+    case "failed":
+      return {
+        title: "Initialization failed",
+        detail: progress.error ?? "The local runtime could not start.",
+      };
+    case "ready":
+      return {
+        title: "Ready",
+        detail: "Opening the workspace",
+      };
+    case "preparing-runtime":
+    default:
+      return {
+        title: "Preparing runtime",
+        detail: "Checking the local environment",
+      };
+  }
+}
+
 function DesktopShell() {
   const isPackaged = window.clawpiHost.bootstrap.isPackaged;
+  const needsStartupProgress =
+    window.clawpiHost.bootstrap.needsSetupAnimation;
   const [activeSurface, setActiveSurface] = useState<DesktopSurface>("web");
   const [chromeMode, setChromeMode] = useState<DesktopChromeMode>(
     isPackaged ? "immersive" : "full",
@@ -1005,37 +1046,57 @@ function DesktopShell() {
   const [runtimeConfig, setRuntimeConfig] =
     useState<DesktopRuntimeConfig | null>(null);
   const update = useAutoUpdate();
-
-  // Setup animation phases:
-  // "playing" → main video (23s) plays once
-  // "looping" → short loop video repeats until cold-start is ready
-  // "fading" → overlay fades out (0.6s CSS transition)
-  // "done" → overlay removed from DOM
-  const [setupPhase, setSetupPhase] = useState<
-    "playing" | "looping" | "fading" | "done"
-  >("done");
-
-  // When animation finishes, notify main process to restore vibrancy
-  useEffect(() => {
-    if (
-      setupPhase === "done" &&
-      window.clawpiHost.bootstrap.needsSetupAnimation
-    ) {
-      void notifySetupAnimationComplete();
-    }
-  }, [setupPhase]);
+  const [startupProgress, setStartupProgress] = useState<StartupProgress>(
+    () =>
+      needsStartupProgress
+        ? { stage: "preparing-runtime" }
+        : { stage: "ready" },
+  );
+  const [startupOverlayDismissed, setStartupOverlayDismissed] =
+    useState(!needsStartupProgress);
 
   useEffect(() => {
     void getRuntimeConfig()
       .then((config) => {
         setRuntimeConfig(config);
-        // Cold-start is done — if we're still in the looping phase, fade out.
-        // If main video hasn't finished yet, it will transition to fade on its
-        // own via onEnded (the main video is the minimum guaranteed animation).
-        setSetupPhase((prev) => (prev === "looping" ? "fading" : prev));
       })
       .catch(() => null);
   }, []);
+
+  useEffect(() => {
+    if (!needsStartupProgress) {
+      return;
+    }
+
+    let cancelled = false;
+    const unsubscribe = onStartupProgress((progress) => {
+      if (!cancelled) {
+        setStartupProgress(progress);
+      }
+    });
+
+    void getStartupProgress().then((progress) => {
+      if (!cancelled) {
+        setStartupProgress(progress);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribe();
+    };
+  }, [needsStartupProgress]);
+
+  useEffect(() => {
+    if (!needsStartupProgress || startupProgress.stage !== "ready") {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setStartupOverlayDismissed(true);
+    }, 220);
+    return () => window.clearTimeout(timer);
+  }, [needsStartupProgress, startupProgress.stage]);
 
   useEffect(() => {
     return onDesktopCommand((command) => {
@@ -1301,30 +1362,21 @@ function DesktopShell() {
         phase={update.phase}
         version={update.version}
       />
-
-      {/* Setup animation overlay — shown during first install / post-update extraction.
-          Phase flow: "playing" (main 23s video) → "looping" (4s loop until ready)
-                      → "fading" (0.6s opacity transition) → "done" (removed from DOM).
-          If cold-start finishes during the main video, it skips straight to "fading"
-          when the main video ends (no loop needed). */}
-      {setupPhase !== "done" && (
+      {needsStartupProgress && !startupOverlayDismissed && (
         <div
           style={{
             position: "fixed",
             inset: 0,
             zIndex: 99999,
-            background: "#ffffff",
+            background: "#11161d",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            opacity: setupPhase === "fading" ? 0 : 1,
-            transition: "opacity 0.6s ease-out",
-          }}
-          onTransitionEnd={() => {
-            if (setupPhase === "fading") setSetupPhase("done");
+            color: "#f4f7fb",
+            opacity: startupProgress.stage === "ready" ? 0 : 1,
+            transition: "opacity 180ms ease-out",
           }}
         >
-          {/* Draggable title bar area so window remains movable during setup */}
           <div
             style={{
               position: "absolute",
@@ -1337,49 +1389,36 @@ function DesktopShell() {
               zIndex: 1,
             }}
           />
-
-          {/* Both videos are mounted simultaneously. The loop video preloads
-              in the background while the main video plays, so the transition
-              is instant — no blank gap waiting for the loop video to buffer.
-              Visibility is controlled via CSS (display none/block). */}
-          <video
-            autoPlay
-            muted
-            playsInline
-            src={setupVideoUrl}
-            onEnded={() => {
-              setSetupPhase((prev) =>
-                prev === "playing"
-                  ? runtimeConfig
-                    ? "fading"
-                    : "looping"
-                  : prev,
-              );
-            }}
-            onError={() => setSetupPhase("done")}
+          <div
             style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              display: setupPhase === "playing" ? "block" : "none",
+              display: "grid",
+              gap: 10,
+              justifyItems: "center",
+              maxWidth: 420,
+              padding: 24,
+              textAlign: "center",
             }}
-          />
-          <video
-            autoPlay
-            muted
-            playsInline
-            loop
-            src={setupLoopVideoUrl}
-            onError={() => setSetupPhase("fading")}
-            style={{
-              width: "100%",
-              height: "100%",
-              objectFit: "contain",
-              display: setupPhase === "looping" ? "block" : "none",
-            }}
-          />
+          >
+            <div
+              aria-hidden="true"
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: "50%",
+                background:
+                  startupProgress.stage === "failed" ? "#ef6b73" : "#5ec4a7",
+              }}
+            />
+            <strong style={{ fontSize: 18, fontWeight: 600 }}>
+              {getStartupProgressCopy(startupProgress).title}
+            </strong>
+            <span style={{ color: "#aeb8c5", fontSize: 14 }}>
+              {getStartupProgressCopy(startupProgress).detail}
+            </span>
+          </div>
         </div>
       )}
+
     </div>
   );
 }

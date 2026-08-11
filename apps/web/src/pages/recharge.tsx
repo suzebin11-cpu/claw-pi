@@ -511,11 +511,12 @@ function Pagination({
 function TransactionList() {
   const [page, setPage] = useState(1);
   const pageSize = 10;
+  const { t } = useTranslation();
 
   const { data, isLoading } = useQuery({
     queryKey: ["transactions", page, pageSize],
     queryFn: async () => {
-      const { data } = await getApiInternalActivationTransactions({
+      const { data, error } = await getApiInternalActivationTransactions({
         query: { page, page_size: pageSize },
       });
       return (
@@ -525,9 +526,11 @@ function TransactionList() {
           total: 0,
           page,
           page_size: pageSize,
+          error: error ? t("recharge.historyUnavailable") : undefined,
         }
       );
     },
+    refetchInterval: 15_000,
   });
 
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize));
@@ -536,6 +539,14 @@ function TransactionList() {
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 size={16} className="animate-spin text-text-muted" />
+      </div>
+    );
+  }
+
+  if (!data?.success) {
+    return (
+      <div className="text-center py-8 text-[12px] text-red-500">
+        {data?.error ?? t("recharge.historyUnavailable")}
       </div>
     );
   }
@@ -597,11 +608,12 @@ function TransactionList() {
 function UsageLogList() {
   const [page, setPage] = useState(1);
   const pageSize = 10;
+  const { t } = useTranslation();
 
   const { data, isLoading } = useQuery({
     queryKey: ["usage-logs", page, pageSize],
     queryFn: async () => {
-      const { data } = await getApiInternalActivationUsageLogs({
+      const { data, error } = await getApiInternalActivationUsageLogs({
         query: { page, page_size: pageSize },
       });
       return (
@@ -611,9 +623,11 @@ function UsageLogList() {
           total: 0,
           page,
           page_size: pageSize,
+          error: error ? t("recharge.historyUnavailable") : undefined,
         }
       );
     },
+    refetchInterval: 15_000,
   });
 
   const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / pageSize));
@@ -622,6 +636,14 @@ function UsageLogList() {
     return (
       <div className="flex items-center justify-center py-8">
         <Loader2 size={16} className="animate-spin text-text-muted" />
+      </div>
+    );
+  }
+
+  if (!data?.success) {
+    return (
+      <div className="text-center py-8 text-[12px] text-red-500">
+        {data?.error ?? t("recharge.historyUnavailable")}
       </div>
     );
   }
@@ -650,6 +672,9 @@ function UsageLogList() {
               className="flex items-center justify-between gap-3 px-3 py-3 border-b border-border-subtle last:border-b-0"
             >
               <div className="min-w-0 flex-1">
+                <div className="mb-0.5 truncate text-[12px] font-medium text-text-primary">
+                  {log.model_name}
+                </div>
                 <div className="text-[12px] text-text-secondary">
                   {dateStr} · {log.prompt_tokens.toLocaleString()} 输入 +{" "}
                   {log.completion_tokens.toLocaleString()} 输出 ={" "}
@@ -671,7 +696,7 @@ function UsageLogList() {
 }
 
 function HistorySection() {
-  const [tab, setTab] = useState<HistoryTab>("transactions");
+  const [tab, setTab] = useState<HistoryTab>("usage");
 
   return (
     <div className="rounded-2xl border border-border bg-surface-0 p-6 mb-6">
@@ -820,6 +845,7 @@ function AlipayPaymentSection() {
             });
             queryClient.invalidateQueries({ queryKey: ["user-balance"] });
             queryClient.invalidateQueries({ queryKey: ["transactions"] });
+            queryClient.invalidateQueries({ queryKey: ["usage-logs"] });
             queryClient.invalidateQueries({
               queryKey: ["pending-alipay-orders"],
             });
@@ -1140,6 +1166,7 @@ export function RechargePage() {
     data: balanceData,
     isLoading: balanceLoading,
     isError: balanceError,
+    error: balanceQueryError,
     isFetching: balanceFetching,
     refetch: refetchBalance,
   } = useQuery({
@@ -1149,7 +1176,9 @@ export function RechargePage() {
       if (error || !data) {
         throw new Error("Failed to fetch balance");
       }
-      // Don't throw when data.ok is false - return the response so we can show specific error
+      if (data.ok === false) {
+        throw new Error(data.error ?? t("recharge.balanceUnavailable"));
+      }
       return data;
     },
     refetchInterval: 15_000,
@@ -1189,7 +1218,11 @@ export function RechargePage() {
   // };
 
   const hasBalanceError = balanceData && !balanceData.ok;
-  const balanceErrorMessage = hasBalanceError ? balanceData.error : undefined;
+  const balanceErrorMessage = hasBalanceError
+    ? balanceData.error
+    : balanceQueryError instanceof Error
+      ? balanceQueryError.message
+      : undefined;
   const balanceCents = balanceData?.balance_cents ?? 0;
   const totalRecharged = balanceData?.total_recharged;
   const balanceYuan = (balanceCents / 100).toFixed(2);

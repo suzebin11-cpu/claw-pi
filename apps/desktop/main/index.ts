@@ -16,7 +16,11 @@ import {
   shell,
 } from "electron";
 import { getOpenclawSkillsDir } from "../shared/desktop-paths";
-import type { DesktopChromeMode, DesktopSurface } from "../shared/host";
+import type {
+  DesktopChromeMode,
+  DesktopSurface,
+  StartupProgress,
+} from "../shared/host";
 import {
   buildChildProcessProxyEnv,
   redactProxyUrl,
@@ -32,10 +36,12 @@ import {
   setComponentUpdater,
   setQuitFallback,
   setQuitHandlerOpts,
+  setStartupProgressProvider,
   setUpdateManager,
 } from "./ipc";
 import { RuntimeOrchestrator } from "./runtime/daemon-supervisor";
 import {
+  assertOpenclawLauncherAvailable,
   buildSkillNodePath,
   checkOpenclawExtractionNeeded,
   createRuntimeUnitManifests,
@@ -128,6 +134,18 @@ const needsSetupExtraction = checkOpenclawExtractionNeeded(
   app.getPath("userData"),
   app.isPackaged,
 );
+let startupProgress: StartupProgress = { stage: "preparing-runtime" };
+
+function setStartupProgress(progress: StartupProgress): void {
+  startupProgress = progress;
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (!window.webContents.isDestroyed()) {
+      window.webContents.send("host:startup-progress", progress);
+    }
+  }
+}
+
+setStartupProgressProvider(() => startupProgress);
 
 function hasExplicitEnvValue(value: string | undefined): boolean {
   return typeof value === "string" && value.trim().length > 0;
@@ -163,14 +181,13 @@ if (needsSetupExtraction) {
   process.env.NEXU_NEEDS_SETUP_ANIMATION = "1";
 }
 
-const orchestrator = new RuntimeOrchestrator(
-  createRuntimeUnitManifests(
-    electronRoot,
-    app.getPath("userData"),
-    app.isPackaged,
-    runtimeConfig,
-  ),
+const runtimeUnitManifests = createRuntimeUnitManifests(
+  electronRoot,
+  app.getPath("userData"),
+  app.isPackaged,
+  runtimeConfig,
 );
+const orchestrator = new RuntimeOrchestrator(runtimeUnitManifests);
 
 // Disable Chromium's popup blocker.  window.open() inside webviews can lose
 // "transient user activation" after async work (fetch → response → open),
@@ -736,15 +753,19 @@ async function applyResolvedSystemProxyToRuntimeUnits(): Promise<void> {
 }
 
 async function runDesktopColdStart(): Promise<void> {
-  // Must run before any sidecar spawns so they inherit the proxy env.
-  await applyResolvedSystemProxyToRuntimeUnits();
-
   if (useExternalController) {
     diagnosticsReporter?.markColdStartRunning("using external controller");
     logColdStart(
       `using external controller ${runtimeConfig.urls.controllerBase}`,
     );
   } else {
+    const controllerManifest = runtimeUnitManifests.find(
+      (manifest) => manifest.id === "controller",
+    );
+    assertOpenclawLauncherAvailable(
+      controllerManifest?.env?.OPENCLAW_BIN,
+      app.isPackaged,
+    );
     diagnosticsReporter?.markColdStartRunning("starting controller");
     logColdStart("starting controller");
     await orchestrator.startOne("controller");
@@ -841,6 +862,7 @@ async function runLaunchdColdStart(): Promise<void> {
   const openclawTmpDir = resolve(openclawRuntimeRoot, "tmp");
   const openclawBinPath =
     process.env.NEXU_OPENCLAW_BIN ?? paths.openclawBinPath;
+  assertOpenclawLauncherAvailable(openclawBinPath, app.isPackaged);
   const openclawExtensionsDir = paths.openclawExtensionsDir;
   const skillhubStaticSkillsDir = app.isPackaged
     ? resolve(electronRoot, "static/bundled-skills")
@@ -968,7 +990,7 @@ function createMainWindow(): BrowserWindow {
   const window = new BrowserWindow({
     width: 1280,
     height: 720,
-    minWidth: needsSetupExtraction ? 1280 : 1120,
+    minWidth: 1120,
     minHeight: 720,
     backgroundColor: isMacOS ? "#00000000" : "#0B1020",
     title: "Claw-Pi",
@@ -1096,10 +1118,9 @@ function createMainWindow(): BrowserWindow {
       detail: window.webContents.getURL(),
     });
     logLaunchTimeline("main window ready-to-show");
-    if (isMacOS && !needsSetupExtraction) {
-      // Only apply vibrancy after ready-to-show when NOT in setup mode.
-      // During setup, vibrancy is applied after the animation finishes
-      // to avoid the transparent background showing through the video.
+    if (isMacOS) {
+      // Apply vibrancy only after the renderer is ready so startup-state
+      // transitions do not briefly expose the transparent window surface.
       window.setBackgroundColor("#00000000");
       window.setVibrancy("sidebar");
     }
@@ -1115,14 +1136,12 @@ function createMainWindow(): BrowserWindow {
     }
   });
 
-  // During first install / post-update, show the window IMMEDIATELY with a
-  // white background — before loadFile, before React, before anything.
-  // This eliminates the 10-20s blank screen while the Electron main process
-  // is doing sidecar extraction / launchd bootstrap in the background.
-  // The white background matches the animation overlay seamlessly.
+  // During first install or a runtime-changing update, show the window
+  // immediately. The renderer exposes the real startup stages while sidecar
+  // extraction and service bootstrap continue in the background.
   if (needsSetupExtraction) {
-    logLaunchTimeline("setup animation: showing window immediately");
-    window.setBackgroundColor("#ffffff");
+    logLaunchTimeline("startup progress: showing window immediately");
+    window.setBackgroundColor("#11161d");
     window.show();
     focusMainWindow();
   }
@@ -1315,6 +1334,7 @@ app.whenReady().then(async () => {
   sleepGuard.start("desktop-runtime-active");
 
   void (async () => {
+    setStartupProgress({ stage: "preparing-runtime" });
     const healthCheck = new StartupHealthCheck();
     const health = healthCheck.check();
 
@@ -1331,6 +1351,7 @@ app.whenReady().then(async () => {
           diagnosticsReporter?.markColdStartRunning(
             "extracting openclaw sidecar",
           );
+          setStartupProgress({ stage: "extracting-openclaw" });
         }
         // Always invoke the extractor in packaged mode. When extraction
         // is not needed the call short-circuits to the lift-only fast
@@ -1339,6 +1360,15 @@ app.whenReady().then(async () => {
         await extractOpenclawSidecarAsync(
           electronRoot,
           app.getPath("userData"),
+          {
+            onStage: (stage) => {
+              if (stage === "extracting") {
+                setStartupProgress({ stage: "extracting-openclaw" });
+              } else if (stage === "verifying" || stage === "ready") {
+                setStartupProgress({ stage: "verifying-openclaw" });
+              }
+            },
+          },
         );
         if (needsSetupExtraction) {
           logColdStart("openclaw sidecar extraction complete");
@@ -1348,6 +1378,11 @@ app.whenReady().then(async () => {
       logColdStart(
         `bootstrap mode: ${useLaunchdMode ? "launchd" : "orchestrator"}`,
       );
+      setStartupProgress({ stage: "starting-services" });
+
+      // Resolve the system/PAC proxy before either bootstrap implementation
+      // snapshots its child-process environment.
+      await applyResolvedSystemProxyToRuntimeUnits();
 
       if (useLaunchdMode) {
         await runLaunchdColdStart();
@@ -1356,12 +1391,17 @@ app.whenReady().then(async () => {
       }
       await refreshProxyDiagnostics();
       healthCheck.recordSuccess();
+      setStartupProgress({ stage: "ready" });
     } catch (error) {
       await refreshProxyDiagnostics().catch(() => undefined);
       healthCheck.recordFailure();
       diagnosticsReporter?.markColdStartFailed(
         error instanceof Error ? error.message : String(error),
       );
+      setStartupProgress({
+        stage: "failed",
+        error: error instanceof Error ? error.message : String(error),
+      });
       writeDesktopMainLog({
         source: "cold-start",
         stream: "stderr",

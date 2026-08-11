@@ -229,9 +229,10 @@ function resolveArchiveStamp(
 
   try {
     const metadata = JSON.parse(readFileSync(metadataPath, "utf8")) as {
+      runtimeFingerprint?: unknown;
       fingerprint?: unknown;
     };
-    const fingerprint = metadata.fingerprint;
+    const fingerprint = metadata.runtimeFingerprint ?? metadata.fingerprint;
     if (typeof fingerprint === "string" && fingerprint.trim().length > 0) {
       return `fingerprint:${fingerprint.trim()}`;
     }
@@ -519,6 +520,34 @@ export function checkOpenclawExtractionNeeded(
   }
 }
 
+export function assertOpenclawLauncherAvailable(
+  launcherPath: string | undefined,
+  isPackaged: boolean,
+): asserts launcherPath is string {
+  const normalizedPath = launcherPath?.trim();
+  if (normalizedPath && existsSync(normalizedPath)) {
+    return;
+  }
+
+  const recovery = isPackaged
+    ? "The packaged OpenClaw runtime is missing or damaged. Reinstall Claw-Pi; release packaging must include resources/runtime/openclaw."
+    : "Run `pnpm --filter @nexu/desktop prepare:runtime-sidecars` from the workspace root before starting the desktop app.";
+
+  throw new Error(
+    `OpenClaw launcher is unavailable at "${normalizedPath || "<unset>"}". ${recovery}`,
+  );
+}
+
+type OpenclawSidecarExtractionStage =
+  | "preparing"
+  | "extracting"
+  | "verifying"
+  | "ready";
+
+type OpenclawSidecarExtractionOptions = {
+  onStage?: (stage: OpenclawSidecarExtractionStage) => void;
+};
+
 /**
  * Extract the openclaw sidecar archive asynchronously with retries.
  * Uses staging dir + atomic rename to prevent half-extracted directories.
@@ -527,7 +556,9 @@ export function checkOpenclawExtractionNeeded(
 export async function extractOpenclawSidecarAsync(
   electronRoot: string,
   userDataPath: string,
+  options: OpenclawSidecarExtractionOptions = {},
 ): Promise<void> {
+  options.onStage?.("preparing");
   const runtimeSidecarBaseRoot = path.resolve(electronRoot, "runtime");
   const runtimeRoot = path.resolve(userDataPath, "runtime");
   const packagedSidecarRoot = path.resolve(runtimeSidecarBaseRoot, "openclaw");
@@ -539,7 +570,9 @@ export async function extractOpenclawSidecarAsync(
       "node_modules/openclaw/openclaw.mjs",
     );
     if (existsSync(packagedEntry)) {
+      options.onStage?.("verifying");
       liftBundledExtensionDepsSync(packagedSidecarRoot);
+      options.onStage?.("ready");
       return;
     }
 
@@ -565,7 +598,9 @@ export async function extractOpenclawSidecarAsync(
     existsSync(extractedEntry) &&
     readFileSync(stampPath, "utf8") === archiveStamp
   ) {
+    options.onStage?.("verifying");
     liftBundledExtensionDepsSync(extractedSidecarRoot);
+    options.onStage?.("ready");
     return;
   }
 
@@ -578,6 +613,7 @@ export async function extractOpenclawSidecarAsync(
     try {
       await removeDirectoryAsync(stagingRoot);
       mkdirSync(stagingRoot, { recursive: true });
+      options.onStage?.("extracting");
       await extractArchiveAsync(archive, stagingRoot);
 
       const stagingEntry = path.resolve(
@@ -589,12 +625,14 @@ export async function extractOpenclawSidecarAsync(
           `Extraction verification failed: ${stagingEntry} not found`,
         );
       }
+      options.onStage?.("verifying");
 
       writeFileSync(path.resolve(stagingRoot, ".archive-stamp"), archiveStamp);
 
       await removeDirectoryAsync(extractedSidecarRoot);
       await robustRenameAsync(stagingRoot, extractedSidecarRoot);
       liftBundledExtensionDepsSync(extractedSidecarRoot);
+      options.onStage?.("ready");
       return;
     } catch (err) {
       if (attempt === MAX_RETRIES - 1) throw err;
@@ -764,7 +802,7 @@ export function createRuntimeUnitManifests(
         OPENCLAW_DISABLE_BONJOUR: "1",
         TMPDIR: openclawTempDir,
         RUNTIME_MANAGE_OPENCLAW_PROCESS: "true",
-        RUNTIME_GATEWAY_PROBE_ENABLED: "false",
+        RUNTIME_GATEWAY_PROBE_ENABLED: "true",
         ...(openclawNodePath ? { PATH: openclawNodePath } : {}),
         ...childProcessProxyEnv,
       },

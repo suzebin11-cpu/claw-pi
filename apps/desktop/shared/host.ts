@@ -7,6 +7,7 @@ export const hostInvokeChannels = [
   "diagnostics:crash-main",
   "diagnostics:crash-renderer",
   "diagnostics:export",
+  "startup:get-status",
   "env:get-controller-base-url",
   "env:get-runtime-config",
   "runtime:get-state",
@@ -71,12 +72,26 @@ export type StartupProbePayload = {
   detail?: string | null;
 };
 
+export type StartupProgressStage =
+  | "preparing-runtime"
+  | "extracting-openclaw"
+  | "verifying-openclaw"
+  | "starting-services"
+  | "ready"
+  | "failed";
+
+export type StartupProgress = {
+  stage: StartupProgressStage;
+  error?: string | null;
+};
+
 export type HostInvokePayloadMap = {
   "app:get-info": undefined;
   "diagnostics:get-info": undefined;
   "diagnostics:crash-main": undefined;
   "diagnostics:crash-renderer": undefined;
   "diagnostics:export": { source: "diagnostics-page" | "help-menu" };
+  "startup:get-status": undefined;
   "env:get-controller-base-url": undefined;
   "env:get-runtime-config": undefined;
   "runtime:get-state": undefined;
@@ -153,6 +168,7 @@ export type HostInvokeResultMap = {
   "diagnostics:crash-main": undefined;
   "diagnostics:crash-renderer": undefined;
   "diagnostics:export": DiagnosticsExportResult;
+  "startup:get-status": StartupProgress;
   "env:get-controller-base-url": {
     controllerBaseUrl: string;
   };
@@ -560,6 +576,9 @@ export type HostBridge = {
     payload: HostInvokePayloadMap[TChannel],
   ): Promise<HostInvokeResultMap[TChannel]>;
   reportStartupProbe(payload: StartupProbePayload): void;
+  onStartupProgress(
+    listener: (progress: StartupProgress) => void,
+  ): () => void;
   onDesktopCommand(listener: (command: HostDesktopCommand) => void): () => void;
   onRuntimeEvent(listener: (event: RuntimeEvent) => void): () => void;
 };

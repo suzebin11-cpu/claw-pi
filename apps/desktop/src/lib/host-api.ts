@@ -9,6 +9,7 @@ import type {
   RuntimeEventQueryResult,
   RuntimeState,
   RuntimeUnitId,
+  StartupProgress,
   StartupProbePayload,
   UpdateChannelName,
   UpdateSource,
@@ -63,8 +64,14 @@ export async function openExternal(url: string): Promise<void> {
   await getHostBridge().invoke("shell:open-external", { url });
 }
 
-export async function notifySetupAnimationComplete(): Promise<void> {
-  await getHostBridge().invoke("setup:animation-complete", undefined);
+export async function getStartupProgress(): Promise<StartupProgress> {
+  return getHostBridge().invoke("startup:get-status", undefined);
+}
+
+export function onStartupProgress(
+  listener: (progress: StartupProgress) => void,
+): () => void {
+  return getHostBridge().onStartupProgress(listener);
 }
 
 export async function getRuntimeState(): Promise<RuntimeState> {

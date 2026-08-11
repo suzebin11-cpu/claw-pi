@@ -285,4 +285,44 @@ describe("OpenClawRuntimePluginWriter", () => {
       access(path.join(env.openclawExtensionsDir, "plugin-a", "index.js")),
     ).resolves.toBeUndefined();
   });
+
+  it("does not recopy plugins when the configuration is unchanged", async () => {
+    const pluginDir = path.join(
+      env.runtimePluginTemplatesDir,
+      "plugin-a",
+    );
+    const targetFile = path.join(
+      env.openclawExtensionsDir,
+      "plugin-a",
+      "index.js",
+    );
+
+    await mkdir(pluginDir, { recursive: true });
+    await writeFile(path.join(pluginDir, "index.js"), "first\n");
+
+    const writer = new OpenClawRuntimePluginWriter(env);
+    await writer.ensurePlugins();
+    await writeFile(path.join(pluginDir, "index.js"), "second\n");
+    await writer.ensurePlugins();
+
+    expect(await readFile(targetFile, "utf8")).toBe("first\n");
+  });
+
+  it("resyncs plugins when the configured channel set changes", async () => {
+    const bundledPluginDir = path.join(env.bundledRuntimePluginsDir, "wecom");
+    const targetFile = path.join(
+      env.openclawExtensionsDir,
+      "wecom",
+      "index.js",
+    );
+
+    await mkdir(bundledPluginDir, { recursive: true });
+    await writeFile(path.join(bundledPluginDir, "index.js"), "wecom\n");
+
+    const writer = new OpenClawRuntimePluginWriter(env);
+    await writer.ensurePlugins({ configuredChannelTypes: [] });
+    await writer.ensurePlugins({ configuredChannelTypes: ["wecom"] });
+
+    expect(await readFile(targetFile, "utf8")).toBe("wecom\n");
+  });
 });

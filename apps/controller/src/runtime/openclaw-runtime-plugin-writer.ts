@@ -108,9 +108,20 @@ export interface EnsurePluginsOptions {
 }
 
 export class OpenClawRuntimePluginWriter {
+  private lastSuccessfulConfigurationSignature: string | null = null;
+
   constructor(private readonly env: ControllerEnv) {}
 
   async ensurePlugins(opts?: EnsurePluginsOptions): Promise<void> {
+    const configurationSignature = this.buildConfigurationSignature(
+      opts?.configuredChannelTypes,
+    );
+    if (
+      this.lastSuccessfulConfigurationSignature === configurationSignature
+    ) {
+      return;
+    }
+
     await mkdir(this.env.openclawExtensionsDir, { recursive: true });
     const requestedBundled = this.resolveRequestedBundled(
       opts?.configuredChannelTypes,
@@ -124,6 +135,7 @@ export class OpenClawRuntimePluginWriter {
       });
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+        this.lastSuccessfulConfigurationSignature = configurationSignature;
         return;
       }
       throw err;
@@ -150,6 +162,18 @@ export class OpenClawRuntimePluginWriter {
       );
       await this.safeCopyPlugin(sourceDir, targetDir, entry.name);
     }
+
+    this.lastSuccessfulConfigurationSignature = configurationSignature;
+  }
+
+  private buildConfigurationSignature(
+    configuredChannelTypes: readonly ChannelType[] | undefined,
+  ): string {
+    if (!configuredChannelTypes) {
+      return "all";
+    }
+
+    return `channels:${[...new Set(configuredChannelTypes)].sort().join(",")}`;
   }
 
   private resolveRequestedBundled(

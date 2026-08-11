@@ -51,6 +51,11 @@ export const balanceResponseSchema = z.object({
   error: z.string().optional(),
   balance_cents: z.number().optional(),
   total_recharged: z.number().optional(),
+  upstream_total_cents: z.number().optional(),
+  recharge_delta_cents: z.number().optional(),
+  recharge_reconcile_status: z
+    .enum(["matched", "cloud_behind", "cloud_ahead"])
+    .optional(),
 });
 
 export const transactionsQuerySchema = z.object({
