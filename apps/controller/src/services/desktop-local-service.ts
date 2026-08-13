@@ -32,10 +32,22 @@ type BalanceResult = {
   recharge_reconcile_status?: RechargeReconcileStatus;
 };
 
-type UserBillingSnapshot = {
-  ok: true;
-  balance_cents: number;
-  upstream_total_cents: number;
+type UsageLogItem = {
+  id: number;
+  model_name: string;
+  cost_cents: number;
+  prompt_tokens: number;
+  completion_tokens: number;
+  created_at: string;
+};
+
+type UsageLogsResult = {
+  success: boolean;
+  logs: UsageLogItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  error?: string;
 };
 
 function maskActivationCode(code: string): string {
@@ -106,50 +118,229 @@ function isTerminalActivationFailure(text: string): boolean {
   );
 }
 
-function formatBillingDate(date: Date): string {
-  return date.toISOString().slice(0, 10);
-}
-
 function readNonNegativeFiniteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0
     ? value
     : undefined;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
+function readNumberLike(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }
 
-function buildRechargeReconciliation(
-  totalRecharged: number | undefined,
-  billing: UserBillingSnapshot | null,
-): Pick<
-  BalanceResult,
-  | "upstream_total_cents"
-  | "recharge_delta_cents"
-  | "recharge_reconcile_status"
-> {
-  if (!billing) {
-    return {};
+function readNonNegativeNumberLike(value: unknown): number | undefined {
+  const parsed = readNumberLike(value);
+  return parsed !== undefined && parsed >= 0 ? parsed : undefined;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function firstDefinedField(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): unknown {
+  for (const key of keys) {
+    if (record[key] !== undefined) {
+      return record[key];
+    }
+  }
+  return undefined;
+}
+
+function firstArrayField(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): unknown[] | null {
+  for (const key of keys) {
+    const value = record[key];
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function readStringField(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+): string | undefined {
+  const value = firstDefinedField(record, keys);
+  if (typeof value === "string" && value.trim() !== "") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return undefined;
+}
+
+function normalizeUsageLogTimestamp(value: unknown): string {
+  if (typeof value === "string" && value.trim() !== "") {
+    return value;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value > 10_000_000_000 ? value : value * 1000;
+    return new Date(milliseconds).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+function normalizeUsageLogItem(
+  value: unknown,
+  index: number,
+  page: number,
+  pageSize: number,
+): UsageLogItem | null {
+  const record = asRecord(value);
+  if (!record) {
+    return null;
   }
 
-  if (totalRecharged === undefined) {
-    return { upstream_total_cents: billing.upstream_total_cents };
-  }
+  const id =
+    readNumberLike(firstDefinedField(record, ["id", "log_id", "logId"])) ??
+    (page - 1) * pageSize + index + 1;
+  const modelName =
+    readStringField(record, [
+      "model_name",
+      "modelName",
+      "model",
+      "model_id",
+      "modelId",
+      "name",
+    ]) ?? "Unknown model";
+  const costCents =
+    readNonNegativeNumberLike(
+      firstDefinedField(record, [
+        "cost_cents",
+        "costCents",
+        "amount_cents",
+        "amountCents",
+        "fee_cents",
+        "feeCents",
+        "total_cost_cents",
+        "totalCostCents",
+      ]),
+    ) ?? 0;
+  const promptTokens =
+    readNonNegativeNumberLike(
+      firstDefinedField(record, [
+        "prompt_tokens",
+        "promptTokens",
+        "input_tokens",
+        "inputTokens",
+        "promptTokenCount",
+      ]),
+    ) ?? 0;
+  const completionTokens =
+    readNonNegativeNumberLike(
+      firstDefinedField(record, [
+        "completion_tokens",
+        "completionTokens",
+        "output_tokens",
+        "outputTokens",
+        "completionTokenCount",
+      ]),
+    ) ?? 0;
 
-  const rechargeDeltaCents = billing.upstream_total_cents - totalRecharged;
   return {
-    upstream_total_cents: billing.upstream_total_cents,
-    recharge_delta_cents: rechargeDeltaCents,
-    recharge_reconcile_status:
-      rechargeDeltaCents === 0
-        ? "matched"
-        : rechargeDeltaCents > 0
-          ? "cloud_behind"
-          : "cloud_ahead",
+    id: Math.round(id),
+    model_name: modelName,
+    // Sub-cent charges are common for short prompts. Rounding here made real
+    // OpenLux log entries appear as ¥0.000000 in the feeding page.
+    cost_cents: costCents,
+    prompt_tokens: Math.round(promptTokens),
+    completion_tokens: Math.round(completionTokens),
+    created_at: normalizeUsageLogTimestamp(
+      firstDefinedField(record, [
+        "created_at",
+        "createdAt",
+        "created",
+        "timestamp",
+        "time",
+      ]),
+    ),
+  };
+}
+
+function normalizeUsageLogsResponse(
+  raw: unknown,
+  page: number,
+  pageSize: number,
+): UsageLogsResult {
+  const root = asRecord(raw);
+  if (!root) {
+    return {
+      success: false,
+      logs: [],
+      total: 0,
+      page,
+      page_size: pageSize,
+      error: "Usage logs unavailable",
+    };
+  }
+
+  const dataRecord = asRecord(root.data);
+  const payload = dataRecord ?? root;
+  const rawLogs =
+    firstArrayField(payload, ["logs", "usage_logs", "usageLogs", "items"]) ??
+    firstArrayField(root, ["logs", "usage_logs", "usageLogs", "items"]) ??
+    (Array.isArray(root.data) ? root.data : []);
+  const logs = rawLogs
+    .map((item, index) => normalizeUsageLogItem(item, index, page, pageSize))
+    .filter((item): item is UsageLogItem => item !== null);
+  const error = readStringField(root, ["error", "message"]);
+  const success = root.success === false ? false : !error || logs.length > 0;
+
+  return {
+    success,
+    logs,
+    total:
+      readNonNegativeNumberLike(
+        firstDefinedField(payload, ["total", "total_count", "totalCount"]),
+      ) ??
+      readNonNegativeNumberLike(
+        firstDefinedField(root, ["total", "total_count", "totalCount"]),
+      ) ??
+      logs.length,
+    page:
+      readNonNegativeNumberLike(firstDefinedField(payload, ["page"])) ??
+      readNonNegativeNumberLike(firstDefinedField(root, ["page"])) ??
+      page,
+    page_size:
+      readNonNegativeNumberLike(
+        firstDefinedField(payload, ["page_size", "pageSize", "limit"]),
+      ) ??
+      readNonNegativeNumberLike(
+        firstDefinedField(root, ["page_size", "pageSize", "limit"]),
+      ) ??
+      pageSize,
+    ...(error && logs.length === 0 ? { error: parseRemoteError(error) } : {}),
+  };
+}
+
+function usageLogsUnavailable(
+  page: number,
+  pageSize: number,
+  error: string,
+): UsageLogsResult {
+  return {
+    success: false,
+    logs: [],
+    total: 0,
+    page,
+    page_size: pageSize,
+    error,
   };
 }
 
@@ -173,9 +364,6 @@ const TIMEOUT_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
 ]);
-const BILLING_FETCH_ATTEMPTS = 3;
-const BILLING_FETCH_RETRY_DELAY_MS = 300;
-
 function readNetworkErrorCode(error: unknown): string {
   if (!error || typeof error !== "object") return "";
   const code = (error as { code?: unknown }).code;
@@ -215,6 +403,7 @@ function isCredentialRejection(status: number): boolean {
 
 export class DesktopLocalService {
   private credentialLoginInFlight: Promise<CredentialLoginResult> | null = null;
+  private activationCredentialRefreshAt = 0;
 
   constructor(
     private readonly configStore: NexuConfigStore,
@@ -374,6 +563,59 @@ export class DesktopLocalService {
     return true;
   }
 
+  /**
+   * Refresh the fixed child token for an existing authenticated desktop.
+   * This repairs sessions that still cache an upstream key from before an
+   * upstream migration without requiring the user to enter their password.
+   */
+  private async refreshActivationCredentials(
+    jwt: string,
+    cloudUrl: string,
+  ): Promise<void> {
+    const nowMs = Date.now();
+    if (nowMs - this.activationCredentialRefreshAt < 60_000) return;
+    this.activationCredentialRefreshAt = nowMs;
+
+    try {
+      const res = await proxyFetch(`${cloudUrl}/api/auth/user-activate`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${jwt}` },
+        timeoutMs: 10_000,
+      });
+      if (!res.ok) return;
+
+      const data = (await res.json()) as ActivationServerResponse;
+      if (!data.api_key) return;
+
+      const currentApiKey = await this.configStore.getActivationApiKey();
+      if (currentApiKey === data.api_key) return;
+
+      const status = await this.configStore.getActivationStatus();
+      const refreshedAt = new Date().toISOString();
+      await this.configStore.setActivationState({
+        activated: true,
+        email: status.email,
+        jwt,
+        apiKey: data.api_key,
+        activatedAt: status.activatedAt ?? refreshedAt,
+        codePrefix: status.codePrefix,
+      });
+      await this.configStore.applyActivationCloudState({
+        connected: true,
+        polling: false,
+        userName: status.email,
+        userEmail: status.email,
+        connectedAt: refreshedAt,
+        linkUrl: data.api_base_url ?? null,
+        apiKey: data.api_key,
+        models: data.models ?? [],
+      });
+    } catch {
+      // Best effort: the authoritative balance/log request below still reports
+      // its own failure and must never be replaced by another account's bill.
+    }
+  }
+
   async registerWithCode(input: {
     code: string;
     email: string;
@@ -511,6 +753,7 @@ export class DesktopLocalService {
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
     const cloudUrl = cloudStatus.cloudUrl;
+    await this.refreshActivationCredentials(jwt, cloudUrl);
 
     let res: Response;
     try {
@@ -522,26 +765,18 @@ export class DesktopLocalService {
         timeoutMs: 10_000,
       });
     } catch {
-      return (
-        (await this.getBalanceFromUserBilling()) ?? {
-          ok: false,
-          error: "Server unreachable",
-        }
-      );
+      return {
+        ok: false,
+        error: "Server unreachable",
+      };
     }
 
     if (!res.ok) {
-      const fallback = await this.getBalanceFromUserBilling();
       if (await this.clearActivationIfUnauthorized(res)) {
         return { ok: false, error: "Not authenticated" };
       }
       const text = await res.text().catch(() => "Unknown error");
-      return (
-        fallback ?? {
-          ok: false,
-          error: parseRemoteError(text),
-        }
-      );
+      return { ok: false, error: parseRemoteError(text) };
     }
 
     let data: {
@@ -553,42 +788,20 @@ export class DesktopLocalService {
     try {
       data = (await res.json()) as typeof data;
     } catch {
-      return (
-        (await this.getBalanceFromUserBilling()) ?? {
-          ok: false,
-          error: "Balance unavailable",
-        }
-      );
+      return { ok: false, error: "Balance unavailable" };
     }
     if (data.error) {
-      return (
-        (await this.getBalanceFromUserBilling()) ?? {
-          ok: false,
-          error: parseRemoteError(data.error),
-        }
-      );
+      return { ok: false, error: parseRemoteError(data.error) };
     }
     if (data.success === false) {
-      return (
-        (await this.getBalanceFromUserBilling()) ?? {
-          ok: false,
-          error: "Balance unavailable",
-        }
-      );
+      return { ok: false, error: "Balance unavailable" };
     }
     const balanceCents = readNonNegativeFiniteNumber(data.balance_cents);
     const totalRecharged = readNonNegativeFiniteNumber(data.total_recharged);
 
     if (balanceCents === undefined) {
-      return (
-        (await this.getBalanceFromUserBilling()) ?? {
-          ok: false,
-          error: "Balance unavailable",
-        }
-      );
+      return { ok: false, error: "Balance unavailable" };
     }
-
-    const billing = await this.getBalanceFromUserBilling();
 
     return {
       ok: true,
@@ -596,98 +809,7 @@ export class DesktopLocalService {
       ...(totalRecharged === undefined
         ? {}
         : { total_recharged: totalRecharged }),
-      ...buildRechargeReconciliation(totalRecharged, billing),
     };
-  }
-
-  private async fetchUserBillingResponse(
-    url: string,
-    headers: Record<string, string>,
-  ): Promise<Response> {
-    let lastError: unknown;
-    let lastResponse: Response | null = null;
-
-    for (let attempt = 0; attempt < BILLING_FETCH_ATTEMPTS; attempt++) {
-      try {
-        const response = await proxyFetch(url, {
-          method: "GET",
-          headers,
-          timeoutMs: 10_000,
-        });
-        if (response.ok || response.status < 500) {
-          return response;
-        }
-        lastResponse = response;
-      } catch (error) {
-        lastError = error;
-      }
-
-      if (attempt < BILLING_FETCH_ATTEMPTS - 1) {
-        await sleep(BILLING_FETCH_RETRY_DELAY_MS);
-      }
-    }
-
-    if (lastResponse) {
-      return lastResponse;
-    }
-    throw lastError instanceof Error ? lastError : new Error("Billing failed");
-  }
-
-  private async getBalanceFromUserBilling(): Promise<UserBillingSnapshot | null> {
-    const apiKey = await this.configStore.getActivationApiKey();
-    if (!apiKey) {
-      return null;
-    }
-
-    const cloudStatus = await this.configStore.getDesktopCloudStatus();
-    const billingBaseUrl = cloudStatus.linkUrl ?? "https://yunwu.ai";
-    const usageEndDate = new Date();
-    usageEndDate.setUTCDate(usageEndDate.getUTCDate() + 1);
-    const headers = { Authorization: `Bearer ${apiKey}` };
-
-    try {
-      const [subscriptionResponse, usageResponse] = await Promise.all([
-        this.fetchUserBillingResponse(
-          `${billingBaseUrl}/v1/dashboard/billing/subscription`,
-          headers,
-        ),
-        this.fetchUserBillingResponse(
-          `${billingBaseUrl}/v1/dashboard/billing/usage?start_date=1970-01-01&end_date=${formatBillingDate(usageEndDate)}`,
-          headers,
-        ),
-      ]);
-
-      if (!subscriptionResponse.ok || !usageResponse.ok) {
-        return null;
-      }
-
-      const subscription = (await subscriptionResponse.json()) as {
-        hard_limit_usd?: unknown;
-      };
-      const usage = (await usageResponse.json()) as {
-        total_usage?: unknown;
-      };
-      const hardLimitUsd = readNonNegativeFiniteNumber(
-        subscription.hard_limit_usd,
-      );
-      const totalUsageCents = readNonNegativeFiniteNumber(usage.total_usage);
-
-      if (hardLimitUsd === undefined || totalUsageCents === undefined) {
-        return null;
-      }
-
-      const upstreamTotalCents = Math.round(hardLimitUsd * 100);
-      return {
-        ok: true,
-        balance_cents: Math.max(
-          0,
-          Math.round(upstreamTotalCents - totalUsageCents),
-        ),
-        upstream_total_cents: upstreamTotalCents,
-      };
-    } catch {
-      return null;
-    }
   }
 
   async loginWithCredentials(input: {
@@ -1097,6 +1219,7 @@ export class DesktopLocalService {
 
     const cloudStatus = await this.configStore.getDesktopCloudStatus();
     const cloudUrl = cloudStatus.cloudUrl;
+    await this.refreshActivationCredentials(jwt, cloudUrl);
     const url = `${cloudUrl}/api/auth/usage-logs?page=${page}&page_size=${pageSize}`;
 
     let res: Response;
@@ -1107,52 +1230,23 @@ export class DesktopLocalService {
         timeoutMs: 10_000,
       });
     } catch {
-      return {
-        success: false,
-        logs: [],
-        total: 0,
-        page,
-        page_size: pageSize,
-        error: "Server unreachable",
-      };
+      return usageLogsUnavailable(page, pageSize, "Server unreachable");
     }
 
     if (!res.ok) {
       if (await this.clearActivationIfUnauthorized(res)) {
-        return {
-          success: false,
-          logs: [],
-          total: 0,
-          page,
-          page_size: pageSize,
-          error: "Not authenticated",
-        };
+        return usageLogsUnavailable(page, pageSize, "Not authenticated");
       }
       const text = await res.text().catch(() => "Unknown error");
-      return {
-        success: false,
-        logs: [],
-        total: 0,
-        page,
-        page_size: pageSize,
-        error: parseRemoteError(text),
-      };
+      return usageLogsUnavailable(page, pageSize, parseRemoteError(text));
     }
 
-    return (await res.json()) as {
-      success: boolean;
-      logs: Array<{
-        id: number;
-        model_name: string;
-        cost_cents: number;
-        prompt_tokens: number;
-        completion_tokens: number;
-        created_at: string;
-      }>;
-      total: number;
-      page: number;
-      page_size: number;
-      error?: string;
-    };
+    let normalized: UsageLogsResult;
+    try {
+      normalized = normalizeUsageLogsResponse(await res.json(), page, pageSize);
+    } catch {
+      return usageLogsUnavailable(page, pageSize, "Usage logs unavailable");
+    }
+    return normalized;
   }
 }

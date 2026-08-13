@@ -5,6 +5,14 @@ function createService() {
   const configStore = {
     getActivationJwt: vi.fn(async () => "activation-jwt"),
     getActivationApiKey: vi.fn(async () => "user-api-key"),
+    getActivationStatus: vi.fn(async () => ({
+      activated: true,
+      email: "user@example.com",
+      activatedAt: "2026-08-01T00:00:00.000Z",
+      codePrefix: null,
+    })),
+    setActivationState: vi.fn(async () => undefined),
+    applyActivationCloudState: vi.fn(async () => undefined),
     getDesktopCloudStatus: vi.fn(async () => ({
       cloudUrl: "https://cloud.example.com",
       linkUrl: "https://yunwu.example.com",
@@ -28,7 +36,7 @@ describe("DesktopLocalService balance", () => {
     vi.unstubAllGlobals();
   });
 
-  it("returns balance successfully when cloud API succeeds", async () => {
+  it("uses the fixed child-token balance returned by the cloud API", async () => {
     const requests: Array<{ url: string; method: string }> = [];
     vi.stubGlobal(
       "fetch",
@@ -59,14 +67,11 @@ describe("DesktopLocalService balance", () => {
       ok: true,
       balance_cents: 5000,
       total_recharged: 10000,
-      upstream_total_cents: 10000,
-      recharge_delta_cents: 0,
-      recharge_reconcile_status: "matched",
     });
     expect(requests.map((request) => request.url)).toContain(
       "https://cloud.example.com/api/auth/balance",
     );
-    expect(requests.map((request) => request.url)).toContain(
+    expect(requests.map((request) => request.url)).not.toContain(
       "https://yunwu.example.com/v1/dashboard/billing/subscription",
     );
     expect(requests).not.toContainEqual({
@@ -105,9 +110,6 @@ describe("DesktopLocalService balance", () => {
       ok: true,
       balance_cents: 7400,
       total_recharged: 10000,
-      upstream_total_cents: 12345,
-      recharge_delta_cents: 2345,
-      recharge_reconcile_status: "cloud_behind",
     });
     expect(requests).not.toContainEqual({
       url: "https://cloud.example.com/api/auth/redeem-recharge",
@@ -115,7 +117,7 @@ describe("DesktopLocalService balance", () => {
     });
   });
 
-  it("falls back to user billing when cloud balance API returns an error", async () => {
+  it("does not replace a cloud balance error with an account-level bill", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -141,14 +143,13 @@ describe("DesktopLocalService balance", () => {
 
     const { configStore, service } = createService();
     await expect(service.getBalance()).resolves.toEqual({
-      ok: true,
-      balance_cents: 78,
-      upstream_total_cents: 123,
+      ok: false,
+      error: "fetch failed",
     });
     expect(configStore.clearActivation).not.toHaveBeenCalled();
   });
 
-  it("retries transient Yunwu billing 5xx responses for idempotent balance reads", async () => {
+  it("does not query account-level billing when the fixed-token balance fails", async () => {
     const subscriptionStatuses: number[] = [];
     vi.stubGlobal(
       "fetch",
@@ -173,11 +174,10 @@ describe("DesktopLocalService balance", () => {
 
     const { service } = createService();
     await expect(service.getBalance()).resolves.toEqual({
-      ok: true,
-      balance_cents: 275,
-      upstream_total_cents: 300,
+      ok: false,
+      error: "fetch failed",
     });
-    expect(subscriptionStatuses).toHaveLength(2);
+    expect(subscriptionStatuses).toHaveLength(0);
   });
 
   it("does not return a fabricated balance when billing fields are invalid", async () => {
@@ -241,7 +241,7 @@ describe("DesktopLocalService balance", () => {
     expect(configStore.clearActivation).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps the local session and uses billing fallback for an unclassified 401", async () => {
+  it("keeps the local session and surfaces an unclassified 401", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
@@ -264,9 +264,8 @@ describe("DesktopLocalService balance", () => {
 
     const { configStore, service } = createService();
     await expect(service.getBalance()).resolves.toEqual({
-      ok: true,
-      balance_cents: 175,
-      upstream_total_cents: 200,
+      ok: false,
+      error: "Temporary authorization gateway failure",
     });
     expect(configStore.clearActivation).not.toHaveBeenCalled();
   });
@@ -336,6 +335,167 @@ describe("DesktopLocalService balance", () => {
       error: "Temporary authorization gateway failure",
     });
     expect(configStore.clearActivation).not.toHaveBeenCalled();
+  });
+
+  it("normalizes nested usage logs so details remain visible", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (
+          input
+            .toString()
+            .endsWith("/api/auth/usage-logs?page=2&page_size=10")
+        ) {
+          return Response.json({
+            success: true,
+            data: {
+              usage_logs: [
+                {
+                  logId: "42",
+                  model: "gpt-5.5",
+                  costCents: "13",
+                  input_tokens: "1200",
+                  output_tokens: 345,
+                  createdAt: "2026-08-12T08:00:00.000Z",
+                },
+              ],
+              total_count: "11",
+              pageSize: "10",
+            },
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      }),
+    );
+
+    const { service } = createService();
+    await expect(service.getUsageLogs(2, 10)).resolves.toEqual({
+      success: true,
+      logs: [
+        {
+          id: 42,
+          model_name: "gpt-5.5",
+          cost_cents: 13,
+          prompt_tokens: 1200,
+          completion_tokens: 345,
+          created_at: "2026-08-12T08:00:00.000Z",
+        },
+      ],
+      total: 11,
+      page: 2,
+      page_size: 10,
+    });
+  });
+
+  it("preserves sub-cent costs in detailed usage logs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (input.toString().includes("/api/auth/usage-logs?")) {
+          return Response.json({
+            success: true,
+            logs: [
+              {
+                id: 11672754,
+                model_name: "gpt-5.5",
+                cost_cents: 0.0042,
+                prompt_tokens: 7,
+                completion_tokens: 23,
+                created_at: "2026-08-13T05:26:06.000Z",
+              },
+            ],
+            total: 1,
+            page: 1,
+            page_size: 10,
+          });
+        }
+        return new Response("Not found", { status: 404 });
+      }),
+    );
+
+    await expect(createService().service.getUsageLogs(1, 10)).resolves.toEqual({
+      success: true,
+      logs: [
+        {
+          id: 11672754,
+          model_name: "gpt-5.5",
+          cost_cents: 0.0042,
+          prompt_tokens: 7,
+          completion_tokens: 23,
+          created_at: "2026-08-13T05:26:06.000Z",
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 10,
+    });
+  });
+
+  it("refreshes a migrated desktop's cached upstream key from its JWT", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.endsWith("/api/auth/user-activate")) {
+          return Response.json({
+            success: true,
+            api_key: "fixed-child-token",
+            api_base_url: "https://api.openlux.ai",
+            models: [],
+          });
+        }
+        if (url.endsWith("/api/auth/balance")) {
+          return Response.json({ success: true, balance_cents: 2342 });
+        }
+        return new Response("Not found", { status: 404 });
+      }),
+    );
+
+    const { configStore, service } = createService();
+    await expect(service.getBalance()).resolves.toEqual({
+      ok: true,
+      balance_cents: 2342,
+    });
+    expect(configStore.setActivationState).toHaveBeenCalledWith(
+      expect.objectContaining({ apiKey: "fixed-child-token" }),
+    );
+    expect(configStore.applyActivationCloudState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        apiKey: "fixed-child-token",
+        linkUrl: "https://api.openlux.ai",
+      }),
+    );
+  });
+
+  it("does not fabricate an aggregate usage row when detailed logs fail", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = input.toString();
+        if (url.endsWith("/api/auth/usage-logs?page=1&page_size=10")) {
+          return Response.json({ success: false, error: "fetch failed" });
+        }
+        if (url.endsWith("/v1/dashboard/billing/subscription")) {
+          return Response.json({ hard_limit_usd: 206.846928 });
+        }
+        if (url.includes("/v1/dashboard/billing/usage?")) {
+          return Response.json({ total_usage: 20505.8612 });
+        }
+        return new Response("Not found", { status: 404 });
+      }),
+    );
+
+    const { service } = createService();
+    const result = await service.getUsageLogs(1, 10);
+
+    expect(result).toEqual({
+      success: false,
+      logs: [],
+      total: 0,
+      page: 1,
+      page_size: 10,
+      error: "fetch failed",
+    });
   });
 
   it("returns normalized upstream error when cloud API returns error", async () => {

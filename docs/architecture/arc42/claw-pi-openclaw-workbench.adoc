@@ -421,7 +421,7 @@ agent:{agentId}:workbench:{sessionId}
 
 === ADR-007: 余额查询使用用户账单接口作为本地兜底
 
-*状态：已采纳*
+*状态：已被 ADR-025 取代*
 
 原因：云端余额聚合依赖管理令牌；管理令牌被上游限流或临时封禁时，用户 API key 和模型调用仍可能完全正常。把该错误解释为登录失效会造成不必要的账号重连，且无法恢复余额展示。
 
@@ -707,6 +707,16 @@ Concurrent sends wait for the same promise, then reload the shared session
 snapshot. This prevents stale React closures from rebuilding a request with
 pre-compaction history.
 
+==== ADR-013: Separate desktop shell reachability from model readiness
+
+*Status:* accepted
+
+The desktop shell may mount the workspace once the Controller, Web sidecar, and
+OpenClaw gateway are active. A default-model mismatch or runtime fallback model
+must be surfaced inside the workspace, not keep the Electron shell on an
+unrecoverable loader. The `/api/internal/desktop/ready` response still reports
+both configured and effective model IDs so the UI can show degraded model state.
+
 === 10. Quality requirements
 
 Long agent tasks must remain observable while they are active, must expose
@@ -835,7 +845,7 @@ model.
 === 6. Runtime flow
 
 . Electron applies the configured system or explicit proxy to its session.
-. For system mode, Electron resolves `https://yunwu.ai/v1/models` through the
+. For system mode, Electron resolves `https://api.openlux.ai/v1/models` through the
   Windows proxy resolver with a bounded timeout.
 . The concrete proxy and loopback bypass list are injected into the Controller
   and OpenClaw manifests before either process starts.
@@ -996,7 +1006,7 @@ The Controller uses the packaged values only when it creates
 across application updates.
 
 The current production seeds are `http://47.108.215.151:9080` for Cloud and
-`https://yunwu.ai` for Link. Windows and macOS packaging share these defaults;
+`https://api.openlux.ai` for Link. Windows and macOS packaging share these defaults;
 release workflows pass the same pair explicitly.
 
 === 6. Runtime flow
@@ -1470,3 +1480,198 @@ incomplete `.dist-runtime` tree; invoking electron-builder directly against that
 tree can produce a partial package. Release automation must treat sidecar
 preparation and package verification as one atomic pipeline and must verify that
 the controller, OpenClaw, and Web sidecars are all present before publishing.
+
+== Billing display reconciliation addendum (2026-08-12)
+
+NOTE: This addendum is superseded by ADR-025. OpenLux dashboard billing cannot
+be used as a fallback because a migrated desktop may still hold a credential
+for a different upstream token.
+
+=== 4. Solution Strategy
+
+The desktop recharge page treats the user's OpenLux billing snapshot as the
+authoritative current quota whenever the stored activation API key can read it.
+The activation-JWT `/api/auth/balance` response remains the authentication path
+and a fallback source, but it no longer overrides a valid OpenLux balance.
+
+Usage-log responses are normalized inside Controller before reaching the web
+client. Controller accepts nested or renamed Cloud payload shapes such as
+`data.usage_logs`, `usageLogs`, or `items`, and emits the stable internal
+`logs[].model_name`, token, cost, and timestamp fields used by the page.
+When the Cloud usage-log endpoint is unavailable but OpenLux billing is readable,
+Controller degrades to a single aggregate usage row derived from OpenLux
+`total_usage` so the recharge page remains actionable instead of displaying a
+`fetch failed` error.
+
+Workbench chat, OpenAI-compatible chat, image generation, and the web client
+all classify upstream `user quota is not enough` responses as insufficient
+balance. User-facing flows show the recharge-oriented balance message instead
+of a generic network failure when the upstream error body exposes quota state.
+
+=== 6. Runtime Flow
+
+. Recharge UI requests `/api/internal/activation/balance`.
+. Controller checks Cloud `/api/auth/balance` with the activation JWT.
+. Controller reads OpenLux `/v1/dashboard/billing/subscription` and
+  `/v1/dashboard/billing/usage` with the stored activation API key.
+. If OpenLux billing is valid, `balance_cents` is calculated from that live
+  quota snapshot and returned to the UI. Cloud balance is used only when the
+  OpenLux check is unavailable.
+. Recharge UI requests `/api/internal/activation/usage-logs`.
+. Controller fetches Cloud usage logs, normalizes compatible response shapes,
+  and returns visible line items instead of forwarding a Cloud-specific payload.
+. If Cloud usage logs fail, Controller reads OpenLux billing and returns a
+  one-row aggregate usage record for page 1. Later pages return an empty,
+  successful result when only aggregate OpenLux data is available.
+
+=== 7. Deployment and Packaging
+
+The web sidecar build uses Vite's `runner` config loader on Windows. This
+avoids writing transient bundled config modules under `node_modules/.vite-temp`,
+which can fail with `EPERM` during local portable builds while preserving the
+same Vite configuration semantics through `import.meta.url` path resolution.
+
+=== 10. Quality Requirements
+
+The packaged recharge page must display the same remaining quota as OpenLux when
+OpenLux billing can be read. Consumption details must remain visible across
+minor Cloud response-shape changes, and authorization failures must still be
+shown as errors rather than hidden as empty history.
+If the Cloud usage-log service is unreachable, the UI must still present the
+OpenLux aggregate consumption row and keep polling without surfacing `fetch
+failed` as the primary state.
+
+== OpenLux upstream and fixed child-token addendum (2026-08-13)
+
+=== 4. Solution Strategy
+
+Claw-Pi Cloud remains the account and authorization control plane. OpenLux is
+the Link model data plane and must not replace `NEXU_CLOUD_URL`: it does not own
+Claw-Pi registration, activation-code, or desktop device-poll routes.
+
+One service-owned OpenLux account manages every Claw-Pi user's API credential.
+For each immutable Claw-Pi user ID, Cloud finds or creates exactly one fixed
+OpenLux child token and returns that token through the existing `api_key`
+contract. Email is display metadata only and must not be the identity key.
+
+=== 5. Building Blocks and Ownership
+
+* Claw-Pi Cloud owns the OpenLux master credential, the Claw-Pi-user-to-token
+  mapping, idempotent provisioning, and explicit token reset or revocation.
+* Desktop Controller persists only the authenticated user's child token and
+  compiles it into the OpenClaw `link` provider.
+* OpenClaw and image generation call `https://api.openlux.ai/v1` with the child
+  token. They never receive the OpenLux account password or a management token.
+* The current desktop repository contains the consumer contract but not the
+  Cloud implementation of user registration or upstream child-token creation.
+
+=== 6. Runtime Flow
+
+. A user registers or signs in to Claw-Pi Cloud.
+. Cloud starts a database transaction and locks the immutable Claw-Pi user ID.
+. Cloud returns the mapped active OpenLux child token when one already exists.
+. If no mapping exists, Cloud authenticates with its server-held OpenLux master
+  credential, creates one token named from a non-secret Claw-Pi identifier, and
+  persists the OpenLux token ID plus encrypted token value atomically.
+. Cloud returns `api_key`, `api_base_url=https://api.openlux.ai`, and the model
+  catalog through the existing login or device-poll response.
+. Desktop compiles the credential as `models.providers.link`; chat, discovery,
+  billing, and image requests use the fixed child token.
+. Normal desktop logout clears local state only. Explicit account unlink/reset
+  is the only flow allowed to revoke and recreate the OpenLux child token.
+
+=== 7. Deployment and Packaging
+
+Formal desktop packages seed Link with `https://api.openlux.ai`; Cloud remains
+the separately deployed control-plane origin. OpenLux master credentials belong
+in the Cloud secret store and are forbidden in desktop build config, local
+configuration, diagnostics, logs, CI artifacts, and source control.
+
+The Cloud PM2 release process must source the server-managed `.env` into the
+deployment shell before `pm2 restart --update-env`. PM2 does not parse the
+project `.env` automatically. Production releases are tag-pinned and retain a
+mode-0600 copy of the previous `.env` plus a source and database backup.
+
+=== 9. Architecture Decisions
+
+==== ADR-023: Provision one fixed OpenLux child token per Claw-Pi user
+
+*Status:* accepted
+
+The mapping key is the immutable Claw-Pi user ID. Provisioning is idempotent and
+serialized so concurrent first logins cannot create duplicate tokens. Routine
+login reuses the fixed token; routine logout does not revoke it.
+
+==== ADR-024: Keep OpenLux management authority server-side
+
+*Status:* accepted
+
+The desktop consumes the established `api_key` response and cannot list, create,
+update, or delete OpenLux tokens. Compromise of one desktop therefore exposes at
+most one user's model credential rather than the service account.
+
+=== 10. Quality Requirements
+
+Repeated and concurrent login for one user must resolve to the same active token.
+Different users must never share a token. A failed OpenLux create call must not
+leave a mapping marked active, and logs must contain neither the master secret
+nor child-token plaintext. Contract tests must cover first creation, reuse,
+concurrent login, explicit reset, upstream timeout, and partial-failure recovery.
+
+=== 11. Technical Risks
+
+The OpenLux token-management API may depend on an authenticated web session or
+an implementation-specific management API rather than the ordinary model API
+key. Its exact endpoints, CSRF requirements, token fields, groups, quotas, and
+revocation semantics must be confirmed against the target account before the
+Cloud adapter is implemented. The user-supplied test model key is insufficient
+management authority and must never be promoted to a master credential.
+
+The management API uses string routing values (`auto`) and PostgreSQL exposes
+`BIGINT` token IDs as strings in Node.js. Adapter boundaries must normalize
+these contracts, and list/search logic must follow the server-reported page and
+total fields so fixed-token reuse remains correct beyond the first page.
+
+== Fixed child-token billing correction (2026-08-13)
+
+=== 4. Solution Strategy
+
+Claw-Pi Cloud is the single authority for user balance and consumption detail.
+It resolves the authenticated Claw-Pi user to the persisted OpenLux child-token
+ID/name and reads that token's remaining quota and log entries. A desktop must
+not calculate balance from `/v1/dashboard/billing/*`: after an upstream
+migration its cached key can belong to a retired token and therefore represents
+a different billing scope.
+
+=== 6. Runtime Flow
+
+. Before reading balance or usage logs, Controller uses the activation JWT to
+  call Cloud `/api/auth/user-activate` at most once per minute.
+. Cloud idempotently returns the user's current fixed OpenLux child token.
+. If the token differs from the cached credential, Controller updates activation
+  and cloud state; the normal configuration synchronizer propagates it to the
+  model runtime without asking for the account password.
+. Balance and detailed usage requests then use Cloud's user-scoped endpoints.
+  Errors remain visible and are never replaced by an aggregate row from another
+  billing scope.
+. Usage normalization preserves fractional `cost_cents`; short successful calls
+  must not be rounded to zero in the feeding page.
+
+=== 9. Architecture Decisions
+
+==== ADR-025: Fixed child token is the only desktop billing scope
+
+*Status:* accepted
+
+The Cloud user-to-child-token mapping is authoritative for both model access and
+billing display. JWT-authenticated credential refresh repairs migrated desktop
+sessions. Account-level or cached-key dashboard billing is forbidden as a
+balance/log fallback because it cannot prove that it belongs to the mapped
+fixed child token.
+
+=== 10. Quality Requirements
+
+Balance, model execution, and detailed logs for one signed-in Claw-Pi user must
+all resolve to the same OpenLux token ID. Regression tests cover cached-key
+refresh, rejection of account-level fallbacks, nested log normalization, and
+sub-cent cost preservation.
