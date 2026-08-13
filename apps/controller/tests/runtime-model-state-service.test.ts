@@ -59,4 +59,13 @@ describe("RuntimeModelStateService", () => {
       "link/gpt-5.4-mini",
     );
   });
+
+  it("keeps a selected fallback model when the runtime whitelist is empty", async () => {
+    const service = await makeService({
+      selectedModelRef: "debug/mock",
+      availableModelRefs: [],
+    });
+
+    await expect(service.getEffectiveModelId()).resolves.toBe("debug/mock");
+  });
 });

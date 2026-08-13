@@ -135,7 +135,19 @@ function mergeDesktopCloudModelCatalogs(input: {
 
 const DEFAULT_CLOUD_PROFILE_NAME = "Default";
 const FALLBACK_CLOUD_URL = "http://47.108.215.151:9080";
-const FALLBACK_LINK_URL = "https://yunwu.ai";
+const FALLBACK_LINK_URL = "https://api.openlux.ai";
+const LEGACY_FALLBACK_LINK_URLS = new Set(["https://yunwu.ai"]);
+
+function shouldMigrateLegacyDefaultCloudProfile(
+  profile: CloudProfileInput,
+): boolean {
+  return (
+    profile.cloudUrl.trim().replace(/\/+$/u, "") === FALLBACK_CLOUD_URL &&
+    LEGACY_FALLBACK_LINK_URLS.has(
+      profile.linkUrl.trim().replace(/\/+$/u, ""),
+    )
+  );
+}
 
 function buildDefaultCloudProfile(env: ControllerEnv): CloudProfileEntry {
   const configuredCloudUrl = env.nexuCloudUrl?.trim();
@@ -343,7 +355,9 @@ function normalizeImportedCloudProfiles(
       storedDefaultProfile = {
         name,
         cloudUrl: profile.cloudUrl.trim(),
-        linkUrl: profile.linkUrl.trim(),
+        linkUrl: shouldMigrateLegacyDefaultCloudProfile(profile)
+          ? defaultCloudProfile.linkUrl
+          : profile.linkUrl.trim(),
       };
       continue;
     }

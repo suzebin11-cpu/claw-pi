@@ -107,7 +107,9 @@ describe("ProxyManager", () => {
       expect(await manager.resolveSystemProxy()).toEqual({
         url: "http://corp.proxy:8080",
       });
-      expect(resolveProxy).toHaveBeenCalledWith("https://yunwu.ai/v1/models");
+      expect(resolveProxy).toHaveBeenCalledWith(
+        "https://api.openlux.ai/v1/models",
+      );
     });
 
     it("returns null on a direct network", async () => {

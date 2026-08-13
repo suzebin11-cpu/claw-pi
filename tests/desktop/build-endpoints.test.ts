@@ -47,7 +47,7 @@ describe("desktop build endpoint policy", () => {
       expect.objectContaining({ label: "Cloud", status: 200 }),
       expect.objectContaining({ label: "Link", status: 401 }),
     ]);
-    expect(lookupImpl).toHaveBeenCalledWith("yunwu.ai");
+    expect(lookupImpl).toHaveBeenCalledWith("api.openlux.ai");
   });
 
   it("reports DNS failures distinctly during packaging", async () => {

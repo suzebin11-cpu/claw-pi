@@ -989,10 +989,23 @@ type DesktopReadyPayload = {
   };
   status?: "active" | "starting" | "degraded" | "unhealthy";
   gatewayConnected?: boolean;
+  model?: {
+    ready?: boolean;
+  };
 };
 
 function isDesktopApiReady(payload: DesktopReadyPayload): boolean {
   return Boolean(payload.ready);
+}
+
+function isDesktopSurfaceReachable(payload: DesktopReadyPayload): boolean {
+  if (isDesktopApiReady(payload)) {
+    return true;
+  }
+
+  return Boolean(
+    payload.gatewayConnected === true && payload.model?.ready === true,
+  );
 }
 
 function getStartupProgressCopy(progress: StartupProgress): {
@@ -1138,11 +1151,11 @@ function DesktopShell() {
           if (res.ok) {
             const data = (await res.json()) as DesktopReadyPayload;
 
-            if (!cancelled && isDesktopApiReady(data)) {
+            if (!cancelled && isDesktopSurfaceReachable(data)) {
               setControllerReady(true);
             }
 
-            if (isDesktopApiReady(data)) {
+            if (isDesktopSurfaceReachable(data)) {
               return;
             }
           }

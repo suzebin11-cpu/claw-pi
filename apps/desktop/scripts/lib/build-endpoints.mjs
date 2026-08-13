@@ -4,7 +4,7 @@ import { isIP } from "node:net";
 import { resolve } from "node:path";
 
 export const PRODUCTION_CLOUD_URL = "http://47.108.215.151:9080";
-export const PRODUCTION_LINK_URL = "https://yunwu.ai";
+export const PRODUCTION_LINK_URL = "https://api.openlux.ai";
 
 const FORMAL_BUILD_SOURCES = new Set(["release", "nightly-prod"]);
 const DNS_ERROR_CODES = new Set([

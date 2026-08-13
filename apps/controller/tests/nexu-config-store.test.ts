@@ -299,8 +299,8 @@ describe("NexuConfigStore", () => {
         profiles: [
           {
             name: "Default",
-            cloudUrl: "http://47.108.215.151:9080",
-            linkUrl: "https://yunwu.ai",
+            cloudUrl: "https://user-cloud.example.com",
+            linkUrl: "https://user-link.example.com",
           },
         ],
       }),
@@ -313,8 +313,33 @@ describe("NexuConfigStore", () => {
     const status = await store.getDesktopCloudStatus();
 
     expect(status.activeProfileName).toBe("Default");
+    expect(status.cloudUrl).toBe("https://user-cloud.example.com");
+    expect(status.linkUrl).toBe("https://user-link.example.com");
+  });
+
+  it("migrates the legacy official Link endpoint to OpenLux", async () => {
+    env.nexuLinkUrl = "https://api.openlux.ai";
+    await mkdir(env.nexuHomeDir, { recursive: true });
+    await writeFile(
+      path.join(env.nexuHomeDir, "cloud-profiles.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        profiles: [
+          {
+            name: "Default",
+            cloudUrl: "http://47.108.215.151:9080",
+            linkUrl: "https://yunwu.ai",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const store = new NexuConfigStore(env);
+    const status = await store.getDesktopCloudStatus();
+
     expect(status.cloudUrl).toBe("http://47.108.215.151:9080");
-    expect(status.linkUrl).toBe("https://yunwu.ai");
+    expect(status.linkUrl).toBe("https://api.openlux.ai");
   });
 
   it("preserves the stored default profile when importing custom profiles", async () => {
@@ -346,7 +371,7 @@ describe("NexuConfigStore", () => {
     expect(status.profiles[0]).toMatchObject({
       name: "Default",
       cloudUrl: "http://47.108.215.151:9080",
-      linkUrl: "https://yunwu.ai",
+      linkUrl: "https://link.nexu.io",
     });
   });
 

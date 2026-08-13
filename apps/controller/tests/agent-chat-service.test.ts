@@ -474,7 +474,7 @@ describe("AgentChatService", () => {
         runId,
         state: "error",
         errorMessage:
-          "403 token quota is not enough, token remain quota: $0.1, need quota: $0.4",
+          "403 user quota is not enough, token remain quota: $0.1, need quota: $0.4",
       },
     });
 

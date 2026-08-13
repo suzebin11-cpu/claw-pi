@@ -2,7 +2,7 @@
 /**
  * OpenAI-compatible image generation CLI.
  *
- * Default endpoint: https://yunwu.ai/v1/images/generations
+ * Default endpoint: https://api.openlux.ai/v1/images/generations
  * Default model:    gpt-image-2-all
  *
  * Works with any OpenAI-compatible image endpoint (gpt-image-1, gpt-image-1.5,
@@ -25,7 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 
-const HELP = `OpenAI-compatible image generation CLI (default: yunwu.ai).
+const HELP = `OpenAI-compatible image generation CLI (default: api.openlux.ai).
 
 Usage:
   node yunwu-image.mjs -p "prompt" -o out.png
@@ -39,9 +39,9 @@ Options:
   -n, --num             how many images, default 1
   -m, --model           model id, default gpt-image-2-all
   -s, --size            size, default 1024x1024 (e.g. 1024x1024, 1536x1024, 1024x1536)
-      --base-url        API base, default https://yunwu.ai
+      --base-url        API base, default https://api.openlux.ai
       --endpoint        endpoint path, default /v1/images/generations
-      --api-key         API key (overrides env YUNWU_API_KEY / OPENAI_API_KEY)
+      --api-key         API key (overrides env OPENLUX_API_KEY / YUNWU_API_KEY / OPENAI_API_KEY)
       --extra           extra JSON merged into request body, e.g. '{"quality":"hd"}'
       --timeout         request timeout in seconds, default 300
       --quiet           suppress progress logs
@@ -62,7 +62,7 @@ try {
       num: { type: "string", short: "n", default: "1" },
       model: { type: "string", short: "m", default: "gpt-image-2-all" },
       size: { type: "string", short: "s", default: "1024x1024" },
-      "base-url": { type: "string", default: "https://yunwu.ai" },
+      "base-url": { type: "string", default: "https://api.openlux.ai" },
       endpoint: { type: "string", default: "/v1/images/generations" },
       "api-key": { type: "string" },
       extra: { type: "string" },
@@ -118,10 +118,13 @@ prompt = prompt.trim();
 // ---------------------------------------------------------------------------
 
 const apiKey =
-  values["api-key"] || process.env.YUNWU_API_KEY || process.env.OPENAI_API_KEY;
+  values["api-key"] ||
+  process.env.OPENLUX_API_KEY ||
+  process.env.YUNWU_API_KEY ||
+  process.env.OPENAI_API_KEY;
 if (!apiKey) {
   console.error(
-    "Error: missing API key. Pass --api-key or set YUNWU_API_KEY / OPENAI_API_KEY.",
+    "Error: missing API key. Pass --api-key or set OPENLUX_API_KEY / YUNWU_API_KEY / OPENAI_API_KEY.",
   );
   process.exit(2);
 }

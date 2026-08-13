@@ -499,19 +499,26 @@ export function registerDesktopRoutes(
       const effectiveModelId =
         await container.runtimeModelStateService.getEffectiveModelId();
       const configuredModelId = config.runtime.defaultModelId ?? null;
-      const modelReady =
-        effectiveModelId !== null &&
-        (configuredModelId === null || effectiveModelId === configuredModelId);
+      const modelReady = effectiveModelId !== null;
       const gatewayConnected = container.gatewayService.isConnected();
-      // Listening on the Controller port is not enough for desktop features:
-      // the OpenClaw WS handshake and runtime model state must be complete.
-      const ready =
-        runtime.ok &&
+      // The desktop shell can enter the workspace once OpenClaw has completed
+      // the WS handshake and published a runtime model. The HTTP health probe
+      // can briefly time out while OpenClaw is busy streaming or settling
+      // startup config; surface that as degraded instead of holding the shell
+      // on the cold-loader indefinitely.
+      const surfaceReady =
         container.runtimeState.bootPhase === "ready" &&
         container.runtimeState.status === "active" &&
         container.runtimeState.gatewayStatus === "active" &&
         gatewayConnected &&
         modelReady;
+      const ready =
+        surfaceReady;
+      const status = surfaceReady
+        ? runtime.ok
+          ? "active"
+          : "degraded"
+        : container.runtimeState.status;
       const bots = await container.configStore.listBots();
       const preferredBot =
         bots.find((bot) => bot.status === "active") ??
@@ -538,7 +545,7 @@ export function registerDesktopRoutes(
               )
             : path.join(container.env.openclawStateDir, "agents"),
           runtime,
-          status: container.runtimeState.status,
+          status,
           gatewayConnected,
           model: {
             ready: modelReady,

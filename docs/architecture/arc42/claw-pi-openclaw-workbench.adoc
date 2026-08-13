@@ -1675,3 +1675,62 @@ Balance, model execution, and detailed logs for one signed-in Claw-Pi user must
 all resolve to the same OpenLux token ID. Regression tests cover cached-key
 refresh, rejection of account-level fallbacks, nested log normalization, and
 sub-cent cost preservation.
+
+== OpenLux desktop routing and startup readiness addendum (2026-08-13)
+
+=== 4. Solution Strategy
+
+Claw-Pi Cloud remains the account, activation, and fixed-child-token control
+plane. The packaged desktop Link endpoint is `https://api.openlux.ai`; OpenClaw
+uses the authenticated child token against that OpenAI-compatible origin for
+model discovery and inference. An existing stored `Default` profile is migrated
+from `https://yunwu.ai` only when its Cloud URL is also the known production
+seed. User-created and otherwise customized profiles are never rewritten.
+
+Desktop shell availability is separated from the transient HTTP runtime probe.
+The workspace can mount once the managed runtime is active, the Gateway WS
+handshake is complete, and an effective model is selected. A failed runtime
+health probe marks the response `degraded` for diagnostics but does not strand
+an otherwise usable client on the loading surface.
+
+=== 6. Runtime Flow
+
+. Activation returns the Claw-Pi user's fixed OpenLux child token and Link URL.
+. Controller compiles the `link` provider with the Link URL plus `/v1`, and
+  writes the effective runtime model selection.
+. An empty discovered-model allowlist means discovery is temporarily
+  unavailable, not that the configured effective model is invalid.
+. The desktop readiness endpoint reports the shell usable after runtime state,
+  Gateway connection, and effective model are ready; probe failure is exposed
+  as degraded health.
+
+=== 7. Deployment and Packaging
+
+Windows and macOS release workflows embed the same OpenLux Link seed. The
+private Cloud source checkout lives under `.server-work/`, which is ignored by
+the desktop repository so broad release staging cannot include it.
+
+=== 9. Architecture Decisions
+
+==== ADR-026: Do not make transient runtime HTTP health a shell blocker
+
+*Status:* accepted
+
+Gateway connectivity plus an effective model is the executable chat boundary.
+The HTTP probe remains an operational signal and may downgrade status, but it
+must not override that executable boundary. This prevents brief probe failures
+or an empty discovery response from causing a permanent desktop loading screen.
+
+=== 10. Quality Requirements
+
+Regression coverage must prove legacy default-profile migration, preservation
+of custom profiles, effective-model fallback with an empty discovery list, and
+desktop readiness during transient runtime probe failure. Release endpoint tests
+must assert the OpenLux production origin.
+
+=== 11. Technical Risks
+
+The historical Yunwu gateway notes above describe the superseded routing model.
+Operational diagnosis for current releases must use ADR-023 through ADR-026 and
+must verify that model access, balance, and usage logs resolve to the same fixed
+OpenLux child token.

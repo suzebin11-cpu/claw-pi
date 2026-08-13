@@ -25,7 +25,10 @@ export class RuntimeModelStateService {
         return null;
       }
 
-      if (Array.isArray(parsed.availableModelRefs)) {
+      if (
+        Array.isArray(parsed.availableModelRefs) &&
+        parsed.availableModelRefs.length > 0
+      ) {
         return parsed.availableModelRefs.includes(selectedModelRef)
           ? selectedModelRef
           : null;

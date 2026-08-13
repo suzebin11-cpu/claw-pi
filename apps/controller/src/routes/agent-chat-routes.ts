@@ -37,7 +37,7 @@ const extractedAttachmentSchema = z.object({
 });
 
 function normalizeAgentChatError(message: string): string {
-  return /(?:token quota is not enough|need quota|insufficient (?:balance|quota|credits?)|quota.+not enough|余额不足|额度不足|余额不够|充值)/iu.test(
+  return /(?:token quota is not enough|user quota is not enough|quota is not enough|need quota|insufficient (?:balance|quota|credits?)|quota.+not enough|余额不足|额度不足|余额不够|充值)/iu.test(
     message,
   )
     ? "余额不足，请及时充值"

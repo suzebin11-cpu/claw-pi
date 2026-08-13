@@ -42,7 +42,8 @@ describe("compileOpenClawConfig gateway defaults", () => {
     expect(compiled.gateway).toEqual({
       port: 18789,
       mode: "local",
-      bind: "loopback",
+      bind: "custom",
+      customBindHost: "127.0.0.1",
       auth: {
         mode: "none",
       },

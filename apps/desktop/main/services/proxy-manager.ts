@@ -15,7 +15,7 @@ import {
  * a single representative probe is what child processes can express via
  * HTTP_PROXY anyway.
  */
-const PROXY_PROBE_URL = "https://yunwu.ai/v1/models";
+const PROXY_PROBE_URL = "https://api.openlux.ai/v1/models";
 
 /** Cap on system proxy resolution so a hostile PAC script cannot stall boot. */
 const RESOLVE_TIMEOUT_MS = 3_000;

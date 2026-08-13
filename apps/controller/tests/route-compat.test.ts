@@ -969,4 +969,86 @@ describe("controller route compatibility", () => {
     expect(readyResponse.status).toBe(200);
     expect((await readyResponse.json()).ready).toBe(true);
   });
+
+  it("reports desktop ready when the runtime selects a valid fallback model", async () => {
+    const app = createApp(container);
+    const config = await container.configStore.getConfig();
+
+    await mkdir(path.dirname(container.env.openclawRuntimeModelStatePath), {
+      recursive: true,
+    });
+    await writeFile(
+      container.env.openclawRuntimeModelStatePath,
+      JSON.stringify({
+        selectedModelRef: "debug/mock",
+        availableModelRefs: [],
+      }),
+      "utf8",
+    );
+    container.runtimeState.bootPhase = "ready";
+    container.runtimeState.status = "active";
+    container.runtimeState.gatewayStatus = "active";
+    vi.spyOn(container.gatewayService, "isConnected").mockReturnValue(true);
+
+    const response = await app.request("/api/internal/desktop/ready");
+    expect(response.status).toBe(200);
+
+    const payload = (await response.json()) as {
+      ready: boolean;
+      model: {
+        ready: boolean;
+        defaultModelId: string | null;
+        effectiveModelId: string | null;
+      };
+    };
+    expect(payload.ready).toBe(true);
+    expect(payload.model).toEqual({
+      ready: true,
+      defaultModelId: config.runtime.defaultModelId,
+      effectiveModelId: "debug/mock",
+    });
+  });
+
+  it("allows the desktop surface during transient runtime health probe failures", async () => {
+    const app = createApp(container);
+    const config = await container.configStore.getConfig();
+
+    await mkdir(path.dirname(container.env.openclawRuntimeModelStatePath), {
+      recursive: true,
+    });
+    await writeFile(
+      container.env.openclawRuntimeModelStatePath,
+      JSON.stringify({
+        selectedModelRef: config.runtime.defaultModelId,
+        availableModelRefs: [config.runtime.defaultModelId],
+      }),
+      "utf8",
+    );
+    container.runtimeState.bootPhase = "ready";
+    container.runtimeState.status = "active";
+    container.runtimeState.gatewayStatus = "active";
+    vi.spyOn(container.gatewayService, "isConnected").mockReturnValue(true);
+    vi.spyOn(container.runtimeHealth, "probe").mockResolvedValue({
+      ok: false,
+      status: null,
+    });
+
+    const response = await app.request("/api/internal/desktop/ready");
+    expect(response.status).toBe(200);
+
+    const payload = (await response.json()) as {
+      ready: boolean;
+      status: string;
+      runtime: {
+        ok: boolean;
+        status: number | null;
+      };
+    };
+    expect(payload.ready).toBe(true);
+    expect(payload.status).toBe("degraded");
+    expect(payload.runtime).toEqual({
+      ok: false,
+      status: null,
+    });
+  });
 });

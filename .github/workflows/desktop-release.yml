@@ -199,7 +199,7 @@ jobs:
             const sentryDsn = sentryDsnByEnvironment[process.env.SENTRY_ENV] ?? "";
             const config = {
               NEXU_CLOUD_URL: "http://47.108.215.151:9080",
-              NEXU_LINK_URL: "https://yunwu.ai",
+              NEXU_LINK_URL: "https://api.openlux.ai",
               NEXU_SENTRY_ENV: process.env.SENTRY_ENV,
               CLAWPI_UPDATE_FEED_URL: "",
               NEXU_DESKTOP_APP_VERSION: version,
@@ -638,7 +638,7 @@ jobs:
           const sentryDsn = sentryDsnByEnvironment[process.env.SENTRY_ENV] ?? "";
           const config = {
             NEXU_CLOUD_URL: "http://47.108.215.151:9080",
-            NEXU_LINK_URL: "https://yunwu.ai",
+            NEXU_LINK_URL: "https://api.openlux.ai",
             NEXU_SENTRY_ENV: process.env.SENTRY_ENV,
             CLAWPI_UPDATE_FEED_URL: "",
             NEXU_DESKTOP_APP_VERSION: version,

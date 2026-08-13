@@ -55,7 +55,7 @@ const RESOLUTIONS = ["1K", "2K", "4K"];
 const MAX_INPUT_IMAGES = 14;
 const MAX_IMAGE_BYTES = 512_000; // 500 KB per image after compression
 
-const GENERATE_BASE_URL = "https://yunwu.ai";
+const GENERATE_BASE_URL = "https://api.openlux.ai";
 
 // ---------------------------------------------------------------------------
 // CLI
