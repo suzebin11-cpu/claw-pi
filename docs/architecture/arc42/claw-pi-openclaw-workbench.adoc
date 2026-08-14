@@ -1734,3 +1734,71 @@ The historical Yunwu gateway notes above describe the superseded routing model.
 Operational diagnosis for current releases must use ADR-023 through ADR-026 and
 must verify that model access, balance, and usage logs resolve to the same fixed
 OpenLux child token.
+
+== OpenLux balance-preserving pricing cutover addendum (2026-08-14)
+
+=== 4. Solution Strategy
+
+OpenLux user pricing is independent from the legacy Yunwu conversion. Each
+Claw-Pi user carries a source multiplier, current multiplier, cutover timestamp,
+and used-quota baseline. Existing users move from numeric `1.0` pricing to `1.5`
+without changing their visible balance: Cloud reduces the fixed child token's
+remaining quota by the inverse multiplier before the new price becomes active.
+
+Historical usage is split at the saved baseline. Quota consumed before cutover
+retains multiplier `1.0`; only quota consumed after cutover is charged at `1.5`.
+
+=== 5. Building Blocks and Ownership
+
+* Claw-Pi Cloud owns OpenLux price conversion, per-user pricing metadata, and
+  the auditable migration plan.
+* The migration runner owns controlled child-token disable, exact remaining
+  quota rebasing, database reconciliation, enablement, and guarded rollback.
+* Desktop and Web display the `cost_cents` and balance returned by Cloud; they
+  do not apply an additional multiplier.
+
+=== 6. Runtime Flow
+
+. New recharge value is converted to OpenLux quota using the user's current
+  multiplier; `¥15` allocates the upstream-equivalent quota of `10` units.
+. Balance reads price the fixed child token's remaining quota at the current
+  multiplier.
+. Aggregate used amount prices the saved pre-cutover baseline at the source
+  multiplier and only the later delta at the current multiplier.
+. Usage-log rows select source or current multiplier from their timestamp
+  relative to the per-user cutover timestamp.
+
+=== 7. Deployment and Packaging
+
+The pricing schema is additive. Production deployment must build the new Cloud
+code without restarting, apply the schema, dry-run the migration, disable and
+rebase all targeted child tokens, then restart Cloud with the explicit server
+environment `OPENLUX_PRICE_MULTIPLIER=1.5`. Tokens are re-enabled only after the
+new process passes internal health checks. The desktop package is unchanged.
+
+=== 9. Architecture Decisions
+
+==== ADR-027: Preserve balance by rebasing fixed-child-token quota at price cutover
+
+*Status:* accepted
+
+A global display-only multiplier is rejected because it inflates existing
+balances and retroactively reprices historical logs. The accepted design saves
+the upstream used-quota boundary, rebases only remaining quota, and keeps a
+retryable migration record for each user. Automatic rollback is allowed only
+while upstream used quota still equals the saved boundary.
+
+=== 10. Quality Requirements
+
+For every migrated user, the difference between balance immediately before and
+after cutover must remain below the value of one OpenLux quota unit. Historical
+log rows remain unchanged. A post-cutover upstream cost `10` must produce user
+cost `15`, and a recharge of `15` must allocate upstream value `10`.
+
+=== 11. Technical Risks
+
+OpenLux model traffic bypasses the Cloud control-plane process, so restarting
+Cloud alone does not create a maintenance window. The migration must disable
+each child token before its final snapshot and keep it disabled until code and
+environment have switched. Interrupted migrations leave an auditable status
+and fail closed; operators must not manually infer quota from account totals.
