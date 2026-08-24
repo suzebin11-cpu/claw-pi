@@ -19,6 +19,10 @@ import { basename, dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { findMissingRuntimeFiles } from "../../../openclaw-runtime/runtime-integrity.mjs";
 import {
+  GATEWAY_RELOAD_BUNDLE_PATTERN,
+  patchOpenClawGatewayReloadSource,
+} from "./lib/openclaw-gateway-reload-patch.mjs";
+import {
   electronRoot,
   getSidecarRoot,
   linkOrCopyDirectory,
@@ -2649,6 +2653,41 @@ async function patchModelCatalogReplaceMode(openclawPackageRoot) {
   return patchedFiles;
 }
 
+async function patchGatewayConfigReload(openclawPackageRoot) {
+  const patchedFiles = new Map();
+  const distDir = resolve(openclawPackageRoot, "dist");
+  let entries;
+  try {
+    entries = await readdir(distDir);
+  } catch {
+    throw new Error(
+      "OpenClaw dist directory not found; cannot apply the Gateway reload compatibility patch.",
+    );
+  }
+
+  const gatewayBundles = entries.filter((entry) =>
+    GATEWAY_RELOAD_BUNDLE_PATTERN.test(entry),
+  );
+  if (gatewayBundles.length === 0) {
+    throw new Error(
+      "OpenClaw Gateway bundle not found; cannot apply the reload compatibility patch.",
+    );
+  }
+
+  for (const entry of gatewayBundles) {
+    const entryPath = resolve(distDir, entry);
+    const source = await readFile(entryPath, "utf8");
+    const result = patchOpenClawGatewayReloadSource(source, entry);
+    if (!result.patched) continue;
+    patchedFiles.set(relative(openclawPackageRoot, entryPath), result.source);
+    console.log(
+      `[openclaw-sidecar] normalized implicit xAI reload defaults in ${entry}`,
+    );
+  }
+
+  return patchedFiles;
+}
+
 async function stagePatchedOpenclawPackage() {
   await mkdir(dirname(sidecarRoot), { recursive: true });
   const stageRoot = await mkdtemp(
@@ -2677,6 +2716,8 @@ async function stagePatchedOpenclawPackage() {
     await patchModelsConfigCaching(stagedOpenclawRoot);
   const modelCatalogPatchedFiles =
     await patchModelCatalogReplaceMode(stagedOpenclawRoot);
+  const gatewayReloadPatchedFiles =
+    await patchGatewayConfigReload(stagedOpenclawRoot);
   const patchedFiles = new Map([
     ...overlayFiles,
     ...bridgePatchedFiles,
@@ -2687,6 +2728,7 @@ async function stagePatchedOpenclawPackage() {
     ...controlUiPatchedFiles,
     ...modelsConfigPatchedFiles,
     ...modelCatalogPatchedFiles,
+    ...gatewayReloadPatchedFiles,
   ]);
 
   for (const [patchRelativePath, patchedSource] of patchedFiles) {

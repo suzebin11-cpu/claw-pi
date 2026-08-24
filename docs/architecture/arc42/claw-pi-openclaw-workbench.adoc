@@ -919,9 +919,10 @@ variables, see `docs/operations/cloud-gateway-yunwu.md`.
 The local desktop sidecar is explicitly bound to IPv4 loopback
 (`bind=custom`, `customBindHost=127.0.0.1`) so the Controller's existing
 `ws://127.0.0.1:<port>` endpoint remains valid on Windows cold starts. The
-Controller also persists the xAI plugin's disabled `webSearch` default to
-prevent OpenClaw's first-load normalization from initiating a restart while a
-chat request is being admitted.
+Controller removes the rejected legacy xAI `webSearch.enabled` field. The
+bundled OpenClaw reload adapter treats only an absent and an empty xAI
+`webSearch` object as equivalent so first-load normalization cannot initiate a
+restart while a chat request is being admitted.
 
 === 4. Solution strategy
 
@@ -1802,3 +1803,58 @@ Cloud alone does not create a maintenance window. The migration must disable
 each child token before its final snapshot and keep it disabled until code and
 environment have switched. Interrupted migrations leave an auditable status
 and fail closed; operators must not manually infer quota from account totals.
+
+== Gateway reload equivalence addendum (2026-08-24)
+
+=== 4. Solution Strategy
+
+Claw-Pi keeps OpenClaw's upstream reload rules intact and patches the bundled
+Gateway's configuration diff at packaging time. The compatibility rule applies
+only to `plugins.entries.xai.config.webSearch` when both compared values are
+either absent or empty objects. Real xAI configuration values and all other
+plugin paths continue through OpenClaw's normal restart classification.
+
+=== 6. Runtime Flow
+
+. Gateway starts from OpenClaw's validated effective configuration, which may
+  contain an empty xAI `webSearch` object supplied by plugin initialization.
+. Controller later writes the schema-valid disk configuration while refreshing
+  the model catalog.
+. The Sidecar diff removes the absent-versus-empty xAI-only pseudo-change.
+. The remaining `models.*` paths enter the existing hot-reload planner, so the
+  Gateway does not enter draining state for a model-catalog refresh.
+
+=== 7. Deployment and Packaging
+
+`prepare-openclaw-sidecar.mjs` applies the compatibility patch transactionally
+to every `server.impl-*.js` Gateway bundle before the Sidecar is copied or
+archived. Packaging fails closed when the expected OpenClaw diff anchor or
+Gateway bundle is absent, preventing an apparently successful but unpatched
+desktop release.
+
+=== 9. Architecture Decisions
+
+==== ADR-028: Normalize the xAI empty-default pseudo-diff at the Sidecar boundary
+
+*Status:* accepted
+
+Persisting `webSearch.enabled` is rejected because OpenClaw 2026.4 does not
+allow that property. Marking the entire xAI plugin subtree as hot or no-op is
+also rejected because credential and tool configuration changes must retain
+their upstream restart semantics. The accepted rule recognizes only semantic
+equivalence between missing and empty values at the exact legacy boundary.
+
+=== 10. Quality Requirements
+
+Regression tests must prove missing and empty xAI defaults compare equal, xAI
+credential changes remain visible, unrelated plugin changes remain visible,
+and model-catalog changes still reach the hot-reload planner. The patch must be
+idempotent and must fail when its upstream source anchor changes.
+
+=== 11. Technical Risks
+
+The patch targets a generated OpenClaw bundle and therefore depends on a stable
+source anchor. The fail-closed build check converts upstream bundle drift into
+an explicit release failure. When OpenClaw fixes the pseudo-diff upstream, this
+adapter should be removed together with its regression fixture after equivalent
+runtime behavior is verified.
